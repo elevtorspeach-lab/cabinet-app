@@ -1,0 +1,192 @@
+ /* ================== RESET & BASE ================== */
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#0f172a}
+
+/* ================== LOGIN ================== */
+.login-screen{display:flex;justify-content:center;align-items:center;height:100vh;background:#1e40af}
+.login-box{background:#fff;padding:40px;border-radius:15px;width:320px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+.login-box h2{margin-bottom:20px;color:#1e3a8a}
+.login-box input{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:2px solid #e5e7eb}
+.login-box input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15);outline:none}
+.error-msg{color:#ef4444;margin-top:10px;display:none;font-size:14px}
+
+/* ================== SIDEBAR ================== */
+.sidebar{width:260px;background:#1e40af;color:#fff;padding:25px 20px;display:flex;flex-direction:column;position:fixed;height:100vh}
+.sidebar h2{text-align:center;margin-bottom:30px;font-size:20px;border-bottom:1px solid rgba(255,255,255,.2);padding-bottom:15px}
+.nav-link{display:flex;align-items:center;gap:10px;padding:12px 15px;margin:8px 0;border-radius:8px;cursor:pointer;transition:.2s}
+.nav-link:hover,.nav-link.active{background:#2563eb}
+.logout-btn{margin-top:auto}
+
+/* ================== CONTENT ================== */
+.app-content{display:flex}
+.content{flex:1;margin-left:260px;padding:25px}
+.section{background:#fff;border-radius:16px;padding:25px;margin-bottom:25px;box-shadow:0 8px 20px rgba(0,0,0,.08);animation:fadeIn .4s ease-out}
+.section h1{font-size:26px;color:#1e3a8a;margin-bottom:20px;display:flex;align-items:center;gap:10px}
+
+/* ================== STATS ================== */
+.stats-container{display:flex;gap:15px;flex-wrap:wrap}
+.stat-card{flex:1;min-width:160px;color:#fff;text-align:center;padding:25px 15px;border-radius:15px;transition:.2s}
+.stat-card:hover{transform:translateY(-4px)}
+.stat-card h3{font-size:15px;opacity:.9;margin-bottom:8px}
+.stat-card p{font-size:32px;font-weight:bold}
+.stat-card.blue{background:linear-gradient(135deg,#2563eb,#1e40af)}
+.stat-card.green{background:linear-gradient(135deg,#10b981,#047857)}
+.stat-card.purple{background:linear-gradient(135deg,#7c3aed,#4c1d95)}
+
+/* ================== FORMS ================== */
+.add-client-form,.pro-body{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.form-group{display:flex;flex-direction:column;gap:6px}
+.full{grid-column:1 / -1}
+input,select{padding:10px 12px;border-radius:8px;border:2px solid #e5e7eb}
+input:focus,select:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12);outline:none}
+
+/* ================== BUTTONS ================== */
+button{border:none;border-radius:8px;cursor:pointer;padding:10px 18px;display:flex;align-items:center;gap:6px;transition:.2s}
+.btn-success{background:#10b981;color:#fff}
+.btn-success:hover{background:#059669}
+.btn-primary{background:#2563eb;color:#fff}
+.btn-primary:hover{background:#1e40af}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-danger:hover{background:#dc2626}
+
+/* Actions buttons in table */
+td .btn-primary, td .btn-danger{
+  padding:6px 10px;
+  font-size:13px;
+}
+td .btn-primary{margin-right:6px}
+
+/* ================== TABLE ================== */
+.table-container{overflow:auto}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;border-bottom:1px solid #e5e7eb;text-align:left;white-space:nowrap}
+th{background:#f8fafc;color:#1e3a8a}
+tr:hover{background:#f1f5f9}
+
+/* ================== SEARCH BOX ================== */
+.search-box{display:flex;align-items:center;gap:8px;background:#f1f5f9;padding:8px 12px;border-radius:10px}
+.search-box input{border:none;background:transparent;outline:none;min-width:180px}
+
+/* ================== PRO UI ================== */
+.pro-card{padding:0}
+.pro-header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #e5e7eb}
+.pro-title{display:flex;align-items:center;gap:10px;font-weight:600;color:#1e3a8a}
+.pro-body{padding:20px}
+
+/* ================== CHECKBOX GROUP ================== */
+.checkbox-group{display:flex;gap:15px;flex-wrap:wrap}
+.checkbox-group label{padding:6px 10px;border-radius:8px;border:1px solid #e5e7eb;cursor:pointer;transition:.2s}
+.checkbox-group label.active{color:#fff}
+
+/* ================== PROCEDURE DETAILS ================== */
+.procedure-details{display:flex;flex-direction:column;gap:12px}
+.proc-card{border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#f8fafc;position:relative;overflow:hidden}
+.proc-card h4{margin-bottom:8px;font-size:14px;color:#1e3a8a}
+.proc-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.proc-grid input{padding:8px 10px;border-radius:8px;border:2px solid #e5e7eb;font-size:12px}
+
+/* ================== PROCEDURE COLORS ================== */
+.checkbox-group label[data-proc="ASS"].active{background:#2563eb;border-color:#2563eb}
+.checkbox-group label[data-proc="Restitution"].active{background:#16a34a;border-color:#16a34a}
+.checkbox-group label[data-proc="Nantissement"].active{background:#7c3aed;border-color:#7c3aed}
+.checkbox-group label[data-proc="SFDC"].active{background:#f59e0b;border-color:#f59e0b}
+.checkbox-group label[data-proc="Autre"].active{background:#ef4444;border-color:#ef4444}
+
+.proc-card::after{content:'';position:absolute;bottom:0;left:0;width:100%;height:5px;background:#cbd5e1}
+.proc-ass::after{background:#2563eb}
+.proc-restitution::after{background:#16a34a}
+.proc-nantissement::after{background:#7c3aed}
+.proc-sfdc::after{background:#f59e0b}
+.proc-autre::after{background:#ef4444}
+
+.proc-ass{border-left:4px solid #2563eb}
+.proc-restitution{border-left:4px solid #16a34a}
+.proc-nantissement{border-left:4px solid #7c3aed}
+.proc-sfdc{border-left:4px solid #f59e0b}
+.proc-autre{border-left:4px solid #ef4444}
+
+/* ================== DOCUMENTS ================== */
+.dropzone.exact-design{
+  border:2px dashed #c7d2fe;
+  border-radius:18px;
+  padding:48px 24px;
+  text-align:center;
+  background:#f9fbff;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  min-height:220px;
+}
+.dropzone.exact-design i{font-size:44px;color:#2563eb;margin-bottom:12px}
+.dropzone.exact-design p{color:#64748b;font-size:16px;margin:10px 0 18px}
+.btn-upload{background:#2563eb;color:#fff;padding:14px 28px;border-radius:12px;font-size:16px}
+.btn-upload:hover{background:#1e40af}
+
+.file-list{margin-top:10px;list-style:none;display:flex;flex-direction:column;gap:6px}
+.file-list li{background:#eef2ff;padding:8px 12px;border-radius:8px;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+
+/* Big Create Button */
+.btn-big{width:100%;padding:18px 24px;font-size:18px;border-radius:16px}
+
+/* ================== ANIM ================== */
+@keyframes fadeIn{
+  from{opacity:0;transform:translateY(15px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+/* ================== RESPONSIVE ================== */
+@media (max-width: 900px){
+  .sidebar{width:220px}
+  .content{margin-left:220px}
+  .stats-container{flex-direction:column}
+}
+
+@media (max-width: 600px){
+  .sidebar{position:relative;width:100%;height:auto}
+  .content{margin-left:0}
+  .app-content{flex-direction:column}
+}
+/* ================== AUDIENCE COLORS ================== */
+.audience-toolbar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:space-between;
+}
+
+.color-filters{
+  display:flex;
+  gap:6px;
+}
+.color-btn{
+  padding:6px 14px;
+  border-radius:20px;
+  border:none;
+  font-size:13px;
+  cursor:pointer;
+  opacity:.6;
+  color:#fff;
+}
+.color-btn.active{opacity:1}
+
+.color-btn.all{background:#64748b}
+.color-btn.blue{background:#2563eb}
+.color-btn.green{background:#16a34a}
+.color-btn.red{background:#dc2626}
+.color-btn.yellow{background:#f59e0b}
+
+/* Row colors */
+tr.color-blue{border-left:6px solid #2563eb;background:#eff6ff}
+tr.color-green{border-left:6px solid #16a34a;background:#ecfdf5}
+tr.color-red{border-left:6px solid #dc2626;background:#fef2f2}
+tr.color-yellow{border-left:6px solid #f59e0b;background:#fffbeb}
+
+/* Checkbox */
+.audience-check{
+  width:16px;
+  height:16px;
+  cursor:pointer;
+}
+
+
