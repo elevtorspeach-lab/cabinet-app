@@ -19,6 +19,8 @@ let suppressProcedureChange = false;
 let currentUser = null;
 let editingTeamUserId = null;
 let dashboardCalendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+const STORAGE_KEY = 'cabinet-avocat-state-v1';
+let persistTimer = null;
 
 // ================== HELPERS ==================
 const $ = (id) => document.getElementById(id);
@@ -169,8 +171,95 @@ function downloadStoredFile(file){
   }
 }
 
+function normalizeUser(rawUser){
+  if(!rawUser || typeof rawUser !== 'object') return null;
+  const id = Number(rawUser.id);
+  const username = String(rawUser.username || '').trim();
+  const password = String(rawUser.password || '');
+  const rawRole = String(rawUser.role || '').trim().toLowerCase();
+  const role = rawRole === 'manager' || rawRole === 'admin' || rawRole === 'viewer'
+    ? rawRole
+    : 'viewer';
+  const clientIds = Array.isArray(rawUser.clientIds)
+    ? [...new Set(rawUser.clientIds.map(v=>Number(v)).filter(v=>Number.isFinite(v)))]
+    : [];
+  if(!Number.isFinite(id) || !username) return null;
+  return { id, username, password, role, clientIds };
+}
+
+function normalizeClient(rawClient){
+  if(!rawClient || typeof rawClient !== 'object') return null;
+  const id = Number(rawClient.id);
+  const name = String(rawClient.name || '').trim();
+  const dossiers = Array.isArray(rawClient.dossiers) ? rawClient.dossiers : [];
+  if(!Number.isFinite(id) || !name) return null;
+  return { id, name, dossiers };
+}
+
+function ensureManagerUser(users){
+  const validUsers = Array.isArray(users) ? users.filter(Boolean) : [];
+  if(validUsers.some(u=>u.role === 'manager')) return validUsers;
+  validUsers.unshift({
+    id: 1,
+    username: 'manager',
+    password: '1234',
+    role: 'manager',
+    clientIds: []
+  });
+  return validUsers;
+}
+
+function persistAppStateNow(){
+  if(typeof localStorage === 'undefined') return;
+  try{
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        clients: AppState.clients,
+        users: USERS,
+        audienceDraft: audienceDraft
+      })
+    );
+  }catch(err){
+    console.warn('Impossible de sauvegarder localement', err);
+  }
+}
+
+function queuePersistAppState(){
+  if(persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(()=>{
+    persistTimer = null;
+    persistAppStateNow();
+  }, 250);
+}
+
+function loadPersistedState(){
+  if(typeof localStorage === 'undefined') return;
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return;
+    const parsed = JSON.parse(raw);
+    const loadedClients = Array.isArray(parsed?.clients)
+      ? parsed.clients.map(normalizeClient).filter(Boolean)
+      : [];
+    const loadedUsers = Array.isArray(parsed?.users)
+      ? parsed.users.map(normalizeUser).filter(Boolean)
+      : [];
+    const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
+      ? parsed.audienceDraft
+      : {};
+
+    AppState.clients = loadedClients;
+    USERS = ensureManagerUser(loadedUsers);
+    audienceDraft = loadedDraft;
+  }catch(err){
+    console.warn('Etat local corrompu, utilisation des valeurs par défaut', err);
+  }
+}
+
 // ================== INIT ==================
 function initApplication(){
+  loadPersistedState();
   setupEvents();
   renderClients();
   renderDashboard();
@@ -293,6 +382,7 @@ function setupEvents(){
       setSelectedAudienceColor(color, false);
     });
   });
+  window.addEventListener('beforeunload', persistAppStateNow);
 }
 
 function setSelectedAudienceColor(color, syncFilter){
@@ -379,6 +469,7 @@ function addClient(name){
     return;
   }
   AppState.clients.push({ id: Date.now(), name, dossiers: [] });
+  queuePersistAppState();
   $('clientName').value='';
   renderClients();
   updateClientDropdown();
@@ -505,6 +596,7 @@ async function addDossier(){
     }else{
       client.dossiers.push(dossier);
     }
+    queuePersistAppState();
 
     renderSuivi();
     renderDashboard();
@@ -854,6 +946,7 @@ function deleteDossier(clientId, index){
   const ref = dossier.referenceClient || dossier.debiteur || `#${index + 1}`;
   if(!window.confirm(`Supprimer définitivement le dossier "${ref}" ?`)) return;
   client.dossiers.splice(index, 1);
+  queuePersistAppState();
   closeDossierModal();
   renderClients();
   renderDashboard();
@@ -1170,6 +1263,7 @@ function addClientFromTeam(){
   renderSuivi();
   renderAudience();
   renderDiligence();
+  queuePersistAppState();
 }
 
 function resetTeamForm(){
@@ -1216,6 +1310,7 @@ function saveTeamUser(){
       clientIds: finalClientIds
     });
   }
+  queuePersistAppState();
   renderEquipe();
   resetTeamForm();
 }
@@ -1245,6 +1340,7 @@ function deleteTeamUser(userId){
     return alert('Impossible de supprimer l’utilisateur connecté');
   }
   USERS = USERS.filter(u=>u.id !== userId);
+  queuePersistAppState();
   renderEquipe();
   if(editingTeamUserId === userId) resetTeamForm();
 }
@@ -1648,6 +1744,7 @@ function setAudienceColor(ci, di, procKey, checked){
   const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
   if(!checked){
     p.color = '';
+    queuePersistAppState();
     renderDashboard();
     renderAudience();
     return;
@@ -1658,6 +1755,7 @@ function setAudienceColor(ci, di, procKey, checked){
     return;
   }
   p.color = selectedAudienceColor;
+  queuePersistAppState();
   renderDashboard();
   renderAudience();
 }
@@ -1678,6 +1776,7 @@ function updateAudienceDraft(key, field, value){
   if(!canEditData()) return;
   if(!audienceDraft[key]) audienceDraft[key] = {};
   audienceDraft[key][field] = value;
+  queuePersistAppState();
 }
 
 function updateAudienceDraftFromEncoded(keyEncoded, field, value){
@@ -1696,6 +1795,7 @@ function saveAllAudience(){
   });
 
   audienceDraft = {};
+  queuePersistAppState();
   renderDashboard();
   renderAudience();
   renderSuivi();
