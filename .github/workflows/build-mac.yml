@@ -1,4 +1,4 @@
-name: Build Windows App
+name: Build Mac App
 
 on:
   workflow_dispatch:
@@ -9,8 +9,8 @@ on:
       - "v*"
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build-mac:
+    runs-on: macos-latest
 
     defaults:
       run:
@@ -30,14 +30,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Windows installer
-        run: npm run build:win
+      - name: Build Mac installer
+        run: npm run build:mac
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cabinet-avocat-windows
+          name: cabinet-avocat-mac
           path: |
-            desktop-app/dist/*.exe
-            desktop-app/dist/*.yml
+            desktop-app/dist/*.dmg
+            desktop-app/dist/*.zip
             desktop-app/dist/*.blockmap
