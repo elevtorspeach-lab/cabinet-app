@@ -88,13 +88,33 @@
   <h1><i class="fa-solid fa-gavel"></i> Audience</h1>
 
   <div class="clients-toolbar audience-toolbar">
-    <div class="audience-top-row">
-      <button id="saveAudienceBtn" class="btn-success">
-        <i class="fa-solid fa-floppy-disk"></i> Enregistrer
-      </button>
-      <button id="exportAudienceBtn" class="btn-primary">
-        <i class="fa-solid fa-file-export"></i> Exporter
-      </button>
+    <div class="audience-actions-row">
+      <div class="audience-actions-left">
+        <button id="saveAudienceBtn" class="btn-success">
+          <i class="fa-solid fa-floppy-disk"></i> Enregistrer
+        </button>
+      </div>
+
+      <div class="audience-actions-center">
+        <div class="color-filters">
+          <button class="color-btn all active" data-color="all">Tous</button>
+          <button class="color-btn blue" data-color="blue">Att sort</button>
+          <button class="color-btn green" data-color="green">Att jugement</button>
+          <button class="color-btn red" data-color="red">Rouge</button>
+          <button class="color-btn yellow" data-color="yellow">Jugement ok</button>
+          <button class="color-btn purple-dark" data-color="purple-dark">Soldé</button>
+          <button class="color-btn purple-light" data-color="purple-light">Arrêt définitif</button>
+        </div>
+      </div>
+
+      <div class="audience-actions-right">
+        <button id="exportAudienceBtn" class="btn-primary">
+          <i class="fa-solid fa-file-export"></i> Exporter
+        </button>
+        <button id="exportAudienceDetailBtn" class="btn-primary">
+          <i class="fa-solid fa-file-lines"></i> Export d'audience
+        </button>
+      </div>
     </div>
 
     <div class="audience-filter-row">
@@ -131,17 +151,6 @@
       </div>
     </div>
 
-    <div class="audience-colors-row">
-      <div class="color-filters">
-        <button class="color-btn all active" data-color="all">Tous</button>
-        <button class="color-btn blue" data-color="blue">Att sort</button>
-        <button class="color-btn green" data-color="green">Att jugement</button>
-        <button class="color-btn red" data-color="red" title="Rouge" aria-label="Rouge"></button>
-        <button class="color-btn yellow" data-color="yellow">Jugement ok</button>
-        <button class="color-btn purple-dark" data-color="purple-dark">Soldé</button>
-        <button class="color-btn purple-light" data-color="purple-light">Arrêt définitif</button>
-      </div>
-    </div>
   </div>
 
   <div class="table-container">
@@ -186,6 +195,9 @@
                 <option value="all">Toutes</option>
               </select>
             </div>
+            <button id="exportDiligenceBtn" class="btn-primary" type="button">
+              <i class="fa-solid fa-file-export"></i> Exporter
+            </button>
           </div>
           <div id="diligenceCount" class="diligence-count"></div>
           <div class="table-container">
@@ -240,13 +252,8 @@
               </select>
             </div>
             <div id="teamClientsWrap" class="form-group full">
-              <label>Clients liés (client seulement)</label>
-              <div class="team-add-client-inline">
-                <input type="text" id="teamNewClientName" placeholder="Ajouter client existant/nouveau..." />
-                <button id="teamAddClientBtn" type="button" class="btn-primary">
-                  <i class="fa-solid fa-plus"></i> Ajouter client
-                </button>
-              </div>
+              <input type="text" id="teamClientSearchInput" placeholder="Rechercher client..." />
+              <div id="teamClientCount" class="diligence-empty">0 client sélectionné</div>
               <div id="teamClientsList" class="team-clients-list"></div>
             </div>
             <div class="form-group full" style="display:flex;gap:8px;flex-direction:row;">
@@ -286,6 +293,12 @@
             <i class="fa-solid fa-plus"></i> Ajouter
           </button>
         </div>
+        <div class="import-excel">
+          <input type="file" id="importExcelInput" accept=".xlsx,.xls" style="display:none;">
+          <button id="importExcelBtn" class="btn-primary">
+            <i class="fa-solid fa-file-import"></i> Importer Excel
+          </button>
+        </div>
       </div>
       <div class="table-container">
         <table>
@@ -313,15 +326,14 @@
         </div>
 
         <div class="pro-body">
+          <div class="form-group full">
+            <label>Boîte N°</label>
+            <input type="text" id="boiteNoInput" placeholder="Numéro de boîte"/>
+          </div>
 
           <div class="form-group">
             <label>Client</label>
             <select id="selectClient"></select>
-          </div>
-
-          <div class="form-group">
-            <label>Débiteur</label>
-            <input type="text" id="debiteurInput" placeholder="Nom du débiteur"/>
           </div>
 
           <div class="form-group">
@@ -350,8 +362,8 @@
           </div>
 
           <div class="form-group">
-            <label>Boîte N°</label>
-            <input type="text" id="boiteNoInput" placeholder="Boîte N°"/>
+            <label>Débiteur</label>
+            <input type="text" id="debiteurInput" placeholder="Nom du débiteur"/>
           </div>
 
           <div class="form-group">
@@ -404,20 +416,23 @@
             </div>
 
             <div class="panel">
-              <label>Note</label>
-              <textarea id="noteInput" rows="8" placeholder="Ajouter une note..."></textarea>
+              <div class="panel-field">
+                <textarea id="noteInput" rows="3" placeholder="Note dossier (optionnelle)..."></textarea>
+              </div>
 
-              <label style="margin-top:12px;">Avancement (où est arrivé le dossier)</label>
-              <textarea id="avancementInput" rows="5" placeholder="Ex: notification envoyée, audience fixée, en attente jugement..."></textarea>
+              <div class="panel-field">
+                <textarea id="avancementInput" rows="5" placeholder="Ex: notification envoyée, audience fixée, en attente jugement..."></textarea>
+              </div>
 
-              <label style="margin-top:12px;">Statut du dossier</label>
-              <select id="statutInput">
-                <option value="En cours" selected>En cours</option>
-                <option value="Soldé">Soldé</option>
-                <option value="Arrêt définitif">Arrêt définitif</option>
-                <option value="Clôture">Clôture</option>
-                <option value="Suspension">Suspension</option>
-              </select>
+              <div class="panel-field">
+                <select id="statutInput">
+                  <option value="En cours" selected>En cours</option>
+                  <option value="Soldé">Soldé</option>
+                  <option value="Arrêt définitif">Arrêt définitif</option>
+                  <option value="Clôture">Clôture</option>
+                  <option value="Suspension">Suspension</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -471,7 +486,6 @@
               <th>Montant</th>
               <th>Ville</th>
               <th>Statut</th>
-              <th>Avancement</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -496,6 +510,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
