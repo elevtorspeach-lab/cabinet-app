@@ -2668,13 +2668,189 @@ async function exportBackupExcelImportable(){
     };
   });
 
-  const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: false });
+  const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: true });
   if(!excelReady){
     return;
   }
 
   const totalCols = 14;
   const fillToCols = (arr, size)=>[...arr, ...Array(Math.max(0, size - arr.length)).fill('')];
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0')
+  ].join('');
+
+  if(typeof ExcelJS !== 'undefined'){
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Sauvegarde');
+    const colWidths = [18, 15, 12, 26, 16, 20, 14, 16, 14, 30, 14, 20, 20, 20];
+    sheet.columns = colWidths.map(width=>({ width }));
+    const lastColLetter = String.fromCharCode(64 + totalCols);
+    const rowMeta = new Map();
+    const audienceRowColorMap = new Map();
+
+    const addRow = (cells, type, extra = {})=>{
+      const row = sheet.addRow(fillToCols(cells, totalCols));
+      rowMeta.set(row.number, { type, ...extra });
+      return row;
+    };
+
+    addRow(['SAUVEGARDE IMPORTABLE'], 'title');
+    sheet.mergeCells(`A1:${lastColLetter}1`);
+
+    if(clientBlocks.length){
+      clientBlocks.forEach((block, index)=>{
+        addRow([`CLIENT : ${block.clientName || '-'}`], 'client');
+        addRow(dossierHeaders, 'dossier-header');
+        if(block.dossierRows.length){
+          block.dossierRows.forEach(cells=>addRow(cells, 'dossier-data'));
+        }else{
+          addRow([''], 'spacer');
+        }
+        addRow([''], 'spacer');
+        addRow(audienceHeaders, 'audience-header');
+        if(block.audienceRows.length){
+          block.audienceRows.forEach(audienceRow=>{
+            const row = addRow(audienceRow.cells, 'audience-data');
+            if(audienceRow.color) audienceRowColorMap.set(row.number, String(audienceRow.color).trim());
+          });
+        }else{
+          addRow([''], 'spacer');
+        }
+        if(index < clientBlocks.length - 1){
+          addRow([''], 'spacer');
+          addRow([''], 'spacer');
+        }
+      });
+    }else{
+      addRow(dossierHeaders, 'dossier-header');
+      addRow([''], 'spacer');
+      addRow([''], 'spacer');
+      addRow(audienceHeaders, 'audience-header');
+      addRow([''], 'spacer');
+    }
+
+    const border = {
+      top: { style: 'thin', color: { argb: 'FFCCD4E1' } },
+      left: { style: 'thin', color: { argb: 'FFCCD4E1' } },
+      bottom: { style: 'thin', color: { argb: 'FFCCD4E1' } },
+      right: { style: 'thin', color: { argb: 'FFCCD4E1' } }
+    };
+    const palette = {
+      titleBg: 'FF123B8C',
+      titleFg: 'FFFFFFFF',
+      clientBg: 'FFE8EFFD',
+      clientFg: 'FF123B8C',
+      dossierHeaderBg: 'FF1A4590',
+      audienceHeaderBg: 'FF0F766E',
+      headerFg: 'FFFFFFFF',
+      audienceBlue: 'FFE3F0FF',
+      audienceGreen: 'FFE8F8EE',
+      audienceRed: 'FFFDEAEA',
+      audienceYellow: 'FFFFF9DB',
+      audiencePurpleDark: 'FFEDE6FF',
+      audiencePurpleLight: 'FFF5EEFF',
+      rowAlt: 'FFF8FAFC'
+    };
+    const audienceFillByColor = {
+      blue: palette.audienceBlue,
+      green: palette.audienceGreen,
+      red: palette.audienceRed,
+      yellow: palette.audienceYellow,
+      'purple-dark': palette.audiencePurpleDark,
+      'purple-light': palette.audiencePurpleLight
+    };
+
+    sheet.getRow(1).height = 36;
+    for(let r = 1; r <= sheet.rowCount; r++){
+      const row = sheet.getRow(r);
+      const meta = rowMeta.get(r) || { type: '' };
+      const isHeader = meta.type === 'dossier-header' || meta.type === 'audience-header';
+      const isTitle = meta.type === 'title';
+      const isClient = meta.type === 'client';
+      const isSpacer = meta.type === 'spacer';
+      row.height = isTitle ? 36 : isHeader ? 28 : isClient ? 24 : 22;
+
+      if(isClient){
+        sheet.mergeCells(`A${r}:${lastColLetter}${r}`);
+      }
+
+      for(let c = 1; c <= totalCols; c++){
+        const cell = row.getCell(c);
+        if(isSpacer){
+          cell.value = '';
+          continue;
+        }
+        cell.border = border;
+        cell.font = { name: 'Arial', size: 11, color: { argb: 'FF111827' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+        if(isTitle){
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: palette.titleBg } };
+          cell.font = { name: 'Arial', size: 18, bold: true, color: { argb: palette.titleFg } };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        }else if(isClient){
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: palette.clientBg } };
+          cell.font = { name: 'Arial', size: 13, bold: true, color: { argb: palette.clientFg } };
+          cell.alignment = { vertical: 'middle', horizontal: 'left' };
+        }else if(meta.type === 'dossier-header'){
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: palette.dossierHeaderBg } };
+          cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: palette.headerFg } };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        }else if(meta.type === 'audience-header'){
+          const inAudienceCols = c <= audienceHeaders.length;
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: inAudienceCols ? palette.audienceHeaderBg : 'FFFFFFFF' }
+          };
+          cell.font = {
+            name: 'Arial',
+            size: 11,
+            bold: true,
+            color: { argb: inAudienceCols ? palette.headerFg : 'FF111827' }
+          };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        }else if(meta.type === 'audience-data'){
+          const rowColor = audienceRowColorMap.get(r) || '';
+          const mappedFill = audienceFillByColor[rowColor];
+          const fallbackAlt = r % 2 === 0 ? palette.rowAlt : '';
+          const fg = mappedFill || fallbackAlt;
+          if(fg){
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fg } };
+          }
+          if(c > audienceHeaders.length){
+            cell.value = '';
+          }
+        }else if(meta.type === 'dossier-data'){
+          if(r % 2 === 0){
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: palette.rowAlt } };
+          }
+        }
+      }
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob(
+      [buffer],
+      { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sauvegarde_importable_${stamp}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
   const aoa = [];
   aoa.push(fillToCols(['SAUVEGARDE IMPORTABLE'], totalCols));
 
@@ -2715,15 +2891,6 @@ async function exportBackupExcelImportable(){
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sauvegarde');
-  const now = new Date();
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    '_',
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0')
-  ].join('');
   XLSX.writeFile(wb, `sauvegarde_importable_${stamp}.xlsx`);
 }
 
