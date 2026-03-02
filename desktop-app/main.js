@@ -83,6 +83,26 @@ app.whenReady().then(() => {
     return { ok: true, filePath };
   });
 
+  ipcMain.handle('desktop-state:open-file', async () => {
+    const filePath = getDesktopStateFilePath();
+    try {
+      await fs.access(filePath);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        await writeDesktopState({
+          clients: [],
+          salleAssignments: [],
+          users: [],
+          audienceDraft: {}
+        });
+      } else {
+        throw err;
+      }
+    }
+    const openError = await shell.openPath(filePath);
+    return { ok: !openError, filePath, error: openError || '' };
+  });
+
   createWindow();
 
   app.on('activate', () => {

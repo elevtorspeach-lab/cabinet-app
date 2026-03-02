@@ -1661,6 +1661,45 @@ function hasDesktopStateBridge(){
     && typeof window.cabinetDesktopState.writeState === 'function';
 }
 
+async function openDesktopStateFile(){
+  if(
+    typeof window !== 'undefined'
+    && window.cabinetDesktopState
+    && typeof window.cabinetDesktopState.openStateFile === 'function'
+  ){
+    try{
+      const result = await window.cabinetDesktopState.openStateFile();
+      if(result?.ok) return;
+      const fallbackPath = String(result?.filePath || '').trim();
+      if(fallbackPath){
+        alert(`Impossible d'ouvrir automatiquement le fichier.\nChemin: ${fallbackPath}`);
+        return;
+      }
+      alert('Impossible d’ouvrir appsavocat.json.');
+      return;
+    }catch(err){
+      console.warn('Ouverture appsavocat.json impossible', err);
+      alert('Impossible d’ouvrir appsavocat.json.');
+      return;
+    }
+  }
+
+  if(
+    typeof window !== 'undefined'
+    && window.cabinetDesktopState
+    && typeof window.cabinetDesktopState.getStatePath === 'function'
+  ){
+    try{
+      const path = await window.cabinetDesktopState.getStatePath();
+      if(path){
+        alert(`Fichier d'état: ${path}`);
+        return;
+      }
+    }catch(err){}
+  }
+  alert('Disponible uniquement dans la version desktop.');
+}
+
 async function persistDesktopStateFileNow(payload = buildAppStatePayload()){
   if(!hasDesktopStateBridge()) return;
   try{
@@ -3000,6 +3039,9 @@ async function initApplication(){
 // ================== EVENTS ==================
 function setupEvents(){
   $('sidebarToggleBtn')?.addEventListener('click', toggleSidebar);
+  $('openDesktopStateFileBtn')?.addEventListener('click', ()=>{
+    openDesktopStateFile().catch(()=>{});
+  });
   $('dashboardLink').onclick = ()=>showView('dashboard');
   $('clientsLink').onclick = ()=>showView('clients');
   $('creationLink').onclick = ()=>showView('creation');
