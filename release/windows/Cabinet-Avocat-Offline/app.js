@@ -39,6 +39,7 @@ const API_BASE_STORAGE_KEY = 'cabinet-avocat-api-base-v1';
 let API_BASE = 'http://127.0.0.1:3000/api';
 let API_BASE_RESOLVED = false;
 let persistTimer = null;
+let desktopStatePersistTimer = null;
 let audienceAutoSaveTimer = null;
 let hasLoadedState = false;
 let importInProgress = false;
@@ -57,6 +58,7 @@ const SIDEBAR_COLLAPSED_KEY = 'cabinet-avocat-sidebar-collapsed';
 const REMOTE_SYNC_POLL_INTERVAL_MS = 3000;
 const REMOTE_SYNC_HEALTH_EVERY_TICKS = 3;
 const REMOTE_SYNC_EVENT_DEBOUNCE_MS = 100;
+const DESKTOP_STATE_SAVE_DEBOUNCE_MS = 250;
 const XLSX_LOCAL_URL = './vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = './vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
@@ -1644,13 +1646,80 @@ function buildStateSignature(clients, salleAssignments, users, draft){
   }
 }
 
-async function persistAppStateNow(){
-  const payload = {
+function buildAppStatePayload(){
+  return {
     clients: AppState.clients,
     salleAssignments: AppState.salleAssignments,
     users: USERS,
     audienceDraft: audienceDraft
   };
+}
+
+function hasDesktopStateBridge(){
+  return typeof window !== 'undefined'
+    && !!window.cabinetDesktopState
+    && typeof window.cabinetDesktopState.writeState === 'function';
+}
+
+async function openDesktopStateFile(){
+  if(
+    typeof window !== 'undefined'
+    && window.cabinetDesktopState
+    && typeof window.cabinetDesktopState.openStateFile === 'function'
+  ){
+    try{
+      const result = await window.cabinetDesktopState.openStateFile();
+      if(result?.ok) return;
+      const fallbackPath = String(result?.filePath || '').trim();
+      if(fallbackPath){
+        alert(`Fichier appsavocat créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
+        return;
+      }
+      alert('Impossible d’ouvrir appsavocat.json.');
+      return;
+    }catch(err){
+      console.warn('Ouverture appsavocat.json impossible', err);
+      alert('Impossible d’ouvrir appsavocat.json.');
+      return;
+    }
+  }
+
+  if(
+    typeof window !== 'undefined'
+    && window.cabinetDesktopState
+    && typeof window.cabinetDesktopState.getStatePath === 'function'
+  ){
+    try{
+      const path = await window.cabinetDesktopState.getStatePath();
+      if(path){
+        alert(`Fichier d'état: ${path}`);
+        return;
+      }
+    }catch(err){}
+  }
+  alert('Disponible uniquement dans la version desktop.');
+}
+
+async function persistDesktopStateFileNow(payload = buildAppStatePayload()){
+  if(!hasDesktopStateBridge()) return;
+  try{
+    await window.cabinetDesktopState.writeState(payload);
+  }catch(err){
+    console.warn('Impossible de sauvegarder appsavocat.json', err);
+  }
+}
+
+function queueDesktopStateFilePersist(){
+  if(!hasDesktopStateBridge()) return;
+  if(desktopStatePersistTimer) clearTimeout(desktopStatePersistTimer);
+  desktopStatePersistTimer = setTimeout(()=>{
+    desktopStatePersistTimer = null;
+    persistDesktopStateFileNow().catch(()=>{});
+  }, DESKTOP_STATE_SAVE_DEBOUNCE_MS);
+}
+
+async function persistAppStateNow(){
+  const payload = buildAppStatePayload();
   lastPersistedStateSignature = buildStateSignature(
     payload.clients,
     payload.salleAssignments,
@@ -1660,6 +1729,7 @@ async function persistAppStateNow(){
   if(typeof localStorage !== 'undefined'){
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   }
+  queueDesktopStateFilePersist();
   setSyncStatus('syncing');
   try{
     const res = await fetchWithTimeout(`${API_BASE}/state`, {
@@ -1676,14 +1746,11 @@ async function persistAppStateNow(){
 }
 
 function queuePersistAppState(){
+  const payload = buildAppStatePayload();
   if(typeof localStorage !== 'undefined'){
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      clients: AppState.clients,
-      salleAssignments: AppState.salleAssignments,
-      users: USERS,
-      audienceDraft: audienceDraft
-    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   }
+  queueDesktopStateFilePersist();
   setSyncStatus('syncing');
   if(persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(()=>{
@@ -1754,6 +1821,59 @@ async function loadPersistedState(){
   }
 
   if(loaded) return changed;
+  if(
+    hasDesktopStateBridge()
+    && typeof window.cabinetDesktopState.readState === 'function'
+  ){
+    try{
+      const desktopResult = await window.cabinetDesktopState.readState();
+      const parsed = desktopResult?.data;
+      if(parsed && typeof parsed === 'object'){
+        const loadedClients = Array.isArray(parsed?.clients)
+          ? parsed.clients.map(normalizeClient).filter(Boolean)
+          : [];
+        const loadedUsers = Array.isArray(parsed?.users)
+          ? parsed.users.map(normalizeUser).filter(Boolean)
+          : [];
+        const loadedSalleAssignments = normalizeSalleAssignments(parsed?.salleAssignments);
+        const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
+          ? parsed.audienceDraft
+          : {};
+        const nextUsers = ensureManagerUser(loadedUsers);
+        const nextSignature = buildStateSignature(
+          loadedClients,
+          loadedSalleAssignments,
+          nextUsers,
+          loadedDraft
+        );
+        if(nextSignature && nextSignature === lastPersistedStateSignature){
+          return false;
+        }
+
+        AppState.clients = loadedClients;
+        AppState.salleAssignments = loadedSalleAssignments;
+        USERS = nextUsers;
+        audienceDraft = loadedDraft;
+        lastPersistedStateSignature = buildStateSignature(
+          AppState.clients,
+          AppState.salleAssignments,
+          USERS,
+          audienceDraft
+        );
+        syncCurrentUserFromUsers();
+        if(typeof localStorage !== 'undefined'){
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify(buildAppStatePayload())
+          );
+        }
+        setSyncStatus('ok', 'Etat charge depuis appsavocat.json');
+        return true;
+      }
+    }catch(err){
+      console.warn('Impossible de charger appsavocat.json', err);
+    }
+  }
   if(typeof localStorage === 'undefined') return false;
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -2900,6 +3020,7 @@ async function initApplication(){
   renderSyncMetrics();
   await resolveApiBase();
   await loadPersistedState();
+  await persistDesktopStateFileNow();
   hasLoadedState = true;
   setupEvents();
   restoreSidebarState();
@@ -2918,6 +3039,9 @@ async function initApplication(){
 // ================== EVENTS ==================
 function setupEvents(){
   $('sidebarToggleBtn')?.addEventListener('click', toggleSidebar);
+  $('openDesktopStateFileBtn')?.addEventListener('click', ()=>{
+    openDesktopStateFile().catch(()=>{});
+  });
   $('dashboardLink').onclick = ()=>showView('dashboard');
   $('clientsLink').onclick = ()=>showView('clients');
   $('creationLink').onclick = ()=>showView('creation');
@@ -4945,16 +5069,27 @@ function renderEquipe(){
 function addSalleJudge(){
   if(!canEditData()) return alert('Accès refusé');
   const day = normalizeSalleWeekday(selectedSalleDay);
-  const salle = normalizeSalleName($('salleNameInput')?.value || '');
-  const juge = normalizeJudgeName($('salleJudgeInput')?.value || '');
-  if(!salle || !juge) return alert('Salle et Juge obligatoires');
+  const salleInput = $('salleNameInput');
+  const jugeInput = $('salleJudgeInput');
+  const salle = normalizeSalleName(salleInput?.value || '');
+  const juge = normalizeJudgeName(jugeInput?.value || '');
+  if(!salle || !juge){
+    if(!salle && salleInput){
+      salleInput.focus();
+      return;
+    }
+    if(!juge && jugeInput){
+      jugeInput.focus();
+    }
+    return;
+  }
   const exists = AppState.salleAssignments.some(row=>
     normalizeSalleWeekday(row?.day) === day
     && String(row?.salle || '').toLowerCase() === salle.toLowerCase()
     && String(row?.juge || '').toLowerCase() === juge.toLowerCase()
   );
   if(exists){
-    $('salleJudgeInput').value = '';
+    if(jugeInput) jugeInput.value = '';
     return;
   }
   AppState.salleAssignments.push({
@@ -4965,7 +5100,7 @@ function addSalleJudge(){
   });
   AppState.salleAssignments = normalizeSalleAssignments(AppState.salleAssignments);
   queuePersistAppState();
-  $('salleJudgeInput').value = '';
+  if(jugeInput) jugeInput.value = '';
   renderSalle();
 }
 
