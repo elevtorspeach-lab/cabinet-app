@@ -57,6 +57,8 @@ const SIDEBAR_COLLAPSED_KEY = 'cabinet-avocat-sidebar-collapsed';
 const REMOTE_SYNC_POLL_INTERVAL_MS = 3000;
 const REMOTE_SYNC_HEALTH_EVERY_TICKS = 3;
 const REMOTE_SYNC_EVENT_DEBOUNCE_MS = 100;
+const XLSX_LOCAL_URL = './vendor/libs/xlsx.full.min.js';
+const EXCELJS_LOCAL_URL = './vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 const EXCELJS_CDN_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
 let xlsxLoadPromise = null;
@@ -252,13 +254,15 @@ async function ensureExcelLibraries({ needXlsx = true, needExcelJs = false } = {
   try{
     if(needXlsx && typeof XLSX === 'undefined'){
       if(!xlsxLoadPromise){
-        xlsxLoadPromise = loadExternalScript(XLSX_CDN_URL, 'xlsx');
+        xlsxLoadPromise = loadExternalScript(XLSX_LOCAL_URL, 'xlsx-local')
+          .catch(()=>loadExternalScript(XLSX_CDN_URL, 'xlsx-cdn'));
       }
       await xlsxLoadPromise;
     }
     if(needExcelJs && typeof ExcelJS === 'undefined'){
       if(!excelJsLoadPromise){
-        excelJsLoadPromise = loadExternalScript(EXCELJS_CDN_URL, 'exceljs');
+        excelJsLoadPromise = loadExternalScript(EXCELJS_LOCAL_URL, 'exceljs-local')
+          .catch(()=>loadExternalScript(EXCELJS_CDN_URL, 'exceljs-cdn'));
       }
       await excelJsLoadPromise;
     }

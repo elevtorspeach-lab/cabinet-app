@@ -8,7 +8,7 @@ Utilisation:
 Important:
 - Les données restent sur CE PC (stockage local du navigateur).
 - Si vous changez de navigateur ou nettoyez les données du navigateur, les données peuvent disparaître.
-- Import/Export Excel peut nécessiter internet (bibliothèques chargées en ligne).
+- Import/Export Excel fonctionne aussi hors connexion (bibliothèques locales incluses).
 
 Conseil:
 - Utiliser toujours le même navigateur sur ce PC pour garder les données.
