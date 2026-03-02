@@ -1672,7 +1672,7 @@ async function openDesktopStateFile(){
       if(result?.ok) return;
       const fallbackPath = String(result?.filePath || '').trim();
       if(fallbackPath){
-        alert(`Impossible d'ouvrir automatiquement le fichier.\nChemin: ${fallbackPath}`);
+        alert(`Fichier appsavocat créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
         return;
       }
       alert('Impossible d’ouvrir appsavocat.json.');

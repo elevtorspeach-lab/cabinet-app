@@ -39,6 +39,18 @@ async function readDesktopState() {
   }
 }
 
+async function ensureDesktopStateFileExists() {
+  const result = await readDesktopState();
+  if (result && result.data) return result.filePath;
+  const filePath = await writeDesktopState({
+    clients: [],
+    salleAssignments: [],
+    users: [],
+    audienceDraft: {}
+  });
+  return filePath;
+}
+
 async function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -66,6 +78,10 @@ async function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ensureDesktopStateFileExists().catch((err) => {
+    console.warn('Unable to initialize appsavocat.json', err);
+  });
+
   ipcMain.handle('desktop-state:get-path', async () => {
     return getDesktopStateFilePath();
   });
