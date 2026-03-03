@@ -22,6 +22,7 @@ let filterDiligenceSort = 'all';
 let filterDiligenceDelegation = 'all';
 let filterDiligenceOrdonnance = 'all';
 let filterDiligenceTribunal = 'all';
+let diligencePrintSelection = new Set();
 let filterSalle = 'all';
 let filterSalleTribunal = 'all';
 let filterSalleAudienceDate = '';
@@ -59,6 +60,7 @@ const REMOTE_SYNC_POLL_INTERVAL_MS = 3000;
 const REMOTE_SYNC_HEALTH_EVERY_TICKS = 3;
 const REMOTE_SYNC_EVENT_DEBOUNCE_MS = 100;
 const DESKTOP_STATE_SAVE_DEBOUNCE_MS = 250;
+const CLIENT_IMPORT_ALLOWED_PROCEDURES = new Set(['SFDC', 'S/bien', 'Injonction']);
 const XLSX_LOCAL_URL = './vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = './vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
@@ -863,7 +865,8 @@ function renderProcedureMontantGroups(){
         </div>
         <div>
           <input
-            type="number"
+            type="text"
+            inputmode="decimal"
             placeholder="Montant groupe ${index + 1}"
             value="${escapeAttr(group.montant || '')}"
             oninput="updateProcedureMontantGroupAmount(${index}, this.value)">
@@ -885,10 +888,48 @@ function syncMainMontantToGroup1(value){
   if(!procedureMontantGroups.length) return;
   if(!procedureMontantGroups[0]) return;
   procedureMontantGroups[0].montant = normalized;
-  const input = document.querySelector('#procedureMontantGroups .procedure-montant-group input[type="number"]');
+  const input = document.querySelector('#procedureMontantGroups .procedure-montant-group input');
   if(input && String(input.value || '').trim() !== normalized){
     input.value = normalized;
   }
+}
+
+function hasMultipleAffectationDatesForSelection(selectedProcedures){
+  const selected = [...new Set((selectedProcedures || []).map(v=>String(v || '').trim()).filter(Boolean))];
+  if(selected.length <= 1) return false;
+  const dateSet = new Set();
+  const draft = collectProcedureDraft();
+  let fallbackDate = '';
+
+  if(editingDossier){
+    const data = getDossierByIds(editingDossier.clientId, editingDossier.index);
+    const dossier = data?.dossier;
+    fallbackDate = normalizeDateDDMMYYYY(dossier?.dateAffectation || '') || String(dossier?.dateAffectation || '').trim();
+    selected.forEach(proc=>{
+      const fromDraft = normalizeDateDDMMYYYY(draft?.[proc]?.dateDepot || '') || String(draft?.[proc]?.dateDepot || '').trim();
+      const fromDetails = normalizeDateDDMMYYYY(dossier?.procedureDetails?.[proc]?.dateDepot || '') || String(dossier?.procedureDetails?.[proc]?.dateDepot || '').trim();
+      const value = fromDraft || fromDetails || fallbackDate;
+      if(value) dateSet.add(value);
+    });
+  }else{
+    fallbackDate = normalizeDateDDMMYYYY($('dateAffectation')?.value || '') || String($('dateAffectation')?.value || '').trim();
+    selected.forEach(proc=>{
+      const fromDraft = normalizeDateDDMMYYYY(draft?.[proc]?.dateDepot || '') || String(draft?.[proc]?.dateDepot || '').trim();
+      const value = fromDraft || fallbackDate;
+      if(value) dateSet.add(value);
+    });
+  }
+
+  return dateSet.size > 1;
+}
+
+function hasNewProceduresComparedToOriginal(selectedProcedures){
+  if(!editingDossier) return false;
+  const selected = [...new Set((selectedProcedures || []).map(v=>String(v || '').trim()).filter(Boolean))];
+  if(!selected.length) return false;
+  const originalSet = new Set((editingOriginalProcedures || []).map(v=>String(v || '').trim()).filter(Boolean));
+  if(!originalSet.size) return false;
+  return selected.some(proc=>!originalSet.has(proc));
 }
 
 function syncProcedureMontantGroups(selectedProcedures){
@@ -904,16 +945,22 @@ function syncProcedureMontantGroups(selectedProcedures){
     procedures: group.procedures.filter(proc=>selected.includes(proc))
   })).filter(group=>group.procedures.length > 0);
 
+  const allowSecondGroup = hasMultipleAffectationDatesForSelection(selected)
+    || hasNewProceduresComparedToOriginal(selected);
+
   // In "new dossier" mode, keep a single montant group only.
   // Group splitting (Montant 2) is reserved for dossier modification mode.
-  if(!editingDossier){
+  if(!editingDossier || !allowSecondGroup){
     const mainMontantValue = String($('montantInput')?.value || '').trim();
     const now = Date.now();
+    const resolvedMontantValue = mainMontantValue
+      || String(procedureMontantGroups[0]?.montant || '').trim()
+      || '';
     if(!procedureMontantGroups.length){
       procedureMontantGroups = [{
         id: `${now}-${Math.random().toString(36).slice(2, 7)}`,
         createdAt: now,
-        montant: mainMontantValue,
+        montant: resolvedMontantValue,
         procedures: selected
       }];
     }else{
@@ -921,8 +968,8 @@ function syncProcedureMontantGroups(selectedProcedures){
       const merged = new Set(first.procedures);
       selected.forEach(proc=>merged.add(proc));
       first.procedures = [...merged];
-      if(mainMontantValue){
-        first.montant = mainMontantValue;
+      if(resolvedMontantValue){
+        first.montant = resolvedMontantValue;
       }
       procedureMontantGroups = [first];
     }
@@ -1022,6 +1069,7 @@ function createExcelUtf8Blob(html){
 async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', sheetName = 'Audience', colWidths = [], filename = 'audience_export.xlsx' }){
   const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: true });
   if(!excelReady) return;
+  const subtitleText = String(subtitle || '').trim();
   if(typeof ExcelJS === 'undefined'){
     if(typeof XLSX === 'undefined'){
       alert('Export XLSX indisponible: librairie Excel non chargée.');
@@ -1029,7 +1077,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     }
     const aoa = [
       ['CABINET ARAQUI HOUSSAINI'],
-      [String(subtitle || '-')],
+      [subtitleText],
       [],
       headers,
       ...rows
@@ -1048,7 +1096,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
   const lastColLetter = String.fromCharCode(64 + Math.max(1, colCount));
 
   sheet.getCell('A1').value = 'CABINET ARAQUI HOUSSAINI';
-  sheet.getCell('A2').value = String(subtitle || '-');
+  sheet.getCell('A2').value = subtitleText;
   sheet.mergeCells(`A1:${lastColLetter}1`);
   sheet.mergeCells(`A2:${lastColLetter}2`);
   sheet.addRow([]);
@@ -1243,6 +1291,110 @@ function parseExcelDateValue(value){
   return normalized || text;
 }
 
+function parseExcelDateValues(value){
+  if(value === null || value === undefined) return [];
+  if(value instanceof Date || (typeof value === 'number' && Number.isFinite(value))){
+    const single = parseExcelDateValue(value);
+    return single ? [single] : [];
+  }
+
+  const text = String(value || '').trim();
+  if(!text) return [];
+
+  const candidates = text.match(/\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}/g) || [];
+  const normalizedCandidates = candidates
+    .map(token=>normalizeDateDDMMYYYY(token))
+    .filter(Boolean);
+
+  if(normalizedCandidates.length){
+    return [...new Set(normalizedCandidates)];
+  }
+
+  const single = normalizeDateDDMMYYYY(text);
+  return single ? [single] : [];
+}
+
+function parseMontantTokenNumber(token){
+  let text = String(token || '')
+    .trim()
+    .replace(/\u00A0/g, ' ')
+    .replace(/\s+/g, '');
+  if(!text || !/\d/.test(text)) return NaN;
+
+  const lastComma = text.lastIndexOf(',');
+  const lastDot = text.lastIndexOf('.');
+
+  if(lastComma !== -1 && lastDot !== -1){
+    const decimalIdx = Math.max(lastComma, lastDot);
+    text = text.replace(/[.,]/g, (sep, idx)=>idx === decimalIdx ? '.' : '');
+  }else if(lastComma !== -1){
+    text = text.replace(/\./g, '').replace(',', '.');
+  }else if(lastDot !== -1){
+    const parts = text.split('.');
+    if(parts.length > 2){
+      const decimalPart = parts.pop();
+      text = `${parts.join('')}.${decimalPart}`;
+    }
+  }
+
+  text = text.replace(/[^\d.+-]/g, '');
+  const value = Number.parseFloat(text);
+  return Number.isFinite(value) ? value : NaN;
+}
+
+function getLowerMontantValue(value){
+  const raw = String(value || '').trim();
+  if(!raw) return '';
+  const parts = raw.match(/[-+]?\d+(?:[.,]\d+)?/g) || [];
+  if(parts.length <= 1) return raw;
+  const candidates = parts
+    .map(part=>{
+      const token = String(part || '').trim();
+      return {
+        token,
+        numeric: parseMontantTokenNumber(token)
+      };
+    })
+    .filter(item=>item.token && Number.isFinite(item.numeric));
+  if(candidates.length <= 1) return raw;
+  let min = candidates[0];
+  for(let i = 1; i < candidates.length; i++){
+    if(candidates[i].numeric < min.numeric) min = candidates[i];
+  }
+  return min.token || raw;
+}
+
+function parseExcelMontantValues(value){
+  const text = String(value || '').trim();
+  if(!text) return [];
+
+  const lineCandidates = text
+    .replace(/\r\n/g, '\n')
+    .split(/[\n;|]+/)
+    .map(v=>String(v || '').trim())
+    .filter(Boolean);
+
+  const source = lineCandidates.length ? lineCandidates : [text];
+  const out = [];
+
+  source.forEach(token=>{
+    const tokenNumeric = parseMontantTokenNumber(token);
+    if(Number.isFinite(tokenNumeric)){
+      out.push(token);
+      return;
+    }
+    const parts = String(token).match(/[-+]?\d[\d\s\u00A0.,]*/g) || [];
+    parts.forEach(part=>{
+      const cleaned = String(part || '').trim();
+      if(!cleaned) return;
+      const numeric = parseMontantTokenNumber(cleaned);
+      if(Number.isFinite(numeric)) out.push(cleaned);
+    });
+  });
+
+  return [...new Set(out)];
+}
+
 function makeAudienceDraftKey(ci, di, procKey){
   return `${ci}::${di}::${encodeURIComponent(String(procKey))}`;
 }
@@ -1358,10 +1510,11 @@ function normalizeClient(rawClient){
       return {
         ...d,
         dateAffectation: normalizedDate || String(d.dateAffectation || '').trim(),
+        montant: getLowerMontantValue(d.montant || ''),
         montantByProcedure: normalizeProcedureMontantGroups(
           d.montantByProcedure,
           normalizedProcedures,
-          d.montant || ''
+          getLowerMontantValue(d.montant || '')
         )
       };
     })
@@ -1421,7 +1574,7 @@ function buildSalleAudienceMap(dayKey = selectedSalleDay){
     ).trim();
     const session = {
       date: dateValue,
-      ref: String(row?.draft?.refDossier || row?.p?.referenceClient || '').trim() || '-',
+      ref: String(row?.draft?.refDossier || row?.p?.referenceClient || row?.d?.referenceClient || '').trim() || '-',
       debiteur: String(row?.d?.debiteur || '').trim() || '-',
       tribunal: String(row?.p?.tribunal || '').trim() || '-',
       client: String(row?.c?.name || '').trim() || '-',
@@ -1558,7 +1711,7 @@ async function exportSalleAudiences(salleEncoded, dayEncoded){
     return;
   }
 
-  const headers = ['Client', 'Adversaire', 'N° Dossier', 'Juge', 'Audience', 'Date dépôt', 'Sort'];
+  const headers = ['Client', 'Adversaire', 'N° Dossier', 'Juge', 'Instruction', 'Sort'];
   const rows = [];
   let dateAudience = '';
   const tribunalLabelsRaw = [];
@@ -1580,14 +1733,13 @@ async function exportSalleAudiences(salleEncoded, dayEncoded){
             s.debiteur || '-',
             s.ref || '-',
             judgeName || '-',
-            s.date || '-',
-            s.dateDepot || '-',
-            s.sort || s.instruction || '-'
+            s.instruction || '-',
+            ''
           ]);
         });
     });
   if(!rows.length){
-    rows.push(['-', '-', '-', '-', '-', '-', '-']);
+    rows.push(['-', '-', '-', '-', '-', '-']);
   }
   const tribunalClusterState = buildTribunalClusterStateFromLabels(tribunalLabelsRaw);
   const tribunalLabels = tribunalClusterState.options.map(v=>String(v?.label || '').trim()).filter(Boolean);
@@ -1600,7 +1752,7 @@ async function exportSalleAudiences(salleEncoded, dayEncoded){
     rows,
     subtitle: `Date d'audience : ${String(dateAudience || '-')} | Salle : ${salleLabel || '-'} | Tribunal : ${tribunalLabel || '-'}`,
     sheetName: 'Audience',
-    colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 28 }, { wch: 22 }, { wch: 16 }, { wch: 22 }, { wch: 34 }],
+    colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 28 }, { wch: 22 }, { wch: 28 }, { wch: 34 }],
     filename: `audiences_${safeSalle || 'salle'}_${safeDay || 'jour'}.xlsx`
   });
 }
@@ -2029,19 +2181,60 @@ function parseExcelData(rows){
     ville: ['ville'],
     refAssignation: ['reference dossier assignation', 'réference dossier assignation', 'référence dossier assignation', 'ref dossier assignation'],
     refRestitution: ['reference dossier restitution', 'réference dossier restitution', 'référence dossier restitution', 'ref dossier restitution'],
-    refSfdc: ['reference dossier sfdc', 'réference dossier sfdc', 'référence dossier sfdc', 'ref dossier sfdc']
+    refSfdc: ['reference dossier sfdc', 'réference dossier sfdc', 'référence dossier sfdc', 'ref dossier sfdc'],
+    executionNo: ['execution n', 'execution no', 'execution n°', 'execution numero', 'num execution', 'numero execution', 'numéro execution'],
+    sort: ['sort']
   };
 
   const audienceHeaderKeys = {
     refClient: ['ref client', 'refclient', 'reference client', 'réference client', 'référence client'],
     debiteur: ['debiteur', 'débiteur'],
     refDossier: ['ref dossier', 'reference dossier', 'référence dossier'],
+    procedure: ['procedure', 'procédure'],
     audience: ['audience'],
     juge: ['juge'],
     sort: ['sort'],
     tribunal: ['tribunal'],
     dateDepot: ['date depot', 'date depôt', 'date depot ']
   };
+  const referenceHints = {};
+  const registerReferenceHint = (rawRef, procName, extras = {})=>{
+    const key = normalizeReferenceValue(rawRef);
+    const proc = String(procName || '').trim();
+    if(!key || !proc) return;
+    const executionNo = String(extras.executionNo || '').trim();
+    const sort = String(extras.sort || '').trim();
+    if(!referenceHints[key]){
+      referenceHints[key] = { procedure: proc };
+    }
+    if(!referenceHints[key].procedure) referenceHints[key].procedure = proc;
+    if(executionNo && !referenceHints[key].executionNo) referenceHints[key].executionNo = executionNo;
+    if(sort && !referenceHints[key].sort) referenceHints[key].sort = sort;
+  };
+
+  // Support loose mapping blocks that only contain dossier references
+  // (e.g. "référence dossier assignation/restitution") used by audience import.
+  for(let i=0;i<rows.length;i++){
+    const map = buildHeaderMap(rows[i] || []);
+    const idxAssign = getColIndex(map, dossierHeaderKeys.refAssignation);
+    const idxRest = getColIndex(map, dossierHeaderKeys.refRestitution);
+    const idxSfdc = getColIndex(map, dossierHeaderKeys.refSfdc);
+    const idxExecution = getColIndex(map, dossierHeaderKeys.executionNo);
+    const idxSort = getColIndex(map, dossierHeaderKeys.sort);
+    if(idxAssign === -1 && idxRest === -1 && idxSfdc === -1) continue;
+    for(let j=i+1; j<rows.length; j++){
+      const row = rows[j] || [];
+      const assignRef = idxAssign !== -1 ? String(row[idxAssign] || '').trim() : '';
+      const restRef = idxRest !== -1 ? String(row[idxRest] || '').trim() : '';
+      const sfdcRef = idxSfdc !== -1 ? String(row[idxSfdc] || '').trim() : '';
+      const executionNo = idxExecution !== -1 ? String(row[idxExecution] || '').trim() : '';
+      const sort = idxSort !== -1 ? String(row[idxSort] || '').trim() : '';
+      if(!assignRef && !restRef && !sfdcRef) break;
+      if(assignRef) registerReferenceHint(assignRef, 'ASS', { executionNo, sort });
+      if(restRef) registerReferenceHint(restRef, 'Restitution', { executionNo, sort });
+      if(sfdcRef) registerReferenceHint(sfdcRef, 'SFDC', { executionNo, sort });
+    }
+  }
 
   const dossiers = [];
   for(let i=0;i<rows.length;i++){
@@ -2073,9 +2266,13 @@ function parseExcelData(rows){
       ville: getColIndex(dossierColMap, dossierHeaderKeys.ville),
       refAssignation: getColIndex(dossierColMap, dossierHeaderKeys.refAssignation),
       refRestitution: getColIndex(dossierColMap, dossierHeaderKeys.refRestitution),
-      refSfdc: getColIndex(dossierColMap, dossierHeaderKeys.refSfdc)
+      refSfdc: getColIndex(dossierColMap, dossierHeaderKeys.refSfdc),
+      executionNo: getColIndex(dossierColMap, dossierHeaderKeys.executionNo),
+      sort: getColIndex(dossierColMap, dossierHeaderKeys.sort)
     };
 
+    let carriedAffectationDate = '';
+    let carriedMontant = '';
     for(let j=i + 1; j<rows.length; j++){
       const row = rows[j] || [];
       const rowMap = buildHeaderMap(row);
@@ -2096,29 +2293,51 @@ function parseExcelData(rows){
       const clientName = idx.client !== -1 ? String(row[idx.client] || '').trim() : '';
       const procedureText = idx.procedure !== -1 ? String(row[idx.procedure] || '').trim() : '';
       const type = idx.type !== -1 ? String(row[idx.type] || '').trim() : '';
-      const montant = idx.montant !== -1 ? String(row[idx.montant] || '').trim() : '';
-      const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant;
+      const montantRaw = idx.montant !== -1 ? String(row[idx.montant] || '').trim() : '';
+      const montantValues = parseExcelMontantValues(montantRaw);
+      const montant = String(montantValues[0] || '').trim();
+      const montantExtra = String(montantValues[1] || '').trim();
+      const affectationValues = idx.affectation !== -1 ? parseExcelDateValues(row[idx.affectation]) : [];
+      const dateAffectation = String(affectationValues[0] || '').trim();
+      const dateAffectationExtra = String(affectationValues[1] || '').trim();
+      const executionNo = idx.executionNo !== -1 ? String(row[idx.executionNo] || '').trim() : '';
+      const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
+      const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
+      const isCarryDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && (!!dateAffectation || !!montant);
+      if(isCarryDossierRow){
+        if(dateAffectation) carriedAffectationDate = dateAffectation;
+        if(montant) carriedMontant = montant;
+        continue;
+      }
       const isClientTitleRow = /^client\s*:/i.test(clientName) && !refClient && !debiteur && !procedureText && !type && !montant;
       if(isClientTitleRow) continue;
 
       dossiers.push({
         rowNumber: j + 1,
         clientName,
-        dateAffectation: idx.affectation !== -1 ? parseExcelDateValue(row[idx.affectation]) : '',
+        dateAffectation,
+        carriedAffectationDate,
+        carriedMontant,
+        dateAffectationExtra,
         type,
         procedureText,
         refClient,
         debiteur,
         montant,
+        montantExtra,
         immatriculation: idx.immatriculation !== -1 ? String(row[idx.immatriculation] || '').trim() : '',
         marque: idx.marque !== -1 ? String(row[idx.marque] || '').trim() : '',
         adresse: idx.adresse !== -1 ? String(row[idx.adresse] || '').trim() : '',
         ville: idx.ville !== -1 ? String(row[idx.ville] || '').trim() : '',
         refAssignation: idx.refAssignation !== -1 ? String(row[idx.refAssignation] || '').trim() : '',
         refRestitution: idx.refRestitution !== -1 ? String(row[idx.refRestitution] || '').trim() : '',
-        refSfdc: idx.refSfdc !== -1 ? String(row[idx.refSfdc] || '').trim() : ''
+        refSfdc: idx.refSfdc !== -1 ? String(row[idx.refSfdc] || '').trim() : '',
+        executionNo,
+        sort
       });
+      carriedAffectationDate = '';
+      carriedMontant = '';
     }
   }
 
@@ -2135,6 +2354,7 @@ function parseExcelData(rows){
       refClient: getColIndex(map, audienceHeaderKeys.refClient),
       debiteur: getColIndex(map, audienceHeaderKeys.debiteur),
       refDossier: getColIndex(map, audienceHeaderKeys.refDossier),
+      procedure: getColIndex(map, audienceHeaderKeys.procedure),
       audience: getColIndex(map, audienceHeaderKeys.audience),
       juge: getColIndex(map, audienceHeaderKeys.juge),
       sort: getColIndex(map, audienceHeaderKeys.sort),
@@ -2153,6 +2373,7 @@ function parseExcelData(rows){
         refClient,
         debiteur,
         refDossier,
+        procedureText: idx.procedure !== -1 ? String(row[idx.procedure] || '').trim() : '',
         audience: idx.audience !== -1 ? String(row[idx.audience] || '').trim() : '',
         juge: idx.juge !== -1 ? String(row[idx.juge] || '').trim() : '',
         sort: idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '',
@@ -2162,7 +2383,7 @@ function parseExcelData(rows){
     }
   }
 
-  return { dossiers, audiences };
+  return { dossiers, audiences, referenceHints };
 }
 
 function buildExcelImportIssueMessage(issues){
@@ -2354,10 +2575,38 @@ function showExcelImportResult(summary, issuesText){
   modal.style.display = 'flex';
 }
 
-function applyExcelImport(payload){
+function applyExcelImport(payload, options = {}){
   const { dossiers, audiences } = payload;
-  if(!dossiers.length){
+  const referenceHints = payload && typeof payload.referenceHints === 'object'
+    ? payload.referenceHints
+    : {};
+  const getReferenceHint = (refKey)=>{
+    if(!refKey) return { procedure: '', executionNo: '', sort: '' };
+    const raw = referenceHints[refKey];
+    if(!raw) return { procedure: '', executionNo: '', sort: '' };
+    if(typeof raw === 'string'){
+      return { procedure: raw, executionNo: '', sort: '' };
+    }
+    return {
+      procedure: String(raw.procedure || '').trim(),
+      executionNo: String(raw.executionNo || '').trim(),
+      sort: String(raw.sort || '').trim()
+    };
+  };
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const importDossiers = opts.importDossiers !== false;
+  const importAudiences = opts.importAudiences !== false;
+  const audienceOnlyMode = String(opts.audienceMode || '').trim().toLowerCase() === 'audience-only';
+  const allowedDossierProcedureSet = opts.allowedDossierProcedureSet instanceof Set
+    ? opts.allowedDossierProcedureSet
+    : null;
+
+  if(importDossiers && !dossiers.length){
     alert('Aucune ligne de dossier trouvée. Vérifiez les colonnes Excel (ex: Client/Ref client, Débiteur, Procédure/Type).');
+    return;
+  }
+  if(!importDossiers && !audiences.length){
+    alert('Aucune ligne audience trouvée. Vérifiez les colonnes Excel (ex: Réf dossier, Audience, Juge, Sort, Tribunal).');
     return;
   }
 
@@ -2459,7 +2708,8 @@ function applyExcelImport(payload){
     });
   });
 
-  dossiers.forEach(row=>{
+  if(importDossiers){
+    dossiers.forEach(row=>{
     const rowNumberLabel = Number.isFinite(Number(row?.rowNumber)) ? `Ligne ${Number(row.rowNumber)}` : 'Ligne ?';
     const dossierProcedureContext = formatProcedureContextFromText(row?.procedureText || '');
     const dossierContext = buildIssueContext({
@@ -2485,29 +2735,45 @@ function applyExcelImport(payload){
       clientMap.set(clientKey, client);
     }
 
-    const procedures = parseProcedureList(row.procedureText);
+    const parsedProcedures = parseProcedureList(row.procedureText);
+    const movedToAudience = allowedDossierProcedureSet
+      ? parsedProcedures.filter(proc=>!allowedDossierProcedureSet.has(proc))
+      : [];
+    if(movedToAudience.length){
+      importIgnoredRows.push(`${rowNumberLabel}: procédures déplacées vers import Audience (${movedToAudience.join(', ')})${dossierContext}`);
+    }
+    const procedures = allowedDossierProcedureSet
+      ? parsedProcedures.filter(proc=>allowedDossierProcedureSet.has(proc))
+      : parsedProcedures;
     if(!procedures.length){
       importIgnoredRows.push(`${rowNumberLabel}: dossier ignoré (aucune procédure valide) - Ref client "${row.refClient || '-'}", Débiteur "${row.debiteur || '-'}"${dossierContext}`);
       return;
     }
     const procedureDetails = {};
+    const rowMontant = String(row.montant || '').trim();
+    const rowMontantExtra = String(row.montantExtra || '').trim();
+    const carriedMontant = String(row.carriedMontant || '').trim();
+    const rowDateAffectation = String(row.dateAffectation || '').trim();
+    const rowDateAffectationExtra = String(row.dateAffectationExtra || '').trim();
+    const carriedAffectationDate = String(row.carriedAffectationDate || '').trim();
+    const primaryMontant = carriedMontant || rowMontant;
+    const secondaryMontantCandidate = carriedMontant ? rowMontant : rowMontantExtra;
+    const primaryDateCandidate = carriedAffectationDate || rowDateAffectation;
+    const secondaryDateCandidate = carriedAffectationDate ? rowDateAffectation : rowDateAffectationExtra;
+    const principalMontant = primaryMontant;
 
     const dossier = {
       debiteur: row.debiteur,
       boiteNo: '',
       referenceClient: row.refClient || row.refAssignation || row.refRestitution || row.refSfdc || '',
-      dateAffectation: row.dateAffectation || '',
+      dateAffectation: rowDateAffectation || '',
       procedure: procedures.join(', '),
       procedureList: procedures.slice(),
       procedureDetails,
       ville: row.ville,
       adresse: row.adresse,
-      montant: row.montant,
-      montantByProcedure: normalizeProcedureMontantGroups(
-        [],
-        procedures,
-        row.montant || ''
-      ),
+      montant: principalMontant,
+      montantByProcedure: [],
       ww: row.immatriculation,
       marque: row.marque,
       type: row.type,
@@ -2517,13 +2783,20 @@ function applyExcelImport(payload){
       files: []
     };
 
+    const procedureSet = new Set(procedures);
     const setProcRef = (proc, ref)=>{
       const refText = String(ref || '').trim();
       const refKey = normalizeReferenceValue(refText);
       if(!refKey) return;
       dossierRefClientSet.add(refKey);
-      if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
-      dossier.procedureDetails[proc].referenceClient = refText;
+      const keepProcedureInDossier = !allowedDossierProcedureSet || allowedDossierProcedureSet.has(proc);
+      if(keepProcedureInDossier){
+        if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
+        dossier.procedureDetails[proc].referenceClient = refText;
+        if(!procedureSet.has(proc)){
+          procedureSet.add(proc);
+        }
+      }
       const baseRowRefClient = normalizeReferenceValue(row.refClient || '');
       const candidate = {
         dossier,
@@ -2550,12 +2823,82 @@ function applyExcelImport(payload){
     setProcRef('ASS', row.refAssignation);
     setProcRef('Restitution', row.refRestitution);
     setProcRef('SFDC', row.refSfdc);
+    const sfdcExecution = String(row.executionNo || '').trim();
+    const sfdcSort = String(row.sort || '').trim();
+    if((sfdcExecution || sfdcSort) && String(row.refSfdc || '').trim()){
+      if(!dossier.procedureDetails.SFDC) dossier.procedureDetails.SFDC = {};
+      if(sfdcExecution) dossier.procedureDetails.SFDC.executionNo = sfdcExecution;
+      if(sfdcSort) dossier.procedureDetails.SFDC.sort = sfdcSort;
+    }
+    const normalizedImportedProcs = [...procedureSet];
+    // Keep Excel procedure order as the source of truth.
+    // Any extra procedures discovered from references are appended after.
+    const excelOrderedProcs = (parsedProcedures && parsedProcedures.length ? parsedProcedures : procedures).slice();
+    const extraImportedProcs = normalizedImportedProcs.filter(proc=>!excelOrderedProcs.includes(proc));
+    const orderedImportedProcs = [...excelOrderedProcs, ...extraImportedProcs];
+    const normalizedPrimaryDate = normalizeDateDDMMYYYY(primaryDateCandidate) || primaryDateCandidate;
+    const normalizedSecondaryDate = normalizeDateDDMMYYYY(secondaryDateCandidate) || secondaryDateCandidate;
+    const hasDualDates = orderedImportedProcs.length > 1
+      && !!normalizedPrimaryDate
+      && !!normalizedSecondaryDate
+      && normalizedPrimaryDate !== normalizedSecondaryDate;
+    // Split montants only when there are truly two affectation dates.
+    const hasDualMontants = hasDualDates && orderedImportedProcs.length > 1 && !!primaryMontant && !!secondaryMontantCandidate;
+
+    orderedImportedProcs.forEach((proc, idx)=>{
+      if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
+      let procDate = normalizedPrimaryDate || normalizedSecondaryDate;
+      if(hasDualDates){
+        procDate = idx === 0
+          ? normalizedPrimaryDate
+          : normalizedSecondaryDate;
+      }
+      if(procDate){
+        dossier.procedureDetails[proc].dateDepot = procDate;
+      }
+    });
+
+    const montantGroupSeed = [];
+    const resolvedPrincipalMontant = hasDualMontants
+      ? primaryMontant
+      : (primaryMontant || secondaryMontantCandidate);
+    if(hasDualMontants && orderedImportedProcs.length){
+      const now = Date.now();
+      montantGroupSeed.push({
+        id: `${now}-${Math.random().toString(36).slice(2, 7)}`,
+        createdAt: now,
+        montant: primaryMontant,
+        procedures: [orderedImportedProcs[0]]
+      });
+      const secondaryProcedures = orderedImportedProcs.slice(1);
+      if(secondaryProcedures.length){
+        montantGroupSeed.push({
+          id: `${now + 1}-${Math.random().toString(36).slice(2, 7)}`,
+          createdAt: now + 1,
+          montant: secondaryMontantCandidate,
+          procedures: secondaryProcedures
+        });
+      }
+    }
+    dossier.montant = resolvedPrincipalMontant;
+    dossier.montantByProcedure = normalizeProcedureMontantGroups(
+      montantGroupSeed,
+      orderedImportedProcs,
+      resolvedPrincipalMontant || ''
+    );
+    dossier.dateAffectation = hasDualDates
+      ? normalizedPrimaryDate
+      : (normalizedPrimaryDate || normalizedSecondaryDate || '');
+    dossier.procedureList = orderedImportedProcs;
+    dossier.procedure = orderedImportedProcs.join(', ');
 
     client.dossiers.push(dossier);
     importedDossiersCount += 1;
-  });
+    });
+  }
 
-  audiences.forEach(row=>{
+  if(importAudiences){
+    audiences.forEach(row=>{
     const rowNumberLabel = Number.isFinite(Number(row?.rowNumber)) ? `Ligne ${Number(row.rowNumber)}` : 'Ligne ?';
     const audienceBaseContext = buildIssueContext({
       source: 'Audience',
@@ -2563,6 +2906,8 @@ function applyExcelImport(payload){
     });
     const ref = String(row.refDossier || '').trim();
     const refKey = normalizeReferenceValue(ref);
+    const hint = getReferenceHint(refKey);
+    const hintedProc = parseProcedureToken(hint.procedure || '');
     if(!refKey){
       importIgnoredRows.push(`${rowNumberLabel}: audience ignorée (ref dossier vide) - Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`);
       return;
@@ -2622,25 +2967,53 @@ function applyExcelImport(payload){
     }
     const rowDebiteur = String(row.debiteur || '').trim().toLowerCase();
     let match = null;
+    const candidatePool = hintedProc
+      ? candidates.filter(c=>String(c?.proc || '').trim() === hintedProc)
+      : candidates;
+    const activeCandidates = candidatePool.length ? candidatePool : candidates;
     if(rowRefClientKeySet.size){
-      match = candidates.find(c=>rowRefClientKeySet.has(c.rowRefClient)) || null;
+      match = activeCandidates.find(c=>rowRefClientKeySet.has(c.rowRefClient)) || null;
     }
     if(!match && rowDebiteur){
-      match = candidates.find(c=>c.rowDebiteur === rowDebiteur) || null;
+      match = activeCandidates.find(c=>c.rowDebiteur === rowDebiteur) || null;
     }
-    if(!match) match = candidates[0];
+    if(!match) match = activeCandidates[0];
     const { dossier, proc } = match;
+    const explicitProcRaw = String(row?.procedureText || '').trim();
+    const explicitProc = explicitProcRaw ? parseProcedureToken(explicitProcRaw) : '';
+    if(explicitProcRaw && !knownProcedureSet.has(explicitProc)){
+      importIgnoredRows.push(`${rowNumberLabel}: procédure audience inconnue "${explicitProcRaw}"${audienceBaseContext}`);
+      return;
+    }
+    let targetProc = explicitProc && knownProcedureSet.has(explicitProc)
+      ? explicitProc
+      : (hintedProc && knownProcedureSet.has(hintedProc) ? hintedProc : proc);
+    if(!targetProc) targetProc = 'ASS';
+    if(audienceOnlyMode && !isAudienceProcedure(targetProc)){
+      if(explicitProc && !isAudienceProcedure(explicitProc)){
+        importIgnoredRows.push(`${rowNumberLabel}: procédure "${explicitProc}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
+        return;
+      }
+      targetProc = 'ASS';
+    }
     if(!dossier.procedureDetails) dossier.procedureDetails = {};
-    if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
-    const p = dossier.procedureDetails[proc];
+    if(!dossier.procedureDetails[targetProc]) dossier.procedureDetails[targetProc] = {};
+    const p = dossier.procedureDetails[targetProc];
+    if(ref) p.referenceClient = ref;
     if(row.audience) p.audience = row.audience;
     if(row.juge) p.juge = row.juge;
     if(row.sort) p.sort = row.sort;
     if(row.tribunal) p.tribunal = row.tribunal;
     // In audience import files, "date depot" corresponds to procedure "Dépôt le".
     if(row.dateDepot) p.depotLe = row.dateDepot;
+    if(!p.executionNo && hint.executionNo) p.executionNo = hint.executionNo;
+    if(!p.sort && hint.sort) p.sort = hint.sort;
+    const normalizedProcedures = normalizeProcedures(dossier);
+    dossier.procedureList = normalizedProcedures;
+    dossier.procedure = normalizedProcedures.join(', ');
     linkedAudiencesCount += 1;
-  });
+    });
+  }
 
   queuePersistAppState();
   renderClients();
@@ -2662,7 +3035,7 @@ function applyExcelImport(payload){
   showExcelImportResult(summary, issuesText);
 }
 
-async function handleExcelImportFile(file){
+async function handleExcelImportFile(file, options = {}){
   if(importInProgress) return;
   if(!file) return;
   const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: false });
@@ -2682,13 +3055,21 @@ async function handleExcelImportFile(file){
       dateNF: 'dd/mm/yyyy'
     });
     const parsed = parseExcelData(rows);
-    applyExcelImport(parsed);
+    applyExcelImport(parsed, options);
   }catch(err){
     console.error(err);
     alert('Erreur import Excel. Vérifiez le format.');
   }finally{
     importInProgress = false;
   }
+}
+
+async function handleAudienceImportFile(file){
+  return handleExcelImportFile(file, {
+    importDossiers: false,
+    importAudiences: true,
+    audienceMode: 'audience-only'
+  });
 }
 
 async function exportBackupExcelImportable(){
@@ -3071,7 +3452,19 @@ function setupEvents(){
     if(!canEditData()) return alert('Accès refusé');
     const file = e.target?.files?.[0];
     if(!file) return;
-    handleExcelImportFile(file).catch(err=>console.error(err));
+    handleExcelImportFile(file, {
+      importDossiers: true,
+      importAudiences: false,
+      allowedDossierProcedureSet: CLIENT_IMPORT_ALLOWED_PROCEDURES
+    }).catch(err=>console.error(err));
+    e.target.value = '';
+  });
+  $('importAudienceExcelBtn')?.addEventListener('click', ()=> $('importAudienceExcelInput')?.click());
+  $('importAudienceExcelInput')?.addEventListener('change', (e)=>{
+    if(!canEditData()) return alert('Accès refusé');
+    const file = e.target?.files?.[0];
+    if(!file) return;
+    handleAudienceImportFile(file).catch(err=>console.error(err));
     e.target.value = '';
   });
   $('addDossierBtn').onclick = addDossier;
@@ -3193,6 +3586,8 @@ function setupEvents(){
   });
   $('diligenceSearchInput')?.addEventListener('input', renderDiligenceDebounced);
   $('exportDiligenceBtn')?.addEventListener('click', exportDiligenceXLS);
+  $('selectAllDiligenceBtn')?.addEventListener('click', ()=>setAllVisibleDiligenceRowsForPrint(true));
+  $('clearAllDiligenceBtn')?.addEventListener('click', ()=>setAllVisibleDiligenceRowsForPrint(false));
   $('salleFilterSelect')?.addEventListener('change', (e)=>{
     filterSalle = String(e.target?.value || 'all');
     renderSalle();
@@ -3254,7 +3649,7 @@ function setupEvents(){
   });
   $('selectAllPrintAudienceBtn')?.addEventListener('click', ()=>setAllVisibleAudienceRowsForPrint(true));
   $('clearAllPrintAudienceBtn')?.addEventListener('click', ()=>setAllVisibleAudienceRowsForPrint(false));
-  $('exportAudienceBtn')?.addEventListener('click', exportAudienceXLS);
+  $('exportAudienceBtn')?.addEventListener('click', exportAudienceRegularXLS);
   $('exportAudienceDetailBtn')?.addEventListener('click', exportAudienceXLS);
   $('calendarPrevBtn')?.addEventListener('click', ()=>{
     dashboardCalendarCursor = new Date(dashboardCalendarCursor.getFullYear(), dashboardCalendarCursor.getMonth() - 1, 1);
@@ -3608,7 +4003,8 @@ async function addDossier(){
     }
     const montantGroups = getProcedureMontantGroupsForSave();
     const montantInputValue = String($('montantInput')?.value || '').trim();
-    const montantFallback = montantInputValue || montantGroups.map(g=>String(g.montant || '').trim()).filter(Boolean).join(' | ');
+    const montantFallbackRaw = montantInputValue || montantGroups.map(g=>String(g.montant || '').trim()).filter(Boolean).join(' | ');
+    const montantFallback = getLowerMontantValue(montantFallbackRaw);
 
     const dossier = {
       debiteur: $('debiteurInput').value.trim(),
@@ -3629,6 +4025,7 @@ async function addDossier(){
       cautionAdresse: $('cautionAdresseInput')?.value.trim() || '',
       cautionVille: $('cautionVilleInput')?.value.trim() || '',
       cautionCin: $('cautionCinInput')?.value.trim() || '',
+      cautionRc: $('cautionRcInput')?.value.trim() || '',
       note: $('noteInput')?.value.trim() || '',
       avancement: $('avancementInput')?.value.trim() || '',
       statut: $('statutInput')?.value || 'En cours',
@@ -3985,6 +4382,7 @@ function buildSuiviSearchHaystack(clientName, dossier, procedures, tribunaux){
     dossier?.cautionAdresse || '',
     dossier?.cautionVille || '',
     dossier?.cautionCin || '',
+    dossier?.cautionRc || '',
     dossier?.note || '',
     dossier?.avancement || '',
     dossier?.statut || '',
@@ -4017,6 +4415,7 @@ function buildAudienceSearchHaystack(clientName, dossier, procKey, procedureData
     dossier?.cautionAdresse || '',
     dossier?.cautionVille || '',
     dossier?.cautionCin || '',
+    dossier?.cautionRc || '',
     dossier?.note || '',
     dossier?.avancement || '',
     dossier?.statut || '',
@@ -4063,6 +4462,7 @@ function editDossier(clientId, index){
   if($('cautionAdresseInput')) $('cautionAdresseInput').value = d.cautionAdresse || '';
   if($('cautionVilleInput')) $('cautionVilleInput').value = d.cautionVille || '';
   if($('cautionCinInput')) $('cautionCinInput').value = d.cautionCin || '';
+  if($('cautionRcInput')) $('cautionRcInput').value = d.cautionRc || '';
   if($('noteInput')) $('noteInput').value = d.note || '';
   if($('avancementInput')) $('avancementInput').value = d.avancement || '';
   if($('statutInput')) $('statutInput').value = d.statut || 'En cours';
@@ -4075,6 +4475,18 @@ function editDossier(clientId, index){
   const standard = new Set(['ASS','Restitution','Nantissement','SFDC','S/bien','Injonction']);
   const procs = normalizeProcedures(d);
   procedureMontantGroups = normalizeProcedureMontantGroups(d.montantByProcedure, procs, d.montant || '');
+  if(!hasMultipleAffectationDatesForSelection(procs)){
+    const now = Date.now();
+    const mainMontantValue = String(d.montant || '').trim()
+      || String(procedureMontantGroups[0]?.montant || '').trim()
+      || '';
+    procedureMontantGroups = [{
+      id: `${now}-${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: now,
+      montant: mainMontantValue,
+      procedures: procs
+    }];
+  }
   renderProcedureMontantGroups();
 
   d.procedureList = procs.slice();
@@ -4198,6 +4610,7 @@ function openDossierDetails(clientId, index){
     ['Adresse de caution', dossier.cautionAdresse || '-'],
     ['Ville de caution', dossier.cautionVille || '-'],
     ['CIN de caution', dossier.cautionCin || '-'],
+    ['RC', dossier.cautionRc || '-'],
     ['Statut', dossier.statut || 'En cours'],
     ['Avancement', dossier.avancement || '-'],
     ['Note', dossier.note || '-']
@@ -4287,6 +4700,7 @@ function downloadDossierSummary(clientId, index){
     `Adresse de caution: ${dossier.cautionAdresse || '-'}`,
     `Ville de caution: ${dossier.cautionVille || '-'}`,
     `CIN de caution: ${dossier.cautionCin || '-'}`,
+    `RC: ${dossier.cautionRc || '-'}`,
     `Statut: ${dossier.statut || 'En cours'}`,
     `Avancement: ${dossier.avancement || '-'}`,
     `Note: ${dossier.note || '-'}`,
@@ -4310,6 +4724,51 @@ function downloadDossierSummary(clientId, index){
 }
 
 // ================== DILIGENCE ==================
+function makeDiligencePrintKey(clientId, dossierIndex, procedure){
+  return `${clientId}::${dossierIndex}::${encodeURIComponent(String(procedure || ''))}`;
+}
+
+function isDiligenceSelectedForPrint(row){
+  const key = makeDiligencePrintKey(row?.clientId, row?.dossierIndex, row?.procedure);
+  return diligencePrintSelection.has(key);
+}
+
+function updateDiligenceCheckedCount(){
+  const node = $('diligenceCheckedCount');
+  if(!node) return;
+  node.innerText = `Cochés: ${diligencePrintSelection.size}`;
+}
+
+function toggleDiligencePrintSelection(clientId, dossierIndex, procedure, checked){
+  const key = makeDiligencePrintKey(clientId, dossierIndex, procedure);
+  if(checked){
+    diligencePrintSelection.add(key);
+  }else{
+    diligencePrintSelection.delete(key);
+  }
+  updateDiligenceCheckedCount();
+}
+
+function toggleDiligencePrintSelectionEncoded(clientId, dossierIndex, procedureEncoded, checked){
+  toggleDiligencePrintSelection(clientId, dossierIndex, decodeURIComponent(String(procedureEncoded)), checked);
+}
+
+function syncDiligencePrintSelection(allRows){
+  const allowed = new Set((allRows || []).map(row=>makeDiligencePrintKey(row.clientId, row.dossierIndex, row.procedure)));
+  diligencePrintSelection = new Set([...diligencePrintSelection].filter(key=>allowed.has(key)));
+  updateDiligenceCheckedCount();
+}
+
+function setAllVisibleDiligenceRowsForPrint(checked){
+  const rows = getFilteredDiligenceRows(getDiligenceRows());
+  if(!rows.length){
+    alert('Aucune ligne visible.');
+    return;
+  }
+  rows.forEach(row=>toggleDiligencePrintSelection(row.clientId, row.dossierIndex, row.procedure, checked));
+  renderDiligence();
+}
+
 function getDiligenceRows(){
   const rows = [];
   getVisibleClients().forEach(c=>{
@@ -4426,6 +4885,7 @@ function renderDiligence(){
   const headRow = $('diligenceHeadRow');
   if(!body) return;
   const allRows = getDiligenceRows();
+  syncDiligencePrintSelection(allRows);
   syncDiligenceProcedureFilter(allRows);
   syncDiligenceSortFilter(allRows);
   syncDiligenceDelegationFilter(allRows);
@@ -4488,7 +4948,8 @@ function renderDiligence(){
 
   body.innerHTML = rows.map(row=>{
     const procEncoded = encodeURIComponent(String(row.procedure || ''));
-    const refValue = row.details?.referenceClient || row.dossier?.referenceClient || '';
+    const isChecked = isDiligenceSelectedForPrint(row);
+    const refValue = row.details?.referenceClient || '';
     const ordValue = row.details?.attOrdOrOrdOk || '';
     const notificationNoValue = row.details?.notificationNo || '';
     const notificationStatusValue = row.details?.notificationStatus || '';
@@ -4503,7 +4964,16 @@ function renderDiligence(){
     if(showInjonctionColumns){
       return `
       <tr>
-        <td>${escapeHtml(row.clientName || '-')}</td>
+        <td>
+          <label class="diligence-client-cell">
+            <input
+              type="checkbox"
+              class="diligence-print-check"
+              ${isChecked ? 'checked' : ''}
+              onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
+            <span>${escapeHtml(row.clientName || '-')}</span>
+          </label>
+        </td>
         <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
       <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
@@ -4523,7 +4993,16 @@ function renderDiligence(){
     }
     return `
       <tr>
-        <td>${escapeHtml(row.clientName || '-')}</td>
+        <td>
+          <label class="diligence-client-cell">
+            <input
+              type="checkbox"
+              class="diligence-print-check"
+              ${isChecked ? 'checked' : ''}
+              onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
+            <span>${escapeHtml(row.clientName || '-')}</span>
+          </label>
+        </td>
         <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
         <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
@@ -4753,14 +5232,15 @@ function getFilteredDiligenceRows(allRows){
 
 function exportDiligenceXLS(){
   const allRows = getDiligenceRows();
+  syncDiligencePrintSelection(allRows);
   syncDiligenceProcedureFilter(allRows);
   syncDiligenceSortFilter(allRows);
   syncDiligenceDelegationFilter(allRows);
   syncDiligenceOrdonnanceFilter(allRows);
   syncDiligenceTribunalFilter(allRows);
-  const rows = getFilteredDiligenceRows(allRows);
+  const rows = allRows.filter(row=>isDiligenceSelectedForPrint(row));
   if(!rows.length){
-    alert('Aucune ligne à exporter');
+    alert('Cochez au moins une ligne pour exporter.');
     return;
   }
 
@@ -4786,7 +5266,7 @@ function exportDiligenceXLS(){
     row.clientName || '-',
     row.dossier?.debiteur || '-',
     row.details?.depotLe || row.details?.dateDepot || '-',
-    row.details?.referenceClient || row.dossier?.referenceClient || '-',
+    row.details?.referenceClient || '-',
     normalizeDiligenceAttOk(row.details?.attOrdOrOrdOk || '') || 'att',
     row.details?.notificationNo || '-',
     row.details?.notificationStatus || '-',
@@ -5691,7 +6171,7 @@ function getAudienceRowContentScore(row){
 }
 
 function getDiligenceRowReferenceValue(row){
-  return normalizeReferenceValue(String(row?.details?.referenceClient ?? row?.dossier?.referenceClient ?? '').trim());
+  return normalizeReferenceValue(String(row?.details?.referenceClient ?? '').trim());
 }
 
 function buildDiligenceDuplicateKey(row){
@@ -5822,6 +6302,25 @@ function syncAudienceFilterOptions(rows){
   tribunalSelect.value = filterAudienceTribunal;
 }
 
+function hasAudienceProcedureData(procData, draftData){
+  const p = procData || {};
+  const d = draftData || {};
+  const fields = [
+    d.dateAudience,
+    p.audience,
+    d.juge,
+    p.juge,
+    d.sort,
+    p.sort,
+    d.instruction,
+    p.instruction,
+    p.tribunal,
+    p.depotLe,
+    p.color
+  ];
+  return fields.some(value=>String(value || '').trim().length > 0);
+}
+
 function getAudienceRows(){
   const q = $('filterAudience')?.value?.toLowerCase() || '';
   const rows = [];
@@ -5840,6 +6339,7 @@ function getAudienceRows(){
         if(filterAudienceColor !== 'all' && color !== filterAudienceColor) return;
         const key = makeAudienceDraftKey(ci, di, procKey);
         const draft = audienceDraft[key] || {};
+        if(!hasAudienceProcedureData(p, draft)) return;
         const haystack = buildAudienceSearchHaystack(c.name, d, procKey, p, draft);
         if(q && !haystack.includes(q)) return;
         rows.push({ c, d, procKey, p, color, key, draft, ci, di });
@@ -5864,11 +6364,61 @@ function getAudienceRowsForSidebar(){
         const p = getAudienceProcedure(ci, di, procKey);
         const key = makeAudienceDraftKey(ci, di, procKey);
         const draft = audienceDraft[key] || {};
+        if(!hasAudienceProcedureData(p, draft)) return;
         rows.push({ c, d, procKey, p, key, draft, ci, di });
       });
     });
   });
   return dedupeAudienceRowsByReferenceAndDebiteur(rows);
+}
+
+async function exportAudienceRegularXLS(){
+  const audienceRows = getAudienceRows().sort(compareAudienceRowsByReferenceProximity);
+  if(!audienceRows.length){
+    alert('Aucune ligne à exporter.');
+    return;
+  }
+
+  const headers = [
+    'Client',
+    'Adversaire',
+    'Date dépôt',
+    'N° Dossier',
+    'Juge',
+    'Audience',
+    'Sort',
+    'Tribunal'
+  ];
+
+  const rows = audienceRows.map(r=>{
+    const p = r.p;
+    const d = r.d;
+    const draft = r.draft;
+    const dossierRef = String(draft.refDossier || p.referenceClient || d.referenceClient || '').trim();
+    const jugeValue = String(draft.juge || p.juge || '').trim();
+    const audienceDateValue = normalizeDateDDMMYYYY(draft.dateAudience || p.audience || '')
+      || String(draft.dateAudience || p.audience || '').trim();
+    const sortValue = String(draft.sort || p.sort || '').trim();
+    return [
+      r.c.name || '',
+      d.debiteur || '',
+      getAudienceDateDepotDisplayValue(r),
+      dossierRef || '-',
+      jugeValue || '-',
+      audienceDateValue || '-',
+      sortValue,
+      p.tribunal || ''
+    ];
+  });
+
+  await exportAudienceWorkbookXlsxStyled({
+    headers,
+    rows,
+    subtitle: 'Export standard',
+    sheetName: 'Export',
+    colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 18 }, { wch: 24 }, { wch: 24 }, { wch: 18 }, { wch: 28 }, { wch: 46 }],
+    filename: 'export_audience_standard.xlsx'
+  });
 }
 
 async function exportAudienceXLS(){
@@ -5881,44 +6431,44 @@ async function exportAudienceXLS(){
   const headers = [
     'Client',
     'Adversaire',
+    'Date dépôt',
     'N° Dossier',
     'Juge',
-    'Audience',
-    'Date dépôt',
+    'Instruction',
     'Sort',
     'Tribunal'
   ];
-  const dateAudience = audienceRows
-    .map(r => r.draft.dateAudience || r.p.audience || '')
-    .find(v => v && String(v).trim()) || '';
 
   const rows = audienceRows.map(r=>{
     const p = r.p;
     const d = r.d;
     const draft = r.draft;
-    const sortValue = draft.sort || p.sort || '';
+    const dossierRef = String(draft.refDossier || p.referenceClient || d.referenceClient || '').trim();
+    const sortValue = '';
+    const instructionValue = draft.instruction || p.instruction || draft.sort || p.sort || '';
     const jugeValue = draft.juge || p.juge || '';
-    const audienceValue = draft.dateAudience || p.audience || '';
     const dateDepotValue = getAudienceDateDepotDisplayValue(r);
-    const instructionValue = draft.instruction || p.instruction || '';
     return [
       r.c.name || '',
       d.debiteur || '',
-      draft.refDossier || p.referenceClient || '',
-      jugeValue,
-      audienceValue,
       dateDepotValue,
-      sortValue || instructionValue,
+      dossierRef || '-',
+      jugeValue,
+      instructionValue,
+      sortValue,
       p.tribunal || ''
     ];
   });
+  const dateAudienceTop = audienceRows
+    .map(r=>normalizeDateDDMMYYYY(r?.draft?.dateAudience || r?.p?.audience || '') || String(r?.draft?.dateAudience || r?.p?.audience || '').trim())
+    .find(v=>String(v || '').trim()) || '-';
 
   await exportAudienceWorkbookXlsxStyled({
     headers,
     rows,
-    subtitle: `Date d'audience : ${String(dateAudience || '-')}`,
+    subtitle: `Date d'audience : ${dateAudienceTop}`,
     sheetName: 'Audience',
-    colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 34 }, { wch: 22 }, { wch: 16 }, { wch: 22 }, { wch: 34 }, { wch: 46 }],
+    colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 22 }, { wch: 34 }, { wch: 22 }, { wch: 22 }, { wch: 34 }, { wch: 46 }],
     filename: 'audience_export.xlsx'
   });
 }
