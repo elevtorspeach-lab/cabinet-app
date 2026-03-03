@@ -199,6 +199,13 @@
           <option value="all">Tous</option>
         </select>
       </div>
+
+      <div class="import-excel">
+        <input type="file" id="importAudienceExcelInput" accept=".xlsx,.xls" style="display:none;">
+        <button id="importAudienceExcelBtn" class="btn-primary" type="button">
+          <i class="fa-solid fa-file-import"></i> Importer Audience
+        </button>
+      </div>
     </div>
 
   </div>
@@ -270,6 +277,13 @@
                 <option value="all">Tous</option>
               </select>
             </div>
+            <span id="diligenceCheckedCount" class="audience-checked-count">Cochés: 0</span>
+            <button id="selectAllDiligenceBtn" class="btn-primary" type="button">
+              <i class="fa-solid fa-check-double"></i> Tout cocher
+            </button>
+            <button id="clearAllDiligenceBtn" class="btn-primary" type="button">
+              <i class="fa-solid fa-eraser"></i> Tout décocher
+            </button>
             <button id="exportDiligenceBtn" class="btn-primary" type="button">
               <i class="fa-solid fa-file-export"></i> Exporter
             </button>
@@ -494,7 +508,7 @@
 
           <div class="form-group">
             <label>Montant</label>
-            <input type="number" id="montantInput" placeholder="Montant"/>
+            <input type="text" id="montantInput" inputmode="decimal" placeholder="Montant"/>
           </div>
 
           <div class="form-group">
@@ -533,8 +547,11 @@
           </div>
 
           <div class="form-group">
-            <label>CIN de caution</label>
-            <input type="text" id="cautionCinInput" placeholder="CIN de caution"/>
+            <label>CIN de caution / RC</label>
+            <div class="caution-cin-rc-row">
+              <input type="text" id="cautionCinInput" placeholder="CIN de caution"/>
+              <input type="text" id="cautionRcInput" placeholder="RC"/>
+            </div>
           </div>
 
           <div class="form-group full">
