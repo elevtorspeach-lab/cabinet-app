@@ -61,8 +61,9 @@ const REMOTE_SYNC_HEALTH_EVERY_TICKS = 3;
 const REMOTE_SYNC_EVENT_DEBOUNCE_MS = 100;
 const DESKTOP_STATE_SAVE_DEBOUNCE_MS = 250;
 const CLIENT_IMPORT_ALLOWED_PROCEDURES = new Set(['SFDC', 'S/bien', 'Injonction']);
-const XLSX_LOCAL_URL = './vendor/libs/xlsx.full.min.js';
-const EXCELJS_LOCAL_URL = './vendor/libs/exceljs.min.js';
+const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
+const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
+const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 const EXCELJS_CDN_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
 let xlsxLoadPromise = null;
@@ -262,6 +263,10 @@ async function ensureExcelLibraries({ needXlsx = true, needExcelJs = false } = {
           .catch(()=>loadExternalScript(XLSX_CDN_URL, 'xlsx-cdn'));
       }
       await xlsxLoadPromise;
+      if(typeof XLSX === 'undefined'){
+        xlsxLoadPromise = null;
+        throw new Error("Librairie XLSX introuvable (vérifiez /vendor/libs/xlsx.full.min.js ou l'accès CDN).");
+      }
     }
     if(needExcelJs && typeof ExcelJS === 'undefined'){
       if(!excelJsLoadPromise){
@@ -269,11 +274,17 @@ async function ensureExcelLibraries({ needXlsx = true, needExcelJs = false } = {
           .catch(()=>loadExternalScript(EXCELJS_CDN_URL, 'exceljs-cdn'));
       }
       await excelJsLoadPromise;
+      if(typeof ExcelJS === 'undefined'){
+        excelJsLoadPromise = null;
+        throw new Error("Librairie ExcelJS introuvable (vérifiez /vendor/libs/exceljs.min.js ou l'accès CDN).");
+      }
     }
     return true;
   }catch(err){
     console.error(err);
-    alert('Chargement du module Excel impossible. Vérifiez votre connexion puis réessayez.');
+    const details = String(err?.message || '').trim();
+    const extra = details ? `\nDétail: ${details}` : '';
+    alert(`Chargement du module Excel impossible.${extra}`);
     return false;
   }
 }
@@ -2952,18 +2963,7 @@ function applyExcelImport(payload, options = {}){
         return;
       }
       candidates = fallback;
-      const fallbackProcContext = formatProcedureContextFromCandidates(candidates);
-      const fallbackContext = buildIssueContext({
-        source: 'Audience',
-        zone: 'Dossiers globaux',
-        procedure: fallbackProcContext
-      });
-      const foundInDossiers = rowRefClientParts.filter(part=>dossierRefClientSet.has(normalizeReferenceValue(part)));
-      if(foundInDossiers.length){
-        importIgnoredRows.push(`${rowNumberLabel}: ref dossier "${ref}" introuvable, liaison via ref client (${foundInDossiers.join('/')})${fallbackContext}`);
-      }else{
-        importIgnoredRows.push(`${rowNumberLabel}: ref dossier "${ref}" introuvable, liaison via ref client${fallbackContext}`);
-      }
+      // Fallback by ref client is a successful link path, not an import error.
     }
     const rowDebiteur = String(row.debiteur || '').trim().toLowerCase();
     let match = null;
@@ -3047,18 +3047,29 @@ async function handleExcelImportFile(file, options = {}){
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
     const sheetName = workbook.SheetNames[0];
+    if(!sheetName){
+      throw new Error('Le fichier Excel ne contient aucune feuille.');
+    }
     const sheet = workbook.Sheets[sheetName];
+    if(!sheet){
+      throw new Error('Impossible de lire la première feuille du fichier.');
+    }
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: '',
       raw: false,
       dateNF: 'dd/mm/yyyy'
     });
+    if(!Array.isArray(rows)){
+      throw new Error('Format de feuille non reconnu.');
+    }
     const parsed = parseExcelData(rows);
     applyExcelImport(parsed, options);
   }catch(err){
     console.error(err);
-    alert('Erreur import Excel. Vérifiez le format.');
+    const details = String(err?.message || '').trim();
+    const extra = details ? `\nDétail: ${details}` : '';
+    alert(`Erreur import Excel. Vérifiez le format (xlsx/xls) et les en-têtes.${extra}`);
   }finally{
     importInProgress = false;
   }
@@ -3454,8 +3465,7 @@ function setupEvents(){
     if(!file) return;
     handleExcelImportFile(file, {
       importDossiers: true,
-      importAudiences: false,
-      allowedDossierProcedureSet: CLIENT_IMPORT_ALLOWED_PROCEDURES
+      importAudiences: false
     }).catch(err=>console.error(err));
     e.target.value = '';
   });
