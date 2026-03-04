@@ -1265,11 +1265,28 @@ function normalizeReferenceValue(value){
 }
 
 function splitReferenceValues(value){
-  return String(value || '')
+  const rawChunks = String(value || '')
     .replace(/\r\n/g, '\n')
-    .split(/[\/,;|+\n]+/)
+    .split(/[,;|+\n]+/)
     .map(v=>String(v || '').trim())
     .filter(Boolean);
+
+  const DOSSIER_REF_PATTERN = /^\d+\/\d+\/\d{2,4}$/;
+  const out = [];
+  rawChunks.forEach(chunk=>{
+    if(DOSSIER_REF_PATTERN.test(chunk)){
+      // Keep dossier references like 13580/8209/2025 intact.
+      out.push(chunk);
+      return;
+    }
+    // Ref client can be packed with "/" (e.g. C5034086/C5034027).
+    chunk
+      .split('/')
+      .map(v=>String(v || '').trim())
+      .filter(Boolean)
+      .forEach(v=>out.push(v));
+  });
+  return out;
 }
 
 function parseExcelDateValue(value){
@@ -3014,6 +3031,7 @@ function applyExcelImport(payload, options = {}){
 
   const importIgnoredRows = [];
   const knownProcedureSet = new Set(['ASS', 'Restitution', 'Nantissement', 'SFDC', 'S/bien', 'Injonction']);
+  const defaultDossierProceduresWhenMissing = ['ASS', 'Restitution', 'SFDC'];
   let importedDossiersCount = 0;
   let linkedAudiencesCount = 0;
 
@@ -3209,7 +3227,10 @@ function applyExcelImport(payload, options = {}){
       clientMap.set(clientKey, client);
     }
 
-    const parsedProcedures = parseProcedureList(row.procedureText);
+    const parsedProceduresRaw = parseProcedureList(row.procedureText);
+    const parsedProcedures = parsedProceduresRaw.length
+      ? parsedProceduresRaw
+      : defaultDossierProceduresWhenMissing.slice();
     const movedToAudience = allowedDossierProcedureSet
       ? parsedProcedures.filter(proc=>!allowedDossierProcedureSet.has(proc))
       : [];
@@ -6649,12 +6670,14 @@ function compareAudienceRowsByReferenceProximity(a, b){
 
 function buildAudienceDuplicateKey(row){
   const refDossier = normalizeReferenceValue(String(row?.draft?.refDossier ?? row?.p?.referenceClient ?? '').trim());
+  const procedure = String(row?.procKey || '').trim().toLowerCase();
   const debiteur = String(row?.d?.debiteur || '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
-  if(!refDossier || !debiteur) return '';
-  return `${debiteur}__${refDossier}`;
+  if(!refDossier || !debiteur || !procedure) return '';
+  // Audience rows are unique per procedure for the same dossier/debiteur.
+  return `${procedure}__${debiteur}__${refDossier}`;
 }
 
 function getAudienceDuplicateKeySet(rows){
