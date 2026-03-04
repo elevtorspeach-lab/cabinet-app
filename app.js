@@ -1844,6 +1844,20 @@ function getDossierAudienceReferenceKeys(dossier){
   return refs;
 }
 
+function getDossierProcedureReferenceKeys(dossier){
+  const refs = new Set();
+  const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+    ? dossier.procedureDetails
+    : {};
+  Object.values(details).forEach(proc=>{
+    splitReferenceValues(proc?.referenceClient || '').forEach(part=>{
+      const key = normalizeReferenceValue(part);
+      if(key) refs.add(key);
+    });
+  });
+  return refs;
+}
+
 function getDossierDebiteurKey(dossier){
   return String(dossier?.debiteur || '')
     .trim()
@@ -1914,6 +1928,7 @@ function reconcileAudienceOrphanDossiers(){
       globalCandidates.push({
         dossier,
         refs: getDossierAudienceReferenceKeys(dossier),
+        procRefs: getDossierProcedureReferenceKeys(dossier),
         debiteurKey: getDossierDebiteurKey(dossier)
       });
     });
@@ -1930,19 +1945,29 @@ function reconcileAudienceOrphanDossiers(){
     }
 
     const orphanRefs = getDossierAudienceReferenceKeys(orphanDossier);
-    if(!orphanRefs.size){
+    const orphanProcRefs = getDossierProcedureReferenceKeys(orphanDossier);
+    if(!orphanRefs.size && !orphanProcRefs.size){
       keptOrphans.push(orphanDossier);
       return;
     }
     const orphanDebiteur = getDossierDebiteurKey(orphanDossier);
     const orphanProcs = new Set(normalizeProcedures(orphanDossier));
+    const orphanClientRef = normalizeReferenceValue(String(orphanDossier?.referenceClient || '').trim());
 
     let bestCandidate = null;
     let bestScore = -1;
     globalCandidates.forEach(candidate=>{
-      const hasRefMatch = [...orphanRefs].some(ref=>candidate.refs.has(ref));
+      const hasProcRefMatch = orphanProcRefs.size
+        ? [...orphanProcRefs].some(ref=>candidate.procRefs.has(ref))
+        : false;
+      const hasRefMatch = hasProcRefMatch || [...orphanRefs].some(ref=>candidate.refs.has(ref));
       if(!hasRefMatch) return;
       let score = 200;
+      if(hasProcRefMatch) score += 120;
+      const candidateClientRef = normalizeReferenceValue(String(candidate?.dossier?.referenceClient || '').trim());
+      if(orphanClientRef && candidateClientRef && orphanClientRef === candidateClientRef){
+        score += 60;
+      }
       if(orphanDebiteur && candidate.debiteurKey && orphanDebiteur === candidate.debiteurKey){
         score += 50;
       }
@@ -1957,23 +1982,6 @@ function reconcileAudienceOrphanDossiers(){
         bestCandidate = candidate;
       }
     });
-
-    // Fallback: if no ref overlap, allow exact debiteur match only.
-    if(!bestCandidate && orphanDebiteur){
-      globalCandidates.forEach(candidate=>{
-        if(!candidate.debiteurKey || candidate.debiteurKey !== orphanDebiteur) return;
-        const candidateProcs = new Set(normalizeProcedures(candidate.dossier));
-        let overlap = 0;
-        orphanProcs.forEach(proc=>{
-          if(candidateProcs.has(proc)) overlap += 1;
-        });
-        const score = 80 + (overlap * 20);
-        if(score > bestScore){
-          bestScore = score;
-          bestCandidate = candidate;
-        }
-      });
-    }
 
     if(!bestCandidate){
       keptOrphans.push(orphanDossier);
