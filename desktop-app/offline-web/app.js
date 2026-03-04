@@ -1870,6 +1870,34 @@ function mergeAudienceProcedureFields(targetProc, sourceProc){
   delete targetProc._missingGlobal;
 }
 
+function resolveAudienceTargetProcKey(dossier, preferredProcKey, sourceProcData){
+  if(!dossier.procedureDetails || typeof dossier.procedureDetails !== 'object'){
+    dossier.procedureDetails = {};
+  }
+  const details = dossier.procedureDetails;
+  const baseKey = String(preferredProcKey || 'ASS').trim() || 'ASS';
+  const sourceRef = normalizeReferenceValue(String(sourceProcData?.referenceClient || '').trim());
+
+  if(!details[baseKey]) return baseKey;
+
+  const baseRef = normalizeReferenceValue(String(details[baseKey]?.referenceClient || '').trim());
+  if(!sourceRef || !baseRef || sourceRef === baseRef){
+    return baseKey;
+  }
+
+  const sameRefEntry = Object.entries(details).find(([, procData])=>{
+    const ref = normalizeReferenceValue(String(procData?.referenceClient || '').trim());
+    return !!(ref && sourceRef && ref === sourceRef);
+  });
+  if(sameRefEntry) return sameRefEntry[0];
+
+  let idx = 2;
+  while(details[`${baseKey} ${idx}`]){
+    idx += 1;
+  }
+  return `${baseKey} ${idx}`;
+}
+
 function reconcileAudienceOrphanDossiers(){
   const orphanClient = AppState.clients.find(
     client=>makeClientMatchKey(client?.name || '') === makeClientMatchKey(AUDIENCE_ORPHAN_CLIENT_NAME)
@@ -1930,6 +1958,23 @@ function reconcileAudienceOrphanDossiers(){
       }
     });
 
+    // Fallback: if no ref overlap, allow exact debiteur match only.
+    if(!bestCandidate && orphanDebiteur){
+      globalCandidates.forEach(candidate=>{
+        if(!candidate.debiteurKey || candidate.debiteurKey !== orphanDebiteur) return;
+        const candidateProcs = new Set(normalizeProcedures(candidate.dossier));
+        let overlap = 0;
+        orphanProcs.forEach(proc=>{
+          if(candidateProcs.has(proc)) overlap += 1;
+        });
+        const score = 80 + (overlap * 20);
+        if(score > bestScore){
+          bestScore = score;
+          bestCandidate = candidate;
+        }
+      });
+    }
+
     if(!bestCandidate){
       keptOrphans.push(orphanDossier);
       return;
@@ -1941,19 +1986,29 @@ function reconcileAudienceOrphanDossiers(){
     const orphanDetails = orphanDossier?.procedureDetails && typeof orphanDossier.procedureDetails === 'object'
       ? orphanDossier.procedureDetails
       : {};
+    let mergedForCurrentOrphan = 0;
     Object.entries(orphanDetails).forEach(([orphanProcKey, orphanProcData])=>{
-      const targetProcKey = chooseAudienceProcedureTarget(bestCandidate.dossier, orphanProcKey);
+      const baseTargetProcKey = chooseAudienceProcedureTarget(bestCandidate.dossier, orphanProcKey);
+      const targetProcKey = resolveAudienceTargetProcKey(bestCandidate.dossier, baseTargetProcKey, orphanProcData || {});
       if(!bestCandidate.dossier.procedureDetails[targetProcKey]){
         bestCandidate.dossier.procedureDetails[targetProcKey] = {};
       }
-      mergeAudienceProcedureFields(bestCandidate.dossier.procedureDetails[targetProcKey], orphanProcData || {});
+      const targetProc = bestCandidate.dossier.procedureDetails[targetProcKey] || {};
+      const sourceProc = orphanProcData || {};
+      mergeAudienceProcedureFields(targetProc, sourceProc);
       mergedProcedures += 1;
+      mergedForCurrentOrphan += 1;
     });
 
     const updatedProcedures = normalizeProcedures(bestCandidate.dossier);
     bestCandidate.dossier.procedureList = updatedProcedures;
     bestCandidate.dossier.procedure = updatedProcedures.join(', ');
-    matchedDossiers += 1;
+
+    if(mergedForCurrentOrphan > 0){
+      matchedDossiers += 1;
+      return;
+    }
+    keptOrphans.push(orphanDossier);
   });
 
   orphanClient.dossiers = keptOrphans;
