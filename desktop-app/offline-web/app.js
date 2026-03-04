@@ -61,6 +61,7 @@ const REMOTE_SYNC_HEALTH_EVERY_TICKS = 3;
 const REMOTE_SYNC_EVENT_DEBOUNCE_MS = 100;
 const DESKTOP_STATE_SAVE_DEBOUNCE_MS = 250;
 const CLIENT_IMPORT_ALLOWED_PROCEDURES = new Set(['SFDC', 'S/bien', 'Injonction']);
+const AUDIENCE_ORPHAN_CLIENT_NAME = 'Audience import (hors dossier global)';
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
 const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
@@ -1520,7 +1521,7 @@ function normalizeClient(rawClient){
       const normalizedProcedures = normalizeProcedures(d);
       return {
         ...d,
-        dateAffectation: normalizedDate || String(d.dateAffectation || '').trim(),
+        dateAffectation: normalizedDate || '',
         montant: getLowerMontantValue(d.montant || ''),
         montantByProcedure: normalizeProcedureMontantGroups(
           d.montantByProcedure,
@@ -1825,13 +1826,152 @@ function makeClientMatchKey(value){
     .replace(/\s+/g, ' ');
 }
 
+function getDossierAudienceReferenceKeys(dossier){
+  const refs = new Set();
+  const pushRef = (value)=>{
+    splitReferenceValues(value).forEach(part=>{
+      const key = normalizeReferenceValue(part);
+      if(key) refs.add(key);
+    });
+  };
+  pushRef(dossier?.referenceClient || '');
+  const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+    ? dossier.procedureDetails
+    : {};
+  Object.values(details).forEach(proc=>{
+    pushRef(proc?.referenceClient || '');
+  });
+  return refs;
+}
+
+function getDossierDebiteurKey(dossier){
+  return String(dossier?.debiteur || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function chooseAudienceProcedureTarget(globalDossier, orphanProcKey){
+  const globalProcs = new Set(normalizeProcedures(globalDossier));
+  if(globalProcs.has(orphanProcKey)) return orphanProcKey;
+  const audienceProcs = [...globalProcs].filter(proc=>isAudienceProcedure(proc));
+  if(audienceProcs.length) return audienceProcs[0];
+  return orphanProcKey || 'ASS';
+}
+
+function mergeAudienceProcedureFields(targetProc, sourceProc){
+  const fields = ['referenceClient', 'audience', 'juge', 'sort', 'tribunal', 'depotLe', 'dateDepot', 'executionNo', 'color', 'instruction'];
+  fields.forEach(field=>{
+    const incoming = String(sourceProc?.[field] ?? '').trim();
+    const existing = String(targetProc?.[field] ?? '').trim();
+    if(!incoming || existing) return;
+    targetProc[field] = sourceProc[field];
+  });
+  delete targetProc._missingGlobal;
+}
+
+function reconcileAudienceOrphanDossiers(){
+  const orphanClient = AppState.clients.find(
+    client=>makeClientMatchKey(client?.name || '') === makeClientMatchKey(AUDIENCE_ORPHAN_CLIENT_NAME)
+  );
+  if(!orphanClient || !Array.isArray(orphanClient.dossiers) || !orphanClient.dossiers.length){
+    return { matchedDossiers: 0, mergedProcedures: 0 };
+  }
+
+  const globalCandidates = [];
+  AppState.clients.forEach(client=>{
+    if(client === orphanClient) return;
+    (Array.isArray(client?.dossiers) ? client.dossiers : []).forEach(dossier=>{
+      if(!dossier || dossier.isAudienceOrphanImport) return;
+      globalCandidates.push({
+        dossier,
+        refs: getDossierAudienceReferenceKeys(dossier),
+        debiteurKey: getDossierDebiteurKey(dossier)
+      });
+    });
+  });
+
+  let matchedDossiers = 0;
+  let mergedProcedures = 0;
+  const keptOrphans = [];
+
+  orphanClient.dossiers.forEach(orphanDossier=>{
+    if(!orphanDossier || !orphanDossier.isAudienceOrphanImport){
+      keptOrphans.push(orphanDossier);
+      return;
+    }
+
+    const orphanRefs = getDossierAudienceReferenceKeys(orphanDossier);
+    if(!orphanRefs.size){
+      keptOrphans.push(orphanDossier);
+      return;
+    }
+    const orphanDebiteur = getDossierDebiteurKey(orphanDossier);
+    const orphanProcs = new Set(normalizeProcedures(orphanDossier));
+
+    let bestCandidate = null;
+    let bestScore = -1;
+    globalCandidates.forEach(candidate=>{
+      const hasRefMatch = [...orphanRefs].some(ref=>candidate.refs.has(ref));
+      if(!hasRefMatch) return;
+      let score = 200;
+      if(orphanDebiteur && candidate.debiteurKey && orphanDebiteur === candidate.debiteurKey){
+        score += 50;
+      }
+      const candidateProcs = new Set(normalizeProcedures(candidate.dossier));
+      let overlap = 0;
+      orphanProcs.forEach(proc=>{
+        if(candidateProcs.has(proc)) overlap += 1;
+      });
+      score += overlap * 20;
+      if(score > bestScore){
+        bestScore = score;
+        bestCandidate = candidate;
+      }
+    });
+
+    if(!bestCandidate){
+      keptOrphans.push(orphanDossier);
+      return;
+    }
+
+    if(!bestCandidate.dossier.procedureDetails || typeof bestCandidate.dossier.procedureDetails !== 'object'){
+      bestCandidate.dossier.procedureDetails = {};
+    }
+    const orphanDetails = orphanDossier?.procedureDetails && typeof orphanDossier.procedureDetails === 'object'
+      ? orphanDossier.procedureDetails
+      : {};
+    Object.entries(orphanDetails).forEach(([orphanProcKey, orphanProcData])=>{
+      const targetProcKey = chooseAudienceProcedureTarget(bestCandidate.dossier, orphanProcKey);
+      if(!bestCandidate.dossier.procedureDetails[targetProcKey]){
+        bestCandidate.dossier.procedureDetails[targetProcKey] = {};
+      }
+      mergeAudienceProcedureFields(bestCandidate.dossier.procedureDetails[targetProcKey], orphanProcData || {});
+      mergedProcedures += 1;
+    });
+
+    const updatedProcedures = normalizeProcedures(bestCandidate.dossier);
+    bestCandidate.dossier.procedureList = updatedProcedures;
+    bestCandidate.dossier.procedure = updatedProcedures.join(', ');
+    matchedDossiers += 1;
+  });
+
+  orphanClient.dossiers = keptOrphans;
+  if(!orphanClient.dossiers.length){
+    const orphanIdx = AppState.clients.findIndex(c=>c === orphanClient);
+    if(orphanIdx !== -1) AppState.clients.splice(orphanIdx, 1);
+  }
+
+  return { matchedDossiers, mergedProcedures };
+}
+
 function makeDossierMergeSignature(dossier){
   if(!dossier || typeof dossier !== 'object') return '';
   const ref = normalizeReferenceValue(String(dossier.referenceClient || '').trim());
   const debiteur = String(dossier.debiteur || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const procedures = normalizeProcedures(dossier).map(v=>String(v || '').trim()).filter(Boolean).sort();
   const procedureKey = procedures.join('|');
-  const dateAffectation = normalizeDateDDMMYYYY(dossier.dateAffectation || '') || String(dossier.dateAffectation || '').trim();
+  const dateAffectation = normalizeDateDDMMYYYY(dossier.dateAffectation || '') || '';
   return [ref, debiteur, procedureKey, dateAffectation].join('::');
 }
 
@@ -1964,6 +2104,7 @@ async function importAppsavocatPayload(rawPayload){
 
   // audienceDraft keys depend on table indexes; imported draft keys may mismatch after merge.
   audienceDraft = {};
+  const reconciliation = reconcileAudienceOrphanDossiers();
 
   queuePersistAppState();
   renderClients();
@@ -1982,7 +2123,8 @@ async function importAppsavocatPayload(rawPayload){
       `Dossiers ajoutés: ${addedDossiers}`,
       `Dossiers ignorés (doublons): ${skippedDossiers}`,
       `Utilisateurs ajoutés: ${addedUsers}`,
-      `Salles fusionnées: ${AppState.salleAssignments.length}`
+      `Salles fusionnées: ${AppState.salleAssignments.length}`,
+      `Audience hors global rapprochée: ${reconciliation.matchedDossiers}`
     ].join('\n')
   );
 }
@@ -2811,7 +2953,6 @@ function applyExcelImport(payload, options = {}){
   const knownProcedureSet = new Set(['ASS', 'Restitution', 'Nantissement', 'SFDC', 'S/bien', 'Injonction']);
   let importedDossiersCount = 0;
   let linkedAudiencesCount = 0;
-  const AUDIENCE_ORPHAN_CLIENT_NAME = 'Audience import (hors dossier global)';
 
   const clientMap = new Map();
   AppState.clients.forEach(c=>clientMap.set(String(c.name || '').trim().toLowerCase(), c));
@@ -3292,6 +3433,15 @@ function applyExcelImport(payload, options = {}){
     });
   }
 
+  let reconciledOrphans = 0;
+  if(importDossiers){
+    const reconciliation = reconcileAudienceOrphanDossiers();
+    reconciledOrphans = reconciliation.matchedDossiers;
+    if(reconciledOrphans > 0){
+      importIgnoredRows.push(`Rapprochement automatique: ${reconciledOrphans} dossier(s) audience hors global fusionné(s).`);
+    }
+  }
+
   queuePersistAppState();
   renderClients();
   renderDashboard();
@@ -3305,6 +3455,7 @@ function applyExcelImport(payload, options = {}){
     `Import terminé.`,
     `Dossiers détectés: ${dossiers.length}`,
     `Dossiers importés: ${importedDossiersCount}`,
+    `Audience hors global rapprochée: ${reconciledOrphans}`,
     `Audiences détectées: ${audiences.length}`,
     `Audiences liées: ${linkedAudiencesCount}`,
     `Erreurs ignorées (non bloquantes): ${importIgnoredRows.length}`
@@ -4341,6 +4492,7 @@ async function addDossier(){
     }else{
       client.dossiers.push(dossier);
     }
+    reconcileAudienceOrphanDossiers();
     queuePersistAppState();
 
     renderSuivi();
@@ -4492,7 +4644,7 @@ function renderSuivi(){
   filteredRows
     .sort(compareSuiviRowsByReferenceProximity)
     .forEach(row=>{
-      const displayDateAffectation = normalizeDateDDMMYYYY(row.d.dateAffectation || '') || String(row.d.dateAffectation || '').trim() || '-';
+      const displayDateAffectation = normalizeDateDDMMYYYY(row.d.dateAffectation || '') || '-';
 
       rowsHtml += `
       <tr>
@@ -4748,7 +4900,7 @@ function editDossier(clientId, index){
   $('debiteurInput').value = d.debiteur || '';
   if($('boiteNoInput')) $('boiteNoInput').value = d.boiteNo || '';
   $('referenceClientInput').value = d.referenceClient || '';
-  $('dateAffectation').value = normalizeDateDDMMYYYY(d.dateAffectation || '') || String(d.dateAffectation || '').trim();
+  $('dateAffectation').value = normalizeDateDDMMYYYY(d.dateAffectation || '') || '';
   $('villeInput').value = d.ville || '';
   $('adresseInput').value = d.adresse || '';
   $('montantInput').value = d.montant || '';
@@ -7027,7 +7179,7 @@ function removeProcedureVariant(procName){
 function getFormDateAffectationValue(){
   const raw = String($('dateAffectation')?.value || '').trim();
   if(!raw) return '';
-  return normalizeDateDDMMYYYY(raw) || raw;
+  return normalizeDateDDMMYYYY(raw) || '';
 }
 
 function syncProcedureDateAffectationToCards(force = false){
