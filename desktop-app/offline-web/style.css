@@ -1551,6 +1551,10 @@ tr.color-purple-light{border-left:6px solid #f97316;background:#fff7ed}
   background:#fff1f2 !important;
   color:#991b1b !important;
 }
+.audience-refclient-mismatch{
+  color:#991b1b !important;
+  font-weight:700;
+}
 .audience-inline-error{
   margin-top:4px;
   font-size:11px;

@@ -11,6 +11,7 @@ let selectedAudienceColor = 'all';
 let filterAudienceColor = 'all';
 let filterAudienceProcedure = 'all';
 let filterAudienceTribunal = 'all';
+let filterAudienceDate = '';
 let filterAudienceErrorsOnly = false;
 let audienceTribunalAliasMap = new Map();
 let audiencePrintSelection = new Set();
@@ -1259,7 +1260,13 @@ function normalizeDateDDMMYYYY(value){
 
 function normalizeReferenceValue(value){
   return String(value || '')
+    .normalize('NFKC')
     .trim()
+    // Remove invisible direction/zero-width markers often present in Excel content.
+    .replace(/[\u200B-\u200D\uFEFF\u200E\u200F\u061C]/g, '')
+    .replace(/[’'`´]/g, '')
+    // Unify all slash variants to "/" so matching is stable.
+    .replace(/[\\\/⁄∕／]+/g, '/')
     .replace(/\s+/g, '')
     .toUpperCase();
 }
@@ -1274,13 +1281,15 @@ function splitReferenceValues(value){
   const DOSSIER_REF_PATTERN = /^\d+\/\d+\/\d{2,4}$/;
   const out = [];
   rawChunks.forEach(chunk=>{
-    if(DOSSIER_REF_PATTERN.test(chunk)){
+    const normalizedChunk = normalizeReferenceValue(chunk);
+    if(!normalizedChunk) return;
+    if(DOSSIER_REF_PATTERN.test(normalizedChunk)){
       // Keep dossier references like 13580/8209/2025 intact.
-      out.push(chunk);
+      out.push(normalizedChunk);
       return;
     }
     // Ref client can be packed with "/" (e.g. C5034086/C5034027).
-    chunk
+    normalizedChunk
       .split('/')
       .map(v=>String(v || '').trim())
       .filter(Boolean)
@@ -2601,7 +2610,8 @@ function parseExcelData(rows){
     refAssignation: ['reference dossier assignation', 'réference dossier assignation', 'référence dossier assignation', 'ref dossier assignation'],
     refRestitution: ['reference dossier restitution', 'réference dossier restitution', 'référence dossier restitution', 'ref dossier restitution'],
     refSfdc: ['reference dossier sfdc', 'réference dossier sfdc', 'référence dossier sfdc', 'ref dossier sfdc'],
-    executionNo: ['execution n', 'execution no', 'execution n°', 'execution numero', 'num execution', 'numero execution', 'numéro execution'],
+    refInjonction: ['reference dossier inj', 'réference dossier inj', 'référence dossier inj', 'ref dossier inj', 'reference dossier injonction', 'réference dossier injonction', 'référence dossier injonction', 'ref dossier injonction'],
+    executionNo: ['execution n', 'execution no', 'execution n°', 'execution numero', 'num execution', 'numero execution', 'numéro execution', 'notification', 'notification n', 'notificat'],
     sort: ['sort']
   };
 
@@ -2638,20 +2648,23 @@ function parseExcelData(rows){
     const idxAssign = getColIndex(map, dossierHeaderKeys.refAssignation);
     const idxRest = getColIndex(map, dossierHeaderKeys.refRestitution);
     const idxSfdc = getColIndex(map, dossierHeaderKeys.refSfdc);
+    const idxInjonction = getColIndex(map, dossierHeaderKeys.refInjonction);
     const idxExecution = getColIndex(map, dossierHeaderKeys.executionNo);
     const idxSort = getColIndex(map, dossierHeaderKeys.sort);
-    if(idxAssign === -1 && idxRest === -1 && idxSfdc === -1) continue;
+    if(idxAssign === -1 && idxRest === -1 && idxSfdc === -1 && idxInjonction === -1) continue;
     for(let j=i+1; j<rows.length; j++){
       const row = rows[j] || [];
       const assignRef = idxAssign !== -1 ? String(row[idxAssign] || '').trim() : '';
       const restRef = idxRest !== -1 ? String(row[idxRest] || '').trim() : '';
       const sfdcRef = idxSfdc !== -1 ? String(row[idxSfdc] || '').trim() : '';
+      const injRef = idxInjonction !== -1 ? String(row[idxInjonction] || '').trim() : '';
       const executionNo = idxExecution !== -1 ? String(row[idxExecution] || '').trim() : '';
       const sort = idxSort !== -1 ? String(row[idxSort] || '').trim() : '';
-      if(!assignRef && !restRef && !sfdcRef) break;
+      if(!assignRef && !restRef && !sfdcRef && !injRef) break;
       if(assignRef) registerReferenceHint(assignRef, 'ASS', { executionNo, sort });
       if(restRef) registerReferenceHint(restRef, 'Restitution', { executionNo, sort });
       if(sfdcRef) registerReferenceHint(sfdcRef, 'SFDC', { executionNo, sort });
+      if(injRef) registerReferenceHint(injRef, 'Injonction', { executionNo, sort });
     }
   }
 
@@ -2686,6 +2699,7 @@ function parseExcelData(rows){
       refAssignation: getColIndex(dossierColMap, dossierHeaderKeys.refAssignation),
       refRestitution: getColIndex(dossierColMap, dossierHeaderKeys.refRestitution),
       refSfdc: getColIndex(dossierColMap, dossierHeaderKeys.refSfdc),
+      refInjonction: getColIndex(dossierColMap, dossierHeaderKeys.refInjonction),
       executionNo: getColIndex(dossierColMap, dossierHeaderKeys.executionNo),
       sort: getColIndex(dossierColMap, dossierHeaderKeys.sort)
     };
@@ -2712,6 +2726,14 @@ function parseExcelData(rows){
       const clientName = idx.client !== -1 ? String(row[idx.client] || '').trim() : '';
       const procedureText = idx.procedure !== -1 ? String(row[idx.procedure] || '').trim() : '';
       const type = idx.type !== -1 ? String(row[idx.type] || '').trim() : '';
+      const refAssignation = idx.refAssignation !== -1 ? String(row[idx.refAssignation] || '').trim() : '';
+      const refRestitution = idx.refRestitution !== -1 ? String(row[idx.refRestitution] || '').trim() : '';
+      const refSfdc = idx.refSfdc !== -1 ? String(row[idx.refSfdc] || '').trim() : '';
+      const refInjonction = idx.refInjonction !== -1 ? String(row[idx.refInjonction] || '').trim() : '';
+      const immatriculation = idx.immatriculation !== -1 ? String(row[idx.immatriculation] || '').trim() : '';
+      const marque = idx.marque !== -1 ? String(row[idx.marque] || '').trim() : '';
+      const adresse = idx.adresse !== -1 ? String(row[idx.adresse] || '').trim() : '';
+      const ville = idx.ville !== -1 ? String(row[idx.ville] || '').trim() : '';
       const montantRaw = idx.montant !== -1 ? String(row[idx.montant] || '').trim() : '';
       const montantValues = parseExcelMontantValues(montantRaw);
       const montant = String(montantValues[0] || '').trim();
@@ -2723,7 +2745,16 @@ function parseExcelData(rows){
       const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
-      const isCarryDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && (!!dateAffectation || !!montant);
+      const hasExplicitReferences = !!(refAssignation || refRestitution || refSfdc || refInjonction);
+      const hasOtherDossierSignals = !!(immatriculation || marque || adresse || ville);
+      const isCarryDossierRow = !refClient
+        && !debiteur
+        && !clientName
+        && !procedureText
+        && !type
+        && !hasExplicitReferences
+        && !hasOtherDossierSignals
+        && (!!dateAffectation || !!montant);
       if(isCarryDossierRow){
         if(dateAffectation) carriedAffectationDate = dateAffectation;
         if(montant) carriedMontant = montant;
@@ -2745,13 +2776,14 @@ function parseExcelData(rows){
         debiteur,
         montant,
         montantExtra,
-        immatriculation: idx.immatriculation !== -1 ? String(row[idx.immatriculation] || '').trim() : '',
-        marque: idx.marque !== -1 ? String(row[idx.marque] || '').trim() : '',
-        adresse: idx.adresse !== -1 ? String(row[idx.adresse] || '').trim() : '',
-        ville: idx.ville !== -1 ? String(row[idx.ville] || '').trim() : '',
-        refAssignation: idx.refAssignation !== -1 ? String(row[idx.refAssignation] || '').trim() : '',
-        refRestitution: idx.refRestitution !== -1 ? String(row[idx.refRestitution] || '').trim() : '',
-        refSfdc: idx.refSfdc !== -1 ? String(row[idx.refSfdc] || '').trim() : '',
+        immatriculation,
+        marque,
+        adresse,
+        ville,
+        refAssignation,
+        refRestitution,
+        refSfdc,
+        refInjonction,
         executionNo,
         sort
       });
@@ -3020,6 +3052,39 @@ function applyExcelImport(payload, options = {}){
     ? opts.allowedDossierProcedureSet
     : null;
 
+  const resetAudienceDataForGlobalImport = ()=>{
+    AppState.clients.forEach(client=>{
+      (Array.isArray(client?.dossiers) ? client.dossiers : []).forEach(dossier=>{
+        if(!dossier || typeof dossier !== 'object') return;
+        if(!dossier.procedureDetails || typeof dossier.procedureDetails !== 'object') return;
+        Object.entries(dossier.procedureDetails).forEach(([procName, details])=>{
+          if(!isAudienceProcedure(procName)) return;
+          if(!details || typeof details !== 'object') return;
+          delete details.audience;
+          delete details.juge;
+          delete details.sort;
+          delete details.tribunal;
+          delete details.depotLe;
+          delete details.dateDepot;
+          delete details.color;
+          delete details.instruction;
+          delete details._missingGlobal;
+          delete details._refClientMismatch;
+          delete details._refClientProvided;
+          delete details._refClientExpected;
+          delete details._refClientExpectedOptions;
+        });
+      });
+    });
+    audienceDraft = {};
+    audiencePrintSelection = new Set();
+  };
+
+  // Import dossier-only should not keep previous Audience data.
+  if(importDossiers && !importAudiences){
+    resetAudienceDataForGlobalImport();
+  }
+
   if(importDossiers && !dossiers.length){
     alert('Aucune ligne de dossier trouvée. Vérifiez les colonnes Excel (ex: Client/Ref client, Débiteur, Procédure/Type).');
     return;
@@ -3151,6 +3216,8 @@ function applyExcelImport(payload, options = {}){
   };
 
   const registerFallbackFromDossier = (client, dossier)=>{
+    // Keep matching scoped to real global dossiers only.
+    if(dossier?.isAudienceOrphanImport) return;
     const rowDebiteur = String(dossier?.debiteur || '').trim().toLowerCase();
     const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
       ? dossier.procedureDetails
@@ -3199,6 +3266,57 @@ function applyExcelImport(payload, options = {}){
       registerFallbackFromDossier(client, dossier);
     });
   });
+
+  const findCandidatesByRefDossierFromState = (targetRefKey)=>{
+    if(!targetRefKey) return [];
+    const found = [];
+    const seen = new Set();
+    AppState.clients.forEach(client=>{
+      (Array.isArray(client?.dossiers) ? client.dossiers : []).forEach(dossier=>{
+        if(!dossier || dossier.isAudienceOrphanImport) return;
+        const dossierRefs = getDossierAudienceReferenceKeys(dossier);
+        if(!dossierRefs.has(targetRefKey)) return;
+
+        const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+          ? dossier.procedureDetails
+          : {};
+        const matchingProcNames = Object.entries(details)
+          .filter(([, procDetails])=>{
+            const refs = splitReferenceValues(procDetails?.referenceClient || '')
+              .map(v=>normalizeReferenceValue(v))
+              .filter(Boolean);
+            return refs.includes(targetRefKey);
+          })
+          .map(([procName])=>String(procName || '').trim())
+          .filter(Boolean);
+
+        const baseProcList = normalizeProcedures(dossier);
+        const procCandidates = matchingProcNames.length
+          ? matchingProcNames
+          : (baseProcList.length ? baseProcList : ['ASS']);
+
+        const mainRefParts = splitReferenceValues(dossier?.referenceClient || '')
+          .map(v=>normalizeReferenceValue(v))
+          .filter(Boolean);
+        const rowRefClient = mainRefParts[0] || normalizeReferenceValue(String(dossier?.referenceClient || '').trim());
+        const rowDebiteur = String(dossier?.debiteur || '').trim().toLowerCase();
+
+        procCandidates.forEach(proc=>{
+          const signature = `${client?.id || ''}::${proc || ''}::${rowRefClient || ''}::${rowDebiteur || ''}`;
+          if(seen.has(signature)) return;
+          seen.add(signature);
+          found.push({
+            dossier,
+            client,
+            proc,
+            rowRefClient,
+            rowDebiteur
+          });
+        });
+      });
+    });
+    return found;
+  };
 
   if(importDossiers){
     dossiers.forEach(row=>{
@@ -3260,7 +3378,7 @@ function applyExcelImport(payload, options = {}){
     const dossier = {
       debiteur: row.debiteur,
       boiteNo: '',
-      referenceClient: row.refClient || row.refAssignation || row.refRestitution || row.refSfdc || '',
+      referenceClient: row.refClient || row.refAssignation || row.refRestitution || row.refSfdc || row.refInjonction || '',
       dateAffectation: rowDateAffectation || '',
       procedure: procedures.join(', '),
       procedureList: procedures.slice(),
@@ -3318,13 +3436,17 @@ function applyExcelImport(payload, options = {}){
     setProcRef('ASS', row.refAssignation);
     setProcRef('Restitution', row.refRestitution);
     setProcRef('SFDC', row.refSfdc);
-    const sfdcExecution = String(row.executionNo || '').trim();
-    const sfdcSort = String(row.sort || '').trim();
-    if((sfdcExecution || sfdcSort) && String(row.refSfdc || '').trim()){
-      if(!dossier.procedureDetails.SFDC) dossier.procedureDetails.SFDC = {};
-      if(sfdcExecution) dossier.procedureDetails.SFDC.executionNo = sfdcExecution;
-      if(sfdcSort) dossier.procedureDetails.SFDC.sort = sfdcSort;
-    }
+    setProcRef('Injonction', row.refInjonction);
+    const executionNoValue = String(row.executionNo || '').trim();
+    const sortValue = String(row.sort || '').trim();
+    const assignProcedureMeta = (proc, refValue)=>{
+      if(!(executionNoValue || sortValue) || !String(refValue || '').trim()) return;
+      if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
+      if(executionNoValue) dossier.procedureDetails[proc].executionNo = executionNoValue;
+      if(sortValue) dossier.procedureDetails[proc].sort = sortValue;
+    };
+    assignProcedureMeta('SFDC', row.refSfdc);
+    assignProcedureMeta('Injonction', row.refInjonction);
     const normalizedImportedProcs = [...procedureSet];
     // Keep Excel procedure order as the source of truth.
     // Any extra procedures discovered from references are appended after.
@@ -3427,15 +3549,15 @@ function applyExcelImport(payload, options = {}){
       zone: 'Dossiers globaux',
       procedure: procByRefDossier
     });
-    if(rowRefClientKeys.length){
-      const missingRefClientKeys = [...new Set(rowRefClientKeys.filter(key=>!dossierRefClientSet.has(key)))];
-      if(missingRefClientKeys.length){
-        importIgnoredRows.push(
-          `${rowNumberLabel}: ref client introuvable${missingRefClientKeys.length > 1 ? 's' : ''} (${missingRefClientKeys.join('/')})${missingRefContext}`
-        );
-      }
-    }
-    let candidates = candidatesByRefDossier;
+    const byGlobalScan = findCandidatesByRefDossierFromState(refKey);
+    let candidates = [];
+    const mergedCandidateSeen = new Set();
+    [...candidatesByRefDossier, ...byGlobalScan].forEach(candidate=>{
+      const signature = `${candidate?.client?.id || ''}::${candidate?.proc || ''}::${candidate?.rowRefClient || ''}::${candidate?.rowDebiteur || ''}`;
+      if(mergedCandidateSeen.has(signature)) return;
+      mergedCandidateSeen.add(signature);
+      candidates.push(candidate);
+    });
     if(!candidates.length){
       const fallback = [];
       const fallbackSeen = new Set();
@@ -3475,15 +3597,47 @@ function applyExcelImport(payload, options = {}){
     const candidatePool = hintedProc
       ? candidates.filter(c=>String(c?.proc || '').trim() === hintedProc)
       : candidates;
-    const activeCandidates = candidatePool.length ? candidatePool : candidates;
-    if(rowRefClientKeySet.size){
-      match = activeCandidates.find(c=>rowRefClientKeySet.has(c.rowRefClient)) || null;
+    const activeCandidatesRaw = candidatePool.length ? candidatePool : candidates;
+    const nonOrphanCandidates = activeCandidatesRaw.filter(c=>!c?.dossier?.isAudienceOrphanImport);
+    const activeCandidates = nonOrphanCandidates.length ? nonOrphanCandidates : activeCandidatesRaw;
+    if(activeCandidates.length){
+      let bestCandidate = null;
+      let bestScore = -1;
+      activeCandidates.forEach(candidate=>{
+        let score = 0;
+        if(rowRefClientKeySet.size && rowRefClientKeySet.has(candidate.rowRefClient)) score += 220;
+        if(rowDebiteur && candidate.rowDebiteur === rowDebiteur) score += 140;
+        const candidateRefs = getDossierAudienceReferenceKeys(candidate?.dossier || {});
+        if(candidateRefs.has(refKey)) score += 90;
+        if(rowRefClientKeySet.size && [...rowRefClientKeySet].some(key=>candidateRefs.has(key))) score += 80;
+        if(score > bestScore){
+          bestScore = score;
+          bestCandidate = candidate;
+        }
+      });
+      match = bestCandidate || activeCandidates[0];
     }
-    if(!match && rowDebiteur){
-      match = activeCandidates.find(c=>c.rowDebiteur === rowDebiteur) || null;
-    }
-    if(!match) match = activeCandidates[0];
+    if(!match) return;
     const { dossier, proc } = match;
+    let refClientMismatch = null;
+    if(rowRefClientKeySet.size){
+      const matchedDossierRefKeys = getDossierAudienceReferenceKeys(dossier);
+      const hasSameRefClient = [...rowRefClientKeySet].some(key=>matchedDossierRefKeys.has(key));
+      const hasKnownRefClientElsewhere = [...rowRefClientKeySet].some(key=>dossierRefClientSet.has(key));
+      // Only flag ref client mismatch when the provided ref client is unknown globally.
+      // If it exists elsewhere in global dossiers, keep the row linked by ref dossier priority.
+      if(!hasSameRefClient && !hasKnownRefClientElsewhere){
+        const givenRefClient = [...rowRefClientKeySet].join('/') || '-';
+        const expectedRefClient = [...matchedDossierRefKeys].join('/') || '-';
+        refClientMismatch = {
+          provided: givenRefClient,
+          expected: expectedRefClient
+        };
+        importIgnoredRows.push(
+          `${rowNumberLabel}: incohérence ref client pour Réf dossier "${ref || '-'}" et Débiteur "${row.debiteur || '-'}" (fourni: "${givenRefClient}" | dossier global: "${expectedRefClient}")${missingRefContext}`
+        );
+      }
+    }
     let targetProc = explicitProc && knownProcedureSet.has(explicitProc)
       ? explicitProc
       : (hintedProc && knownProcedureSet.has(hintedProc) ? hintedProc : proc);
@@ -3498,6 +3652,15 @@ function applyExcelImport(payload, options = {}){
     if(!dossier.procedureDetails) dossier.procedureDetails = {};
     if(!dossier.procedureDetails[targetProc]) dossier.procedureDetails[targetProc] = {};
     const p = dossier.procedureDetails[targetProc];
+    if(refClientMismatch){
+      p._refClientMismatch = true;
+      p._refClientProvided = refClientMismatch.provided;
+      p._refClientExpected = refClientMismatch.expected;
+    }else{
+      delete p._refClientMismatch;
+      delete p._refClientProvided;
+      delete p._refClientExpected;
+    }
     if(!!dossier?.isAudienceOrphanImport){
       p._missingGlobal = true;
     }
@@ -4173,6 +4336,10 @@ function setupEvents(){
     filterAudienceTribunal = e.target.value === 'all' ? 'all' : resolveAudienceTribunalFilterKey(e.target.value);
     renderAudience();
   });
+  $('filterAudienceDate')?.addEventListener('change', (e)=>{
+    filterAudienceDate = String(e.target?.value || '').trim();
+    renderAudience();
+  });
 
   $('saveAudienceBtn')?.addEventListener('click', saveAllAudience);
   $('printAudienceBtn')?.addEventListener('click', ()=>{
@@ -4725,8 +4892,15 @@ function renderSuivi(){
   });
 
   let rowsHtml = '';
+  const duplicatePairCounts = new Map();
+  filteredRows.forEach(row=>{
+    const key = buildSuiviRefDebiteurKey(row);
+    if(!key) return;
+    duplicatePairCounts.set(key, (duplicatePairCounts.get(key) || 0) + 1);
+  });
+
   filteredRows
-    .sort(compareSuiviRowsByReferenceProximity)
+    .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts))
     .forEach(row=>{
       const displayDateAffectation = normalizeDateDDMMYYYY(row.d.dateAffectation || '') || '-';
 
@@ -4795,7 +4969,32 @@ function parseSuiviReferenceParts(value){
   };
 }
 
-function compareSuiviRowsByReferenceProximity(a, b){
+function buildSuiviRefDebiteurKey(row){
+  const ref = normalizeReferenceValue(String(row?.d?.referenceClient || '').trim());
+  const debiteur = String(row?.d?.debiteur || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  if(!ref || !debiteur) return '';
+  return `${ref}__${debiteur}`;
+}
+
+function compareSuiviRowsByReferenceProximity(a, b, pairCounts = null){
+  if(pairCounts){
+    const pairKeyA = buildSuiviRefDebiteurKey(a);
+    const pairKeyB = buildSuiviRefDebiteurKey(b);
+    const pairCountA = pairKeyA ? (pairCounts.get(pairKeyA) || 0) : 0;
+    const pairCountB = pairKeyB ? (pairCounts.get(pairKeyB) || 0) : 0;
+    const isGroupedA = pairCountA >= 2 ? 1 : 0;
+    const isGroupedB = pairCountB >= 2 ? 1 : 0;
+    if(isGroupedA !== isGroupedB) return isGroupedB - isGroupedA;
+    if(isGroupedA && isGroupedB && pairKeyA !== pairKeyB){
+      if(pairCountA !== pairCountB) return pairCountB - pairCountA;
+      const byPair = pairKeyA.localeCompare(pairKeyB, 'fr', { numeric: true, sensitivity: 'base' });
+      if(byPair !== 0) return byPair;
+    }
+  }
+
   const refA = String(a?.d?.referenceClient || '').trim();
   const refB = String(b?.d?.referenceClient || '').trim();
   const pa = parseSuiviReferenceParts(refA);
@@ -6496,17 +6695,68 @@ function getActiveAudiencePriorityColor(){
   return color || selectedAudienceColor || 'all';
 }
 
+function getAudienceRowDateValue(row){
+  const raw = String(row?.draft?.dateAudience || row?.p?.audience || '').trim();
+  if(!raw) return '';
+  const normalized = normalizeDateDDMMYYYY(raw);
+  return normalized || raw;
+}
+
+function normalizeIsoDateToDDMMYYYY(value){
+  const text = String(value || '').trim();
+  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return '';
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+function getAudienceRowRefClientDisplayKey(row){
+  const displayed = row?.p?._refClientMismatch
+    ? String(row?.p?._refClientProvided || '')
+    : String(row?.d?.referenceClient || '');
+  return normalizeReferenceValue(displayed);
+}
+
+function buildAudienceMismatchRefClientSet(rows){
+  const set = new Set();
+  (rows || []).forEach(row=>{
+    if(!row?.p?._refClientMismatch) return;
+    const key = getAudienceRowRefClientDisplayKey(row);
+    if(key) set.add(key);
+  });
+  return set;
+}
+
+function getAudiencePriorityBucket(row, duplicateKeySet, mismatchRefClientSet){
+  const isRefClientMismatch = !!row?.p?._refClientMismatch;
+  if(isRefClientMismatch) return 0;
+  const refClientKey = getAudienceRowRefClientDisplayKey(row);
+  if(refClientKey && mismatchRefClientSet.has(refClientKey)) return 1;
+  const isOtherError = isAudienceRowInvalid(row, duplicateKeySet);
+  if(isOtherError) return 2;
+  return 3;
+}
+
 function getFilteredAudienceRows(allRows = null){
   const rows = Array.isArray(allRows) ? allRows : getAudienceRows();
   const duplicateKeySet = getAudienceDuplicateKeySet(rows);
+  const mismatchRefClientSet = buildAudienceMismatchRefClientSet(rows);
   const priorityColor = getActiveAudiencePriorityColor();
   return rows.filter(row=>{
     const tribunalKey = resolveAudienceTribunalFilterKey(row.p.tribunal || '');
     if(filterAudienceProcedure !== 'all' && row.procKey !== filterAudienceProcedure) return false;
     if(filterAudienceTribunal !== 'all' && tribunalKey !== filterAudienceTribunal) return false;
+    if(filterAudienceDate){
+      const targetDate = normalizeIsoDateToDDMMYYYY(filterAudienceDate);
+      const rowDate = getAudienceRowDateValue(row);
+      if(targetDate && rowDate !== targetDate) return false;
+    }
     if(filterAudienceErrorsOnly && !isAudienceRowInvalid(row, duplicateKeySet)) return false;
     return true;
   }).sort((a, b)=>{
+    const bucketA = getAudiencePriorityBucket(a, duplicateKeySet, mismatchRefClientSet);
+    const bucketB = getAudiencePriorityBucket(b, duplicateKeySet, mismatchRefClientSet);
+    if(bucketA !== bucketB) return bucketA - bucketB;
+
     if(!filterAudienceErrorsOnly && priorityColor && priorityColor !== 'all'){
       const aMatch = String(a?.p?.color || '') === priorityColor ? 1 : 0;
       const bMatch = String(b?.p?.color || '') === priorityColor ? 1 : 0;
@@ -6556,6 +6806,10 @@ function renderAudience(){
     const isDuplicate = !!(duplicateKey && duplicateKeySet.has(duplicateKey));
     const hasError = isAudienceRowInvalid(row, duplicateKeySet);
     const isMissingGlobal = !!row?.p?._missingGlobal;
+    const isRefClientMismatch = !!row?.p?._refClientMismatch;
+    const refClientDisplay = isRefClientMismatch
+      ? String(row?.p?._refClientProvided || d.referenceClient || '-')
+      : String(d.referenceClient || '-');
     const rowColor = (isDuplicate || hasError) ? 'red' : safeColor;
     const procKeyEncoded = encodeURIComponent(String(procKey));
     const keyEncoded = encodeURIComponent(String(key));
@@ -6574,7 +6828,10 @@ function renderAudience(){
             onchange="toggleAudienceSelectionAndColorEncoded(${row.ci},${row.di},'${procKeyEncoded}', this.checked)">
         </td>
         <td data-label="Client">${escapeHtml(c.name)}</td>
-        <td data-label="Référence Client">${escapeHtml(d.referenceClient || '-')}</td>
+        <td data-label="Référence Client" class="${isRefClientMismatch ? 'audience-refclient-mismatch' : ''}">
+          ${escapeHtml(refClientDisplay)}
+          ${isRefClientMismatch ? '<div class="audience-inline-error">Réf client audience différente du global</div>' : ''}
+        </td>
         <td data-label="Débiteur">${escapeHtml(d.debiteur||'-')}</td>
         <td data-label="Référence dossier">
           <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(draft.refDossier||p.referenceClient||'')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)">
