@@ -2446,17 +2446,17 @@ function resolveAudienceTargetProcKey(dossier, preferredProcKey, sourceProcData)
   }
   const details = dossier.procedureDetails;
   const baseKey = String(preferredProcKey || 'ASS').trim() || 'ASS';
-  const sourceRef = normalizeReferenceValue(String(sourceProcData?.referenceClient || '').trim());
+  const sourceRef = normalizeReferenceForAudienceLookup(String(sourceProcData?.referenceClient || '').trim());
 
   if(!details[baseKey]) return baseKey;
 
-  const baseRef = normalizeReferenceValue(String(details[baseKey]?.referenceClient || '').trim());
+  const baseRef = normalizeReferenceForAudienceLookup(String(details[baseKey]?.referenceClient || '').trim());
   if(!sourceRef || !baseRef || sourceRef === baseRef){
     return baseKey;
   }
 
   const sameRefEntry = Object.entries(details).find(([, procData])=>{
-    const ref = normalizeReferenceValue(String(procData?.referenceClient || '').trim());
+    const ref = normalizeReferenceForAudienceLookup(String(procData?.referenceClient || '').trim());
     return !!(ref && sourceRef && ref === sourceRef);
   });
   if(sameRefEntry) return sameRefEntry[0];
@@ -3773,10 +3773,21 @@ async function applyExcelImport(payload, options = {}){
       ? dossier.procedureDetails
       : {};
     const detailProcRefs = [];
+    const refKeyToProcSet = new Map();
+    const pushRefProc = (refValue, procValue)=>{
+      const refKey = normalizeReferenceForAudienceLookup(refValue);
+      const procKey = String(procValue || '').trim();
+      if(!refKey || !procKey) return;
+      if(!refKeyToProcSet.has(refKey)) refKeyToProcSet.set(refKey, new Set());
+      refKeyToProcSet.get(refKey).add(procKey);
+    };
     Object.entries(details).forEach(([procName, procDetails])=>{
       const proc = String(procName || '').trim() || 'ASS';
       const refs = splitReferenceValues(procDetails?.referenceClient || '');
-      refs.forEach(ref=>detailProcRefs.push({ ref, proc }));
+      refs.forEach(ref=>{
+        detailProcRefs.push({ ref, proc });
+        pushRefProc(ref, proc);
+      });
     });
 
     const mainRefs = splitReferenceValues(dossier?.referenceClient || '');
@@ -3802,6 +3813,12 @@ async function applyExcelImport(payload, options = {}){
       .filter(Boolean);
     const rowRefClient = mainRefParts[0] || normalizeReferenceValue(String(dossier?.referenceClient || '').trim());
 
+    // Dossier-level reference is ambiguous when multiple procedures exist:
+    // map it to a single procedure only when there is exactly one candidate.
+    if(mainRefs.length === 1 && procCandidates.length === 1){
+      pushRefProc(mainRefs[0], procCandidates[0]);
+    }
+
     allRefs.forEach(({ ref, proc })=>{
       const refKey = normalizeReferenceForAudienceLookup(ref);
       if(!refKey) return;
@@ -3817,7 +3834,10 @@ async function applyExcelImport(payload, options = {}){
 
     const refKeys = getDossierAudienceReferenceKeys(dossier);
     refKeys.forEach(refKey=>{
-      procCandidates.forEach(proc=>{
+      const mappedProcs = refKeyToProcSet.has(refKey)
+        ? [...refKeyToProcSet.get(refKey)]
+        : procCandidates;
+      mappedProcs.forEach(proc=>{
         pushCandidate(refToStateProcMap, refKey, {
           dossier,
           client,
@@ -6970,6 +6990,14 @@ function isAudienceProcedure(procName){
   return value !== 'sfdc' && value !== 'sbien' && value !== 'injonction';
 }
 
+function getAudienceProcedureFilterKey(procName){
+  const raw = String(procName || '').trim();
+  if(!raw) return '';
+  const normalized = parseProcedureToken(raw);
+  const base = getProcedureBaseName(normalized);
+  return String(base || normalized || raw).trim();
+}
+
 function parseDateForAge(value){
   if(!value) return null;
   const raw = String(value).trim();
@@ -7259,7 +7287,8 @@ function getFilteredAudienceRows(allRows = null){
   const priorityColor = getActiveAudiencePriorityColor();
   return rows.filter(row=>{
     const tribunalKey = resolveAudienceTribunalFilterKey(row.p.tribunal || '');
-    if(filterAudienceProcedure !== 'all' && row.procKey !== filterAudienceProcedure) return false;
+    const rowProcFilterKey = getAudienceProcedureFilterKey(row.procKey);
+    if(filterAudienceProcedure !== 'all' && rowProcFilterKey !== filterAudienceProcedure) return false;
     if(filterAudienceTribunal !== 'all' && tribunalKey !== filterAudienceTribunal) return false;
     if(filterAudienceDate){
       const targetDate = normalizeIsoDateToDDMMYYYY(filterAudienceDate);
@@ -7624,7 +7653,8 @@ function syncAudienceFilterOptions(rows){
 
   const procedureSet = new Set();
   rows.forEach(row=>{
-    if(row.procKey) procedureSet.add(String(row.procKey));
+    const key = getAudienceProcedureFilterKey(row.procKey);
+    if(key) procedureSet.add(key);
   });
   const tribunalState = buildAudienceTribunalClusterState(rows);
   audienceTribunalAliasMap = tribunalState.aliasMap;
