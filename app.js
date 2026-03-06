@@ -3576,6 +3576,7 @@ async function applyExcelImport(payload, options = {}){
   const importDossiers = opts.importDossiers !== false;
   const importAudiences = opts.importAudiences !== false;
   const audienceOnlyMode = String(opts.audienceMode || '').trim().toLowerCase() === 'audience-only';
+  const clearAudienceOnDossierOnly = opts.clearAudienceOnDossierOnly === true;
   const allowedDossierProcedureSet = opts.allowedDossierProcedureSet instanceof Set
     ? opts.allowedDossierProcedureSet
     : null;
@@ -3610,8 +3611,10 @@ async function applyExcelImport(payload, options = {}){
     audiencePrintSelection = new Set();
   };
 
-  // Import dossier-only should not keep previous Audience data.
-  if(importDossiers && !importAudiences){
+  // Keep Audience data by default so "Audience -> Global" reconciliation can match
+  // orphan audience rows when global dossiers are imported later.
+  // Legacy reset behavior can be forced with clearAudienceOnDossierOnly=true.
+  if(importDossiers && !importAudiences && clearAudienceOnDossierOnly){
     resetAudienceDataForGlobalImport();
   }
 
