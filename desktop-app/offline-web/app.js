@@ -62,6 +62,13 @@ let audienceVirtualRows = [];
 let audienceVirtualDuplicateKeySet = new Set();
 let audienceVirtualLastRange = { start: -1, end: -1 };
 let audienceVirtualRafId = null;
+let suiviVirtualRows = [];
+let suiviVirtualLastRange = { start: -1, end: -1 };
+let suiviVirtualRafId = null;
+let diligenceVirtualRows = [];
+let diligenceVirtualLastRange = { start: -1, end: -1 };
+let diligenceVirtualRafId = null;
+let diligenceVirtualShowInjonctionColumns = false;
 const dashboardMetricState = new Map();
 const SIDEBAR_COLLAPSED_KEY = 'cabinet-avocat-sidebar-collapsed';
 const REMOTE_SYNC_POLL_INTERVAL_MS = 3000;
@@ -77,6 +84,8 @@ const IMPORT_STATUS_THROTTLE_MS = 120;
 const AUDIENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_VIRTUAL_ROW_HEIGHT = 56;
 const AUDIENCE_VIRTUAL_OVERSCAN = 10;
+const SUIVI_VIRTUAL_MIN_ROWS = 40;
+const DILIGENCE_VIRTUAL_MIN_ROWS = 40;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
 const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
@@ -296,6 +305,10 @@ function getRenderForSection(section){
   return null;
 }
 
+function getTableContainerBySection(section){
+  return $(`${String(section || '').trim()}TableContainer`);
+}
+
 function resetPaginationPage(section){
   if(!Object.prototype.hasOwnProperty.call(paginationState, section)) return;
   paginationState[section] = 1;
@@ -307,10 +320,8 @@ function syncPaginationFilterState(section, key){
   if(paginationFilterState[section] === next) return;
   paginationFilterState[section] = next;
   paginationState[section] = 1;
-  if(section === 'audience'){
-    const container = $('audienceTableContainer');
-    if(container) container.scrollTop = 0;
-  }
+  const container = getTableContainerBySection(section);
+  if(container) container.scrollTop = 0;
 }
 
 function paginateRows(rows, section){
@@ -367,16 +378,14 @@ function changePaginationPage(section, delta){
   const step = Number(delta);
   if(!Number.isFinite(step) || step === 0) return;
   paginationState[key] = Math.max(1, (Number(paginationState[key]) || 1) + step);
-  if(key === 'audience'){
-    const container = $('audienceTableContainer');
-    if(container) container.scrollTop = 0;
-  }
+  const container = getTableContainerBySection(key);
+  if(container) container.scrollTop = 0;
   const render = getRenderForSection(key);
   if(typeof render === 'function') render();
 }
 
-function getAudienceVirtualWindow(rowsLength){
-  const container = $('audienceTableContainer');
+function getVirtualWindowByContainer(containerId, rowsLength){
+  const container = $(containerId);
   if(!container){
     return { start: 0, end: rowsLength };
   }
@@ -387,6 +396,10 @@ function getAudienceVirtualWindow(rowsLength){
   const visibleCount = Math.ceil(viewportHeight / AUDIENCE_VIRTUAL_ROW_HEIGHT) + (AUDIENCE_VIRTUAL_OVERSCAN * 2);
   const end = Math.min(total, start + visibleCount);
   return { start, end };
+}
+
+function getAudienceVirtualWindow(rowsLength){
+  return getVirtualWindowByContainer('audienceTableContainer', rowsLength);
 }
 
 function queueAudienceVirtualRender(){
@@ -475,6 +488,175 @@ function renderAudienceVirtualWindow(force = false){
     .map(row=>renderAudienceRowHtml(row, audienceVirtualDuplicateKeySet))
     .join('');
   body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
+}
+
+function renderSuiviRowHtml(row){
+  const displayDateAffectation = normalizeDateDDMMYYYY(row.d.dateAffectation || '') || '-';
+  return `
+    <tr>
+      <td data-label="Client">${escapeHtml(row.c.name)}</td>
+      <td data-label="Date d’affectation">${escapeHtml(displayDateAffectation)}</td>
+      <td data-label="Référence Client">${escapeHtml(row.d.referenceClient || '-')}</td>
+      <td class="procedure-cell" data-label="Procédure">${renderProcedureBadges(row.procSource)}</td>
+      <td data-label="Débiteur">${escapeHtml(row.d.debiteur || '-')}</td>
+      <td data-label="Montant">${escapeHtml(row.d.montant || '-')}</td>
+      <td data-label="Ville">${escapeHtml(row.d.ville || '-')}</td>
+      <td data-label="Statut">${renderStatusBadge(row.d.statut || 'En cours')}</td>
+      <td data-label="Actions">
+        <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="openDossierDetails(${row.c.id}, ${row.index})">
+          <i class="fa-solid fa-eye"></i>
+        </button>
+        <button type="button" class="btn-primary" data-action="edit" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="editDossier(${row.c.id}, ${row.index})" ${canEditClient(row.c) ? '' : 'disabled'}>
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button type="button" class="btn-danger" data-action="delete" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="deleteDossier(${row.c.id}, ${row.index})" ${canDeleteData() ? '' : 'disabled'}>
+          <i class="fa-solid fa-trash"></i>
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
+function renderSuiviVirtualWindow(force = false){
+  const body = $('suiviBody');
+  if(!body) return;
+  const rows = Array.isArray(suiviVirtualRows) ? suiviVirtualRows : [];
+  if(!rows.length){
+    suiviVirtualLastRange = { start: -1, end: -1 };
+    body.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
+    return;
+  }
+  const { start, end } = getVirtualWindowByContainer('suiviTableContainer', rows.length);
+  if(!force && start === suiviVirtualLastRange.start && end === suiviVirtualLastRange.end) return;
+  suiviVirtualLastRange = { start, end };
+
+  const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
+  const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
+  const topSpacer = topHeight > 0
+    ? `<tr class="virtual-spacer"><td colspan="9" style="height:${topHeight}px"></td></tr>`
+    : '';
+  const bottomSpacer = bottomHeight > 0
+    ? `<tr class="virtual-spacer"><td colspan="9" style="height:${bottomHeight}px"></td></tr>`
+    : '';
+  const rowsHtml = rows.slice(start, end).map(renderSuiviRowHtml).join('');
+  body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
+}
+
+function queueSuiviVirtualRender(){
+  if(suiviVirtualRafId) return;
+  suiviVirtualRafId = window.requestAnimationFrame(()=>{
+    suiviVirtualRafId = null;
+    renderSuiviVirtualWindow();
+  });
+}
+
+function renderDiligenceRowHtml(row, showInjonctionColumns){
+  const procEncoded = encodeURIComponent(String(row.procedure || ''));
+  const isChecked = isDiligenceSelectedForPrint(row);
+  const refValue = row.details?.referenceClient || '';
+  const ordValue = row.details?.attOrdOrOrdOk || '';
+  const notificationNoValue = row.details?.notificationNo || '';
+  const notificationStatusValue = row.details?.notificationStatus || '';
+  const dateNotificationValue = row.details?.dateNotification || '';
+  const certificatNonAppelValue = row.details?.certificatNonAppelStatus || '';
+  const executionValue = row.details?.executionNo || '';
+  const villeValue = row.dossier?.ville || '';
+  const delegationValue = row.details?.attDelegationOuDelegat || '';
+  const huissierValue = row.details?.huissier || '';
+  const sortValue = row.details?.sort || '';
+  const tribunalValue = row.details?.tribunal || '';
+  if(showInjonctionColumns){
+    return `
+    <tr>
+      <td>
+        <label class="diligence-client-cell">
+          <input
+            type="checkbox"
+            class="diligence-print-check"
+            ${isChecked ? 'checked' : ''}
+            onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
+          <span>${escapeHtml(row.clientName || '-')}</span>
+        </label>
+      </td>
+      <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
+      <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationNo', notificationNoValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationStatus', notificationStatusValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'dateNotification', dateNotificationValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
+    </tr>
+  `;
+  }
+  return `
+    <tr>
+      <td>
+        <label class="diligence-client-cell">
+          <input
+            type="checkbox"
+            class="diligence-print-check"
+            ${isChecked ? 'checked' : ''}
+            onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
+          <span>${escapeHtml(row.clientName || '-')}</span>
+        </label>
+      </td>
+      <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
+      <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
+    </tr>
+  `;
+}
+
+function renderDiligenceVirtualWindow(force = false){
+  const body = $('diligenceBody');
+  if(!body) return;
+  const rows = Array.isArray(diligenceVirtualRows) ? diligenceVirtualRows : [];
+  const colCount = diligenceVirtualShowInjonctionColumns ? 15 : 11;
+  if(!rows.length){
+    diligenceVirtualLastRange = { start: -1, end: -1 };
+    body.innerHTML = `<tr><td colspan="${colCount}" class="diligence-empty">Aucun dossier SFDC/S-bien/Injonction trouvé.</td></tr>`;
+    return;
+  }
+  const { start, end } = getVirtualWindowByContainer('diligenceTableContainer', rows.length);
+  if(!force && start === diligenceVirtualLastRange.start && end === diligenceVirtualLastRange.end) return;
+  diligenceVirtualLastRange = { start, end };
+
+  const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
+  const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
+  const topSpacer = topHeight > 0
+    ? `<tr class="virtual-spacer"><td colspan="${colCount}" style="height:${topHeight}px"></td></tr>`
+    : '';
+  const bottomSpacer = bottomHeight > 0
+    ? `<tr class="virtual-spacer"><td colspan="${colCount}" style="height:${bottomHeight}px"></td></tr>`
+    : '';
+  const rowsHtml = rows
+    .slice(start, end)
+    .map(row=>renderDiligenceRowHtml(row, diligenceVirtualShowInjonctionColumns))
+    .join('');
+  body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
+  applyDiligenceAutoSizing(body);
+}
+
+function queueDiligenceVirtualRender(){
+  if(diligenceVirtualRafId) return;
+  diligenceVirtualRafId = window.requestAnimationFrame(()=>{
+    diligenceVirtualRafId = null;
+    renderDiligenceVirtualWindow();
+  });
 }
 
 function loadExternalScript(url, key){
@@ -4468,6 +4650,8 @@ function setupEvents(){
   const renderDiligenceDebounced = debounce(renderDiligence, 120);
   const filterTeamClientListDebounced = debounce(filterTeamClientList, 120);
   $('audienceTableContainer')?.addEventListener('scroll', queueAudienceVirtualRender, { passive: true });
+  $('suiviTableContainer')?.addEventListener('scroll', queueSuiviVirtualRender, { passive: true });
+  $('diligenceTableContainer')?.addEventListener('scroll', queueDiligenceVirtualRender, { passive: true });
 
   $('searchClientInput')?.addEventListener('input', renderClientsDebounced);
 
@@ -5117,6 +5301,8 @@ function renderSuivi(){
   if(!suiviBody) return;
   suiviBody.innerHTML='';
   if(!isManager() && getVisibleClients().length === 0){
+    suiviVirtualRows = [];
+    suiviVirtualLastRange = { start: -1, end: -1 };
     suiviBody.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
     renderPagination('suivi', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     return;
@@ -5173,7 +5359,6 @@ function renderSuivi(){
     filteredRows.push({ ...row, tribunalKeys, tribunalList });
   });
 
-  let rowsHtml = '';
   const duplicatePairCounts = new Map();
   filteredRows.forEach(row=>{
     const key = buildSuiviRefDebiteurKey(row);
@@ -5185,36 +5370,16 @@ function renderSuivi(){
     .slice()
     .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
   const pageData = paginateRows(sortedRows, 'suivi');
-
-  pageData.rows.forEach(row=>{
-      const displayDateAffectation = normalizeDateDDMMYYYY(row.d.dateAffectation || '') || '-';
-
-      rowsHtml += `
-      <tr>
-        <td data-label="Client">${escapeHtml(row.c.name)}</td>
-        <td data-label="Date d’affectation">${escapeHtml(displayDateAffectation)}</td>
-        <td data-label="Référence Client">${escapeHtml(row.d.referenceClient || '-')}</td>
-        <td class="procedure-cell" data-label="Procédure">${renderProcedureBadges(row.procSource)}</td>
-        <td data-label="Débiteur">${escapeHtml(row.d.debiteur || '-')}</td>
-        <td data-label="Montant">${escapeHtml(row.d.montant || '-')}</td>
-        <td data-label="Ville">${escapeHtml(row.d.ville || '-')}</td>
-        <td data-label="Statut">${renderStatusBadge(row.d.statut || 'En cours')}</td>
-        <td data-label="Actions">
-          <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="openDossierDetails(${row.c.id}, ${row.index})">
-            <i class="fa-solid fa-eye"></i>
-          </button>
-          <button type="button" class="btn-primary" data-action="edit" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="editDossier(${row.c.id}, ${row.index})" ${canEditClient(row.c) ? '' : 'disabled'}>
-            <i class="fa-solid fa-pen"></i>
-          </button>
-          <button type="button" class="btn-danger" data-action="delete" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="deleteDossier(${row.c.id}, ${row.index})" ${canDeleteData() ? '' : 'disabled'}>
-            <i class="fa-solid fa-trash"></i>
-          </button>
-        </td>
-      </tr>
-    `;
-    });
-
-  suiviBody.innerHTML = rowsHtml || '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
+  const useVirtual = pageData.rows.length >= SUIVI_VIRTUAL_MIN_ROWS;
+  suiviVirtualRows = pageData.rows;
+  suiviVirtualLastRange = { start: -1, end: -1 };
+  if(!pageData.rows.length){
+    suiviBody.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
+  }else if(useVirtual){
+    renderSuiviVirtualWindow(true);
+  }else{
+    suiviBody.innerHTML = pageData.rows.map(renderSuiviRowHtml).join('');
+  }
   renderPagination('suivi', pageData);
 
   syncSuiviFilterOptions(allRowsMeta);
@@ -5972,85 +6137,25 @@ function renderDiligence(){
   }
 
   if(!rows.length){
+    diligenceVirtualRows = [];
+    diligenceVirtualLastRange = { start: -1, end: -1 };
     body.innerHTML = `<tr><td colspan="${showInjonctionColumns ? 15 : 11}" class="diligence-empty">Aucun dossier SFDC/S-bien/Injonction trouvé.</td></tr>`;
     renderPagination('diligence', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     return;
   }
 
   const pageData = paginateRows(rows, 'diligence');
-  body.innerHTML = pageData.rows.map(row=>{
-    const procEncoded = encodeURIComponent(String(row.procedure || ''));
-    const isChecked = isDiligenceSelectedForPrint(row);
-    const refValue = row.details?.referenceClient || '';
-    const ordValue = row.details?.attOrdOrOrdOk || '';
-    const notificationNoValue = row.details?.notificationNo || '';
-    const notificationStatusValue = row.details?.notificationStatus || '';
-    const dateNotificationValue = row.details?.dateNotification || '';
-    const certificatNonAppelValue = row.details?.certificatNonAppelStatus || '';
-    const executionValue = row.details?.executionNo || '';
-    const villeValue = row.dossier?.ville || '';
-    const delegationValue = row.details?.attDelegationOuDelegat || '';
-    const huissierValue = row.details?.huissier || '';
-    const sortValue = row.details?.sort || '';
-    const tribunalValue = row.details?.tribunal || '';
-    if(showInjonctionColumns){
-      return `
-      <tr>
-        <td>
-          <label class="diligence-client-cell">
-            <input
-              type="checkbox"
-              class="diligence-print-check"
-              ${isChecked ? 'checked' : ''}
-              onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
-            <span>${escapeHtml(row.clientName || '-')}</span>
-          </label>
-        </td>
-        <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
-      <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationNo', notificationNoValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationStatus', notificationStatusValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'dateNotification', dateNotificationValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
-      </tr>
-    `;
-    }
-    return `
-      <tr>
-        <td>
-          <label class="diligence-client-cell">
-            <input
-              type="checkbox"
-              class="diligence-print-check"
-              ${isChecked ? 'checked' : ''}
-              onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
-            <span>${escapeHtml(row.clientName || '-')}</span>
-          </label>
-        </td>
-        <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
-        <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
-      </tr>
-    `;
-  }).join('');
+  const useVirtual = pageData.rows.length >= DILIGENCE_VIRTUAL_MIN_ROWS;
+  diligenceVirtualRows = pageData.rows;
+  diligenceVirtualShowInjonctionColumns = showInjonctionColumns;
+  diligenceVirtualLastRange = { start: -1, end: -1 };
+  if(useVirtual){
+    renderDiligenceVirtualWindow(true);
+  }else{
+    body.innerHTML = pageData.rows.map(row=>renderDiligenceRowHtml(row, showInjonctionColumns)).join('');
+    applyDiligenceAutoSizing(body);
+  }
   renderPagination('diligence', pageData);
-
-  applyDiligenceAutoSizing(body);
 }
 
 function normalizeDiligenceAttOk(value){
@@ -7103,6 +7208,9 @@ function renderAudience(){
   }
   body.innerHTML='';
   if(!isManager() && getVisibleClients().length === 0){
+    audienceVirtualRows = [];
+    audienceVirtualDuplicateKeySet = new Set();
+    audienceVirtualLastRange = { start: -1, end: -1 };
     body.innerHTML = '<tr><td colspan="11" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
     renderPagination('audience', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     updateAudienceCheckedCount();
