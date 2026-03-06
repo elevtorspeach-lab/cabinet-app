@@ -524,6 +524,11 @@ table{width:100%;border-collapse:collapse}
 th,td{padding:10px 12px;border-bottom:1px solid #e5e7eb;text-align:left;white-space:nowrap}
 th{background:#f8fafc;color:#1e3a8a}
 tr:hover{background:#f1f5f9}
+.virtual-spacer td{
+  padding:0;
+  border:none;
+  background:transparent;
+}
 .table-pagination{
   margin-top:10px;
   display:flex;

@@ -58,6 +58,10 @@ let remoteRefreshTimer = null;
 let lastPingMs = null;
 let lastLiveDelayMs = null;
 let lastAudienceRenderedRows = [];
+let audienceVirtualRows = [];
+let audienceVirtualDuplicateKeySet = new Set();
+let audienceVirtualLastRange = { start: -1, end: -1 };
+let audienceVirtualRafId = null;
 const dashboardMetricState = new Map();
 const SIDEBAR_COLLAPSED_KEY = 'cabinet-avocat-sidebar-collapsed';
 const REMOTE_SYNC_POLL_INTERVAL_MS = 3000;
@@ -70,6 +74,9 @@ const PAGINATION_PAGE_SIZE = 100;
 const IMPORT_CHUNK_SIZE = 80;
 const IMPORT_EXCEL_CHUNK_SIZE = 40;
 const IMPORT_STATUS_THROTTLE_MS = 120;
+const AUDIENCE_VIRTUAL_MIN_ROWS = 40;
+const AUDIENCE_VIRTUAL_ROW_HEIGHT = 56;
+const AUDIENCE_VIRTUAL_OVERSCAN = 10;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
 const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
@@ -300,6 +307,10 @@ function syncPaginationFilterState(section, key){
   if(paginationFilterState[section] === next) return;
   paginationFilterState[section] = next;
   paginationState[section] = 1;
+  if(section === 'audience'){
+    const container = $('audienceTableContainer');
+    if(container) container.scrollTop = 0;
+  }
 }
 
 function paginateRows(rows, section){
@@ -356,8 +367,114 @@ function changePaginationPage(section, delta){
   const step = Number(delta);
   if(!Number.isFinite(step) || step === 0) return;
   paginationState[key] = Math.max(1, (Number(paginationState[key]) || 1) + step);
+  if(key === 'audience'){
+    const container = $('audienceTableContainer');
+    if(container) container.scrollTop = 0;
+  }
   const render = getRenderForSection(key);
   if(typeof render === 'function') render();
+}
+
+function getAudienceVirtualWindow(rowsLength){
+  const container = $('audienceTableContainer');
+  if(!container){
+    return { start: 0, end: rowsLength };
+  }
+  const total = Math.max(0, Number(rowsLength) || 0);
+  const viewportHeight = Math.max(container.clientHeight || 0, AUDIENCE_VIRTUAL_ROW_HEIGHT * 6);
+  const scrollTop = Math.max(0, container.scrollTop || 0);
+  const start = Math.max(0, Math.floor(scrollTop / AUDIENCE_VIRTUAL_ROW_HEIGHT) - AUDIENCE_VIRTUAL_OVERSCAN);
+  const visibleCount = Math.ceil(viewportHeight / AUDIENCE_VIRTUAL_ROW_HEIGHT) + (AUDIENCE_VIRTUAL_OVERSCAN * 2);
+  const end = Math.min(total, start + visibleCount);
+  return { start, end };
+}
+
+function queueAudienceVirtualRender(){
+  if(audienceVirtualRafId) return;
+  audienceVirtualRafId = window.requestAnimationFrame(()=>{
+    audienceVirtualRafId = null;
+    renderAudienceVirtualWindow();
+  });
+}
+
+function renderAudienceRowHtml(row, duplicateKeySet){
+  const { c, d, procKey, p, color, key, draft } = row;
+  const canEdit = canEditClient(c) && canEditData();
+  const safeColor = ['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light'].includes(color) ? color : '';
+  const duplicateKey = buildAudienceDuplicateKey(row);
+  const isDuplicate = !!(duplicateKey && duplicateKeySet.has(duplicateKey));
+  const hasError = isAudienceRowInvalid(row, duplicateKeySet);
+  const isMissingGlobal = !!row?.p?._missingGlobal;
+  const isRefClientMismatch = !!row?.p?._refClientMismatch;
+  const refClientDisplay = isRefClientMismatch
+    ? String(row?.p?._refClientProvided || d.referenceClient || '-')
+    : String(d.referenceClient || '-');
+  const rowColor = (isDuplicate || hasError) ? 'red' : safeColor;
+  const procKeyEncoded = encodeURIComponent(String(procKey));
+  const keyEncoded = encodeURIComponent(String(key));
+  const isPrintChecked = isAudienceSelectedForPrint(row.ci, row.di, procKey);
+  const displayDateDepot = getAudienceDateDepotDisplayValue(row);
+  const audienceDateValueRaw = String(draft.dateAudience || p.audience || '');
+  const audienceDateValue = normalizeDateDDMMYYYY(audienceDateValueRaw) || audienceDateValueRaw;
+  return `
+    <tr class="color-${rowColor}">
+      <td data-label="Sélection">
+        <input type="checkbox" class="audience-print-check"
+          data-ci="${row.ci}"
+          data-di="${row.di}"
+          data-proc-key="${procKeyEncoded}"
+          ${isPrintChecked ? 'checked' : ''}
+          onchange="toggleAudienceSelectionAndColorEncoded(${row.ci},${row.di},'${procKeyEncoded}', this.checked)">
+      </td>
+      <td data-label="Client">${escapeHtml(c.name)}</td>
+      <td data-label="Référence Client" class="${isRefClientMismatch ? 'audience-refclient-mismatch' : ''}">
+        ${escapeHtml(refClientDisplay)}
+        ${isRefClientMismatch ? '<div class="audience-inline-error">Réf client audience différente du global</div>' : ''}
+      </td>
+      <td data-label="Débiteur">${escapeHtml(d.debiteur || '-')}</td>
+      <td data-label="Référence dossier">
+        <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(draft.refDossier || p.referenceClient || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)">
+        ${isMissingGlobal ? '<div class="audience-inline-error">Introuvable dans dossier global</div>' : ''}
+      </td>
+      <td data-label="Date d’audience"><input value="${escapeAttr(audienceDateValue)}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','dateAudience',this.value)" onblur="normalizeAudienceDateDraftInputFromEncoded('${keyEncoded}', this)"></td>
+      <td data-label="Juge"><input value="${escapeAttr(draft.juge || p.juge || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','juge',this.value)"></td>
+      <td data-label="Sort"><input value="${escapeAttr(draft.sort || p.sort || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','sort',this.value)"></td>
+      <td data-label="Tribunal">${escapeHtml(p.tribunal || '-')}</td>
+      <td data-label="Procédure">${escapeHtml(procKey || '-')}</td>
+      <td data-label="Date dépôt">${escapeHtml(displayDateDepot)}</td>
+    </tr>
+  `;
+}
+
+function renderAudienceVirtualWindow(force = false){
+  const body = $('audienceBody');
+  if(!body) return;
+  const rows = Array.isArray(audienceVirtualRows) ? audienceVirtualRows : [];
+  if(!rows.length){
+    audienceVirtualLastRange = { start: -1, end: -1 };
+    body.innerHTML = '<tr><td colspan="11" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
+    return;
+  }
+
+  const { start, end } = getAudienceVirtualWindow(rows.length);
+  if(!force && start === audienceVirtualLastRange.start && end === audienceVirtualLastRange.end){
+    return;
+  }
+  audienceVirtualLastRange = { start, end };
+
+  const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
+  const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
+  const topSpacer = topHeight > 0
+    ? `<tr class="virtual-spacer"><td colspan="11" style="height:${topHeight}px"></td></tr>`
+    : '';
+  const bottomSpacer = bottomHeight > 0
+    ? `<tr class="virtual-spacer"><td colspan="11" style="height:${bottomHeight}px"></td></tr>`
+    : '';
+  const rowsHtml = rows
+    .slice(start, end)
+    .map(row=>renderAudienceRowHtml(row, audienceVirtualDuplicateKeySet))
+    .join('');
+  body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
 }
 
 function loadExternalScript(url, key){
@@ -4350,6 +4467,7 @@ function setupEvents(){
   const renderAudienceDebounced = debounce(renderAudience, 120);
   const renderDiligenceDebounced = debounce(renderDiligence, 120);
   const filterTeamClientListDebounced = debounce(filterTeamClientList, 120);
+  $('audienceTableContainer')?.addEventListener('scroll', queueAudienceVirtualRender, { passive: true });
 
   $('searchClientInput')?.addEventListener('input', renderClientsDebounced);
 
@@ -6998,57 +7116,17 @@ function renderAudience(){
   const rows = getFilteredAudienceRows(allRows);
   lastAudienceRenderedRows = rows;
   const pageData = paginateRows(rows, 'audience');
-
-  let rowsHtml = '';
-  pageData.rows.forEach(row=>{
-    const { c, d, procKey, p, color, key, draft } = row;
-    const canEdit = canEditClient(c) && canEditData();
-    const safeColor = ['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light'].includes(color) ? color : '';
-    const duplicateKey = buildAudienceDuplicateKey(row);
-    const isDuplicate = !!(duplicateKey && duplicateKeySet.has(duplicateKey));
-    const hasError = isAudienceRowInvalid(row, duplicateKeySet);
-    const isMissingGlobal = !!row?.p?._missingGlobal;
-    const isRefClientMismatch = !!row?.p?._refClientMismatch;
-    const refClientDisplay = isRefClientMismatch
-      ? String(row?.p?._refClientProvided || d.referenceClient || '-')
-      : String(d.referenceClient || '-');
-    const rowColor = (isDuplicate || hasError) ? 'red' : safeColor;
-    const procKeyEncoded = encodeURIComponent(String(procKey));
-    const keyEncoded = encodeURIComponent(String(key));
-    const isPrintChecked = isAudienceSelectedForPrint(row.ci, row.di, procKey);
-    const displayDateDepot = getAudienceDateDepotDisplayValue(row);
-    const audienceDateValueRaw = String(draft.dateAudience || p.audience || '');
-    const audienceDateValue = normalizeDateDDMMYYYY(audienceDateValueRaw) || audienceDateValueRaw;
-    rowsHtml += `
-      <tr class="color-${rowColor}">
-        <td data-label="Sélection">
-          <input type="checkbox" class="audience-print-check"
-            data-ci="${row.ci}"
-            data-di="${row.di}"
-            data-proc-key="${procKeyEncoded}"
-            ${isPrintChecked ? 'checked' : ''}
-            onchange="toggleAudienceSelectionAndColorEncoded(${row.ci},${row.di},'${procKeyEncoded}', this.checked)">
-        </td>
-        <td data-label="Client">${escapeHtml(c.name)}</td>
-        <td data-label="Référence Client" class="${isRefClientMismatch ? 'audience-refclient-mismatch' : ''}">
-          ${escapeHtml(refClientDisplay)}
-          ${isRefClientMismatch ? '<div class="audience-inline-error">Réf client audience différente du global</div>' : ''}
-        </td>
-        <td data-label="Débiteur">${escapeHtml(d.debiteur||'-')}</td>
-        <td data-label="Référence dossier">
-          <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(draft.refDossier||p.referenceClient||'')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)">
-          ${isMissingGlobal ? '<div class="audience-inline-error">Introuvable dans dossier global</div>' : ''}
-        </td>
-        <td data-label="Date d’audience"><input value="${escapeAttr(audienceDateValue)}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','dateAudience',this.value)" onblur="normalizeAudienceDateDraftInputFromEncoded('${keyEncoded}', this)"></td>
-        <td data-label="Juge"><input value="${escapeAttr(draft.juge||p.juge||'')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','juge',this.value)"></td>
-        <td data-label="Sort"><input value="${escapeAttr(draft.sort||p.sort||'')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','sort',this.value)"></td>
-        <td data-label="Tribunal">${escapeHtml(p.tribunal||'-')}</td>
-        <td data-label="Procédure">${escapeHtml(procKey||'-')}</td>
-        <td data-label="Date dépôt">${escapeHtml(displayDateDepot)}</td>
-      </tr>
-    `;
-  });
-  body.innerHTML = rowsHtml || '<tr><td colspan="11" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
+  const useVirtual = pageData.rows.length >= AUDIENCE_VIRTUAL_MIN_ROWS;
+  audienceVirtualRows = pageData.rows;
+  audienceVirtualDuplicateKeySet = duplicateKeySet;
+  audienceVirtualLastRange = { start: -1, end: -1 };
+  if(!pageData.rows.length){
+    body.innerHTML = '<tr><td colspan="11" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
+  }else if(useVirtual){
+    renderAudienceVirtualWindow(true);
+  }else{
+    body.innerHTML = pageData.rows.map(row=>renderAudienceRowHtml(row, duplicateKeySet)).join('');
+  }
   renderPagination('audience', pageData);
   updateAudienceCheckedCount();
   renderSidebarSalleSessions();
