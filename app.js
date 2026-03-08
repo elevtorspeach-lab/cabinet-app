@@ -4034,6 +4034,7 @@ function parseExcelData(rows){
     montant: ['montant'],
     immatriculation: ['immatriculation'],
     boiteNo: ['boite n', 'boite no', 'boite n°', 'boîte n', 'boîte no', 'boîte n°'],
+    caution: ['caution', 'nom caution', 'nom de caution'],
     marque: ['marque'],
     adresse: ['adresse'],
     ville: ['ville'],
@@ -4128,6 +4129,7 @@ function parseExcelData(rows){
       montant: getColIndex(dossierColMap, dossierHeaderKeys.montant),
       immatriculation: getColIndex(dossierColMap, dossierHeaderKeys.immatriculation),
       boiteNo: getColIndex(dossierColMap, dossierHeaderKeys.boiteNo),
+      caution: getColIndex(dossierColMap, dossierHeaderKeys.caution),
       marque: getColIndex(dossierColMap, dossierHeaderKeys.marque),
       adresse: getColIndex(dossierColMap, dossierHeaderKeys.adresse),
       ville: getColIndex(dossierColMap, dossierHeaderKeys.ville),
@@ -4171,6 +4173,7 @@ function parseExcelData(rows){
       const refInjonction = idx.refInjonction !== -1 ? String(row[idx.refInjonction] || '').trim() : '';
       const immatriculation = idx.immatriculation !== -1 ? String(row[idx.immatriculation] || '').trim() : '';
       const boiteNo = idx.boiteNo !== -1 ? String(row[idx.boiteNo] || '').trim() : '';
+      const caution = idx.caution !== -1 ? String(row[idx.caution] || '').trim() : '';
       const marque = idx.marque !== -1 ? String(row[idx.marque] || '').trim() : '';
       const adresse = idx.adresse !== -1 ? String(row[idx.adresse] || '').trim() : '';
       const ville = idx.ville !== -1 ? String(row[idx.ville] || '').trim() : '';
@@ -4190,7 +4193,7 @@ function parseExcelData(rows){
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
       const hasExplicitReferences = !!(refAssignation || refRestitution || refSfdc || refInjonction);
-      const hasOtherDossierSignals = !!(immatriculation || boiteNo || marque || adresse || ville || cautionAdresse || cautionVille || cautionCin || cautionRc);
+      const hasOtherDossierSignals = !!(immatriculation || boiteNo || caution || marque || adresse || ville || cautionAdresse || cautionVille || cautionCin || cautionRc);
       const isCarryDossierRow = !refClient
         && !debiteur
         && !clientName
@@ -4222,6 +4225,7 @@ function parseExcelData(rows){
         montantExtra,
         immatriculation,
         boiteNo,
+        caution,
         marque,
         adresse,
         ville,
@@ -4831,6 +4835,7 @@ async function applyExcelImport(payload, options = {}){
       procedureDetails,
       ville: row.ville,
       adresse: row.adresse,
+      caution: row.caution || '',
       cautionAdresse: row.cautionAdresse || '',
       cautionVille: row.cautionVille || '',
       cautionCin: row.cautionCin || '',
