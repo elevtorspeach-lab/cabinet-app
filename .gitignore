@@ -6,3 +6,5 @@ desktop-app/dist/
 
 .DS_Store
 *.log
+backups/
+appsavocatcomplet.zip

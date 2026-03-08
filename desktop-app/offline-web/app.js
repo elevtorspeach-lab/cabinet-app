@@ -199,6 +199,7 @@ const IS_REMOTE_WEB_HOST = (() => {
 const API_PROBE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 900 : 2500;
 const API_HEALTH_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1500 : 3500;
 const API_STATE_LOAD_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1800 : 5000;
+const API_STATE_SAVE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 30000 : 10000;
 const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
@@ -3457,7 +3458,7 @@ async function importAppsavocatPayload(rawPayload){
     audienceDraft = {};
     const reconciliation = reconcileAudienceOrphanDossiers();
 
-    queuePersistAppState();
+    const serverSaved = await persistAppStateNow();
     renderClients();
     renderDashboard();
     updateClientDropdown();
@@ -3478,6 +3479,9 @@ async function importAppsavocatPayload(rawPayload){
         `Audience hors global rapprochée: ${reconciliation.matchedDossiers}`
       ].join('\n')
     );
+    if(!serverSaved){
+      alert('Import terminé localement, mais sauvegarde serveur non confirmée. Vérifiez la connexion serveur/API.');
+    }
   }finally{
     restoreSyncStatusSnapshot(syncSnapshot);
   }
@@ -3657,12 +3661,14 @@ async function persistAppStateNow(){
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    }, 6000);
+    }, API_STATE_SAVE_TIMEOUT_MS);
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     setSyncStatus('ok');
+    return true;
   }catch(err){
     setSyncStatus('error');
     console.warn('Impossible de sauvegarder sur le serveur', err);
+    return false;
   }
 }
 
@@ -5123,7 +5129,7 @@ async function applyExcelImport(payload, options = {}){
     }
   }
 
-  queuePersistAppState();
+  const serverSaved = await persistAppStateNow();
   renderClients();
   renderDashboard();
   updateClientDropdown();
@@ -5142,6 +5148,9 @@ async function applyExcelImport(payload, options = {}){
     `Erreurs ignorées (non bloquantes): ${importIgnoredRows.length}`
   ].join('\n');
   showExcelImportResult(summary, issuesText);
+  if(!serverSaved){
+    alert('Import terminé localement, mais sauvegarde serveur non confirmée. Vérifiez la connexion serveur/API.');
+  }
   }finally{
     restoreSyncStatusSnapshot(syncSnapshot);
   }
