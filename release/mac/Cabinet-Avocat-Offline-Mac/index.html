@@ -50,6 +50,13 @@
       <span id="syncPingMetric" class="sync-metric">Ping: --</span>
       <span id="syncLiveMetric" class="sync-metric">Live: --</span>
     </div>
+    <button id="openDesktopStateFileBtn" class="sidebar-file-btn" type="button">
+      <i class="fa-solid fa-file-lines"></i> Fichier appsavocat
+    </button>
+    <input type="file" id="importAppsavocatInput" accept=".json,.appsavocat" style="display:none;">
+    <button id="importAppsavocatBtn" class="sidebar-file-btn" type="button">
+      <i class="fa-solid fa-file-import"></i> Importer appsavocat
+    </button>
     <div id="dashboardLink" class="nav-link active"><i class="fa-solid fa-chart-pie"></i> Dashboard</div>
     <div id="clientsLink" class="nav-link"><i class="fa-solid fa-users"></i> Clients</div>
     <div id="creationLink" class="nav-link"><i class="fa-solid fa-folder-plus"></i> Création de Dossier</div>
@@ -65,6 +72,9 @@
       </div>
     <div id="equipeLink" class="nav-link">
         <i class="fa-solid fa-user-group"></i> Equipe
+      </div>
+    <div id="recycleLink" class="nav-link">
+        <i class="fa-solid fa-trash-arrow-up"></i> Corbeille
       </div>
 
     <button id="logoutBtn" class="btn-danger logout-btn">
@@ -198,9 +208,18 @@
       </div>
     </div>
 
+    <div class="audience-filter-import-row">
+      <div class="import-excel">
+        <input type="file" id="importAudienceExcelInput" accept=".xlsx,.xls" style="display:none;">
+        <button id="importAudienceExcelBtn" class="btn-primary" type="button">
+          <i class="fa-solid fa-file-import"></i> Importer Audience
+        </button>
+      </div>
+    </div>
+
   </div>
 
-  <div class="table-container">
+  <div id="audienceTableContainer" class="table-container">
     <table>
       <thead>
         <tr>
@@ -220,6 +239,7 @@
       <tbody id="audienceBody"></tbody>
     </table>
   </div>
+  <div id="audiencePagination" class="table-pagination"></div>
 </div>
 
     <!-- DILIGENCE -->
@@ -267,12 +287,19 @@
                 <option value="all">Tous</option>
               </select>
             </div>
+            <span id="diligenceCheckedCount" class="audience-checked-count">Cochés: 0</span>
+            <button id="selectAllDiligenceBtn" class="btn-primary" type="button">
+              <i class="fa-solid fa-check-double"></i> Tout cocher
+            </button>
+            <button id="clearAllDiligenceBtn" class="btn-primary" type="button">
+              <i class="fa-solid fa-eraser"></i> Tout décocher
+            </button>
             <button id="exportDiligenceBtn" class="btn-primary" type="button">
               <i class="fa-solid fa-file-export"></i> Exporter
             </button>
           </div>
           <div id="diligenceCount" class="diligence-count"></div>
-          <div class="table-container">
+          <div id="diligenceTableContainer" class="table-container">
             <table>
               <thead>
                 <tr id="diligenceHeadRow">
@@ -296,6 +323,7 @@
               <tbody id="diligenceBody"></tbody>
             </table>
           </div>
+          <div id="diligencePagination" class="table-pagination"></div>
         </div>
       </div>
     </div>
@@ -433,7 +461,7 @@
           </button>
         </div>
       </div>
-      <div class="table-container">
+      <div id="suiviTableContainer" class="table-container">
         <table>
           <thead>
             <tr>
@@ -491,7 +519,7 @@
 
           <div class="form-group">
             <label>Montant</label>
-            <input type="number" id="montantInput" placeholder="Montant"/>
+            <input type="text" id="montantInput" inputmode="decimal" placeholder="Montant"/>
           </div>
 
           <div class="form-group">
@@ -530,8 +558,11 @@
           </div>
 
           <div class="form-group">
-            <label>CIN de caution</label>
-            <input type="text" id="cautionCinInput" placeholder="CIN de caution"/>
+            <label>CIN de caution / RC</label>
+            <div class="caution-cin-rc-row">
+              <input type="text" id="cautionCinInput" placeholder="CIN de caution"/>
+              <input type="text" id="cautionRcInput" placeholder="RC"/>
+            </div>
           </div>
 
           <div class="form-group full">
@@ -651,6 +682,38 @@
           <tbody id="suiviBody"></tbody>
         </table>
       </div>
+      <div id="suiviPagination" class="table-pagination"></div>
+    </div>
+
+    <!-- CORBEILLE -->
+    <div id="recycleSection" class="section" style="display:none;">
+      <h1><i class="fa-solid fa-trash-arrow-up"></i> Corbeille</h1>
+      <div class="clients-toolbar recycle-toolbar">
+        <div class="recycle-toolbar-text">
+          Restaurer un dossier/client supprimé, ou tout restaurer d'un coup.
+        </div>
+        <button id="restoreAllRecycleBtn" class="btn-primary" type="button">
+          <i class="fa-solid fa-rotate-left"></i> Restaurer tout
+        </button>
+        <button id="clearRecycleBinBtn" class="btn-danger" type="button">
+          <i class="fa-solid fa-trash"></i> Vider corbeille
+        </button>
+      </div>
+      <div id="recycleTableContainer" class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Date & heure</th>
+              <th>Action</th>
+              <th>Utilisateur</th>
+              <th>Détails</th>
+              <th>Restore</th>
+            </tr>
+          </thead>
+          <tbody id="recycleBody"></tbody>
+        </table>
+      </div>
+      <div id="recyclePagination" class="table-pagination"></div>
     </div>
 
   </div>
@@ -691,6 +754,8 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

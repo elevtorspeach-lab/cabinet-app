@@ -1,5 +1,5 @@
 // ================== STATE ==================
-const AppState = { clients: [], salleAssignments: [] };
+const AppState = { clients: [], salleAssignments: [], recycleBin: [], recycleArchive: [] };
 const DEFAULT_MANAGER_USERNAME = 'manager';
 const DEFAULT_MANAGER_PASSWORD = '1234';
 let USERS = [
@@ -13,8 +13,8 @@ let filterAudienceProcedure = 'all';
 let filterAudienceTribunal = 'all';
 let filterAudienceDate = '';
 let filterAudienceErrorsOnly = false;
-let paginationState = { audience: 1, suivi: 1, diligence: 1 };
-let paginationFilterState = { audience: '', suivi: '', diligence: '' };
+let paginationState = { audience: 1, suivi: 1, diligence: 1, recycle: 1 };
+let paginationFilterState = { audience: '', suivi: '', diligence: '', recycle: '' };
 let audienceTribunalAliasMap = new Map();
 let audiencePrintSelection = new Set();
 let filterSuiviProcedure = 'all';
@@ -39,12 +39,20 @@ let editingTeamUserId = null;
 let dashboardCalendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 let procedureMontantGroups = [];
 const STORAGE_KEY = 'cabinet-avocat-state-v1';
+const INDEXED_DB_NAME = 'cabinet-avocat-db-v1';
+const INDEXED_DB_VERSION = 1;
+const INDEXED_DB_STORE = 'state_store';
+const INDEXED_DB_STATE_KEY = 'app_state';
 const API_BASE_STORAGE_KEY = 'cabinet-avocat-api-base-v1';
 let API_BASE = 'http://127.0.0.1:3000/api';
 let API_BASE_RESOLVED = false;
 let persistTimer = null;
 let desktopStatePersistTimer = null;
 let audienceAutoSaveTimer = null;
+let audienceColorBatchTimer = null;
+let audienceColorBatchNeedsPersist = false;
+let audienceColorBatchNeedsDashboard = false;
+let audienceColorBatchNeedsSuivi = false;
 let hasLoadedState = false;
 let importInProgress = false;
 let remoteSyncTimer = null;
@@ -63,15 +71,99 @@ let audienceVirtualRows = [];
 let audienceVirtualDuplicateKeySet = new Set();
 let audienceVirtualLastRange = { start: -1, end: -1 };
 let audienceVirtualRafId = null;
+let audienceRowsRawCache = null;
+let audienceRowsRawCacheVersion = 0;
+let audienceRowsRawCacheViewerKey = '';
+let audienceRowsRawDataVersion = 0;
+let audienceRowsDedupeCache = null;
+let audienceRowsDedupeCacheVersion = 0;
+let audienceRowsDedupeCacheViewerKey = '';
+let audienceRowsViewCacheSource = null;
+let audienceRowsViewCacheKey = '';
+let audienceRowsViewCacheOutput = [];
+let audienceFilteredRowsCacheInput = null;
+let audienceFilteredRowsCacheKey = '';
+let audienceFilteredRowsCacheOutput = [];
+let audienceFilterOptionsRowsRef = null;
+const audienceFilterOptionsMetaCache = new WeakMap();
+let audienceDuplicateKeySetCacheInput = null;
+let audienceDuplicateKeySetCacheOutput = new Set();
+let sidebarSalleRenderTimer = null;
+let indexedDbOpenPromise = null;
 let suiviVirtualRows = [];
 let suiviVirtualLastRange = { start: -1, end: -1 };
 let suiviVirtualRafId = null;
+let suiviBaseRowsCache = null;
+let suiviBaseRowsCacheVersion = 0;
+let suiviBaseRowsCacheViewerKey = '';
+let suiviFilterOptionsRowsMetaRef = null;
 let diligenceVirtualRows = [];
 let diligenceVirtualLastRange = { start: -1, end: -1 };
 let diligenceVirtualRafId = null;
 let diligenceVirtualShowInjonctionColumns = false;
+let diligenceRowsCache = null;
+let diligenceRowsCacheVersion = 0;
+let diligenceRowsCacheViewerKey = '';
+let diligenceFilteredRowsCacheInput = null;
+let diligenceFilteredRowsCacheKey = '';
+let diligenceFilteredRowsCacheOutput = [];
+let diligenceFilterProcedureRowsRef = null;
+let diligenceFilterTribunalRowsRef = null;
+let diligenceFilterSortRowsRef = null;
+let diligenceFilterDelegationRowsRef = null;
+let diligenceFilterOrdonnanceRowsRef = null;
 let audienceColorButtons = [];
 const dashboardMetricState = new Map();
+const DOSSIER_HISTORY_MAX_ENTRIES = 400;
+const DOSSIER_HISTORY_DEBOUNCE_MS = 900;
+const RECYCLE_BIN_MAX_ENTRIES = 600;
+const RECYCLE_ARCHIVE_MAX_ENTRIES = 8000;
+const DOSSIER_HISTORY_FIELD_LABELS = {
+  debiteur: 'Débiteur',
+  boiteNo: 'Boîte N°',
+  referenceClient: 'Référence Client',
+  dateAffectation: 'Date d’affectation',
+  procedure: 'Procédure',
+  montant: 'Montant',
+  ville: 'Ville',
+  adresse: 'Adresse',
+  ww: 'WW',
+  marque: 'Marque',
+  type: 'Type',
+  caution: 'Caution',
+  cautionAdresse: 'Adresse de caution',
+  cautionVille: 'Ville de caution',
+  cautionCin: 'CIN de caution',
+  cautionRc: 'RC',
+  note: 'Note',
+  avancement: 'Avancement',
+  statut: 'Statut',
+  'procedureDetails.referenceClient': 'Référence dossier',
+  'procedureDetails.audience': 'Date d’audience',
+  'procedureDetails.juge': 'Juge',
+  'procedureDetails.sort': 'Sort',
+  'procedureDetails.tribunal': 'Tribunal',
+  'procedureDetails.dateDepot': 'Date dépôt',
+  'procedureDetails.depotLe': 'Date dépôt',
+  'procedureDetails.executionNo': 'N° exécution',
+  'procedureDetails.attOrdOrOrdOk': 'Ordonnance',
+  'procedureDetails.attDelegationOuDelegat': 'Délégation',
+  'procedureDetails.nomHuissier': 'Nom huissier',
+  'procedureDetails.datePrevueExecution': 'Date prévue exécution',
+  'procedureDetails.montantRecupere': 'Montant récupéré',
+  'procedureDetails.instruction': 'Instruction',
+  'procedureDetails.certificatNonAppelStatus': 'Statut certificat non appel',
+  'procedureDetails.notificationStatus': 'Statut notification'
+};
+const DOSSIER_HISTORY_SOURCE_LABELS = {
+  form: 'Modifier dossier',
+  audience: 'Audience',
+  diligence: 'Diligence'
+};
+let dossierHistoryPendingEntries = new Map();
+let dossierHistoryPendingTimers = new Map();
+const dossierHistoryObjectIds = new WeakMap();
+let dossierHistoryObjectIdCounter = 1;
 const SIDEBAR_COLLAPSED_KEY = 'cabinet-avocat-sidebar-collapsed';
 const REMOTE_SYNC_POLL_INTERVAL_MS = 3000;
 const REMOTE_SYNC_HEALTH_EVERY_TICKS = 3;
@@ -81,8 +173,9 @@ const CLIENT_IMPORT_ALLOWED_PROCEDURES = new Set(['SFDC', 'S/bien', 'Injonction'
 const AUDIENCE_ORPHAN_CLIENT_NAME = 'Audience import (hors dossier global)';
 const PAGINATION_PAGE_SIZES = {
   audience: 30,
-  suivi: 300,
-  diligence: 300
+  suivi: 30,
+  diligence: 30,
+  recycle: 30
 };
 const IMPORT_CHUNK_SIZE = 80;
 const IMPORT_EXCEL_CHUNK_SIZE = 40;
@@ -90,9 +183,22 @@ const IMPORT_STATUS_THROTTLE_MS = 120;
 const AUDIENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_VIRTUAL_ROW_HEIGHT = 56;
 const AUDIENCE_VIRTUAL_OVERSCAN = 10;
+const AUDIENCE_DEFAULT_SORT_MAX_ROWS = 15000;
 const SUIVI_VIRTUAL_MIN_ROWS = 40;
+const SUIVI_DEFAULT_SORT_MAX_ROWS = 20000;
 const DILIGENCE_VIRTUAL_MIN_ROWS = 40;
+const AUDIENCE_COLOR_BATCH_MS = 80;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
+const IS_REMOTE_WEB_HOST = (() => {
+  if(typeof window === 'undefined' || !window.location) return false;
+  const hostname = String(window.location.hostname || '').toLowerCase();
+  if(window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return false;
+  if(hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return false;
+  return true;
+})();
+const API_PROBE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 900 : 2500;
+const API_HEALTH_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1500 : 3500;
+const API_STATE_LOAD_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1800 : 5000;
 const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
@@ -110,12 +216,299 @@ const SALLE_WEEKDAY_OPTIONS = [
 // ================== HELPERS ==================
 const $ = (id) => document.getElementById(id);
 
+function getDossierHistoryObjectId(dossier){
+  if(!dossier || typeof dossier !== 'object') return 0;
+  if(dossierHistoryObjectIds.has(dossier)) return dossierHistoryObjectIds.get(dossier);
+  const id = dossierHistoryObjectIdCounter++;
+  dossierHistoryObjectIds.set(dossier, id);
+  return id;
+}
+
+function normalizeHistoryValue(value){
+  if(value === undefined || value === null) return '';
+  if(Array.isArray(value)){
+    return value.map(v=>String(v || '').trim()).filter(Boolean).join(', ');
+  }
+  if(typeof value === 'object'){
+    try{
+      return JSON.stringify(value);
+    }catch(err){
+      return String(value);
+    }
+  }
+  return String(value).trim();
+}
+
+function normalizeDossierHistoryEntries(rawHistory){
+  if(!Array.isArray(rawHistory)) return [];
+  return rawHistory
+    .map(entry=>{
+      if(!entry || typeof entry !== 'object') return null;
+      const at = String(entry.at || '').trim() || new Date().toISOString();
+      const by = String(entry.by || '').trim() || '-';
+      const byRole = String(entry.byRole || '').trim() || '';
+      const source = String(entry.source || '').trim() || 'form';
+      const field = String(entry.field || '').trim() || '-';
+      const procedure = String(entry.procedure || '').trim();
+      const before = normalizeHistoryValue(entry.before);
+      const after = normalizeHistoryValue(entry.after);
+      if(before === after) return null;
+      return { at, by, byRole, source, field, procedure, before, after };
+    })
+    .filter(Boolean)
+    .slice(-DOSSIER_HISTORY_MAX_ENTRIES);
+}
+
+function getHistoryFieldLabel(field){
+  const key = String(field || '').trim();
+  if(DOSSIER_HISTORY_FIELD_LABELS[key]) return DOSSIER_HISTORY_FIELD_LABELS[key];
+  const lastKey = key.includes('.') ? key.split('.').pop() : key;
+  const humanized = String(lastKey || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if(!humanized) return '-';
+  return humanized.charAt(0).toUpperCase() + humanized.slice(1);
+}
+
+function getHistorySourceLabel(source){
+  const key = String(source || '').trim();
+  return DOSSIER_HISTORY_SOURCE_LABELS[key] || key || '-';
+}
+
+function getRoleLabel(role){
+  const key = String(role || '').trim().toLowerCase();
+  if(key === 'manager') return 'Gestionnaire';
+  if(key === 'admin') return 'Admin';
+  if(key === 'viewer') return 'Consultation';
+  return key || '-';
+}
+
+function formatHistoryDateTime(iso){
+  const ts = Date.parse(String(iso || ''));
+  if(!Number.isFinite(ts)) return '-';
+  return new Date(ts).toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function pushDossierHistoryEntry(dossier, entry){
+  if(!dossier || typeof dossier !== 'object' || !entry || typeof entry !== 'object') return false;
+  const before = normalizeHistoryValue(entry.before);
+  const after = normalizeHistoryValue(entry.after);
+  if(before === after) return false;
+  if(!Array.isArray(dossier.history)) dossier.history = [];
+  dossier.history.push({
+    at: String(entry.at || '').trim() || new Date().toISOString(),
+    by: String(entry.by || '').trim() || String(currentUser?.username || '-'),
+    byRole: String(entry.byRole || '').trim() || String(currentUser?.role || ''),
+    source: String(entry.source || '').trim() || 'form',
+    field: String(entry.field || '').trim() || '-',
+    procedure: String(entry.procedure || '').trim(),
+    before,
+    after
+  });
+  if(dossier.history.length > DOSSIER_HISTORY_MAX_ENTRIES){
+    dossier.history = dossier.history.slice(-DOSSIER_HISTORY_MAX_ENTRIES);
+  }
+  return true;
+}
+
+function makeDossierHistoryPendingKey(dossier, entry){
+  const dossierId = getDossierHistoryObjectId(dossier);
+  const source = String(entry?.source || '').trim();
+  const field = String(entry?.field || '').trim();
+  const procedure = String(entry?.procedure || '').trim();
+  return `${dossierId}::${source}::${field}::${procedure}`;
+}
+
+function flushDossierHistoryPendingEntryByKey(key, options = {}){
+  const pending = dossierHistoryPendingEntries.get(key);
+  if(!pending) return false;
+  const timer = dossierHistoryPendingTimers.get(key);
+  if(timer){
+    clearTimeout(timer);
+    dossierHistoryPendingTimers.delete(key);
+  }
+  dossierHistoryPendingEntries.delete(key);
+  const changed = pushDossierHistoryEntry(pending.dossier, pending.entry);
+  if(changed && options.persist){
+    queuePersistAppState();
+  }
+  return changed;
+}
+
+function queueDossierHistoryEntry(dossier, entry, options = {}){
+  if(!dossier || typeof dossier !== 'object') return;
+  const before = normalizeHistoryValue(entry?.before);
+  const after = normalizeHistoryValue(entry?.after);
+  if(before === after) return;
+  const normalizedEntry = {
+    at: String(entry?.at || '').trim() || new Date().toISOString(),
+    by: String(entry?.by || '').trim() || String(currentUser?.username || '-'),
+    byRole: String(entry?.byRole || '').trim() || String(currentUser?.role || ''),
+    source: String(entry?.source || '').trim() || 'form',
+    field: String(entry?.field || '').trim() || '-',
+    procedure: String(entry?.procedure || '').trim(),
+    before,
+    after
+  };
+  if(options.immediate){
+    pushDossierHistoryEntry(dossier, normalizedEntry);
+    return;
+  }
+  const key = makeDossierHistoryPendingKey(dossier, normalizedEntry);
+  const existing = dossierHistoryPendingEntries.get(key);
+  if(existing){
+    existing.entry.after = normalizedEntry.after;
+    existing.entry.at = normalizedEntry.at;
+    existing.entry.by = normalizedEntry.by;
+    existing.entry.byRole = normalizedEntry.byRole;
+  }else{
+    dossierHistoryPendingEntries.set(key, {
+      dossier,
+      entry: normalizedEntry
+    });
+  }
+  if(dossierHistoryPendingTimers.has(key)){
+    clearTimeout(dossierHistoryPendingTimers.get(key));
+  }
+  dossierHistoryPendingTimers.set(key, setTimeout(()=>{
+    flushDossierHistoryPendingEntryByKey(key, { persist: true });
+  }, DOSSIER_HISTORY_DEBOUNCE_MS));
+}
+
+function flushAllDossierHistoryPendingEntries(){
+  const keys = [...dossierHistoryPendingEntries.keys()];
+  keys.forEach(key=>{
+    flushDossierHistoryPendingEntryByKey(key, { persist: false });
+  });
+}
+
+function collectDossierDiffEntries(prevDossier, nextDossier){
+  const previous = prevDossier && typeof prevDossier === 'object' ? prevDossier : {};
+  const next = nextDossier && typeof nextDossier === 'object' ? nextDossier : {};
+  const entries = [];
+  const dossierFields = [
+    'debiteur',
+    'boiteNo',
+    'referenceClient',
+    'dateAffectation',
+    'procedure',
+    'montant',
+    'ville',
+    'adresse',
+    'ww',
+    'marque',
+    'type',
+    'caution',
+    'cautionAdresse',
+    'cautionVille',
+    'cautionCin',
+    'cautionRc',
+    'note',
+    'avancement',
+    'statut'
+  ];
+  dossierFields.forEach(field=>{
+    const before = previous[field];
+    const after = next[field];
+    if(normalizeHistoryValue(before) === normalizeHistoryValue(after)) return;
+    entries.push({
+      source: 'form',
+      field,
+      before,
+      after
+    });
+  });
+
+  const previousDetails = previous?.procedureDetails && typeof previous.procedureDetails === 'object'
+    ? previous.procedureDetails
+    : {};
+  const nextDetails = next?.procedureDetails && typeof next.procedureDetails === 'object'
+    ? next.procedureDetails
+    : {};
+  const procKeys = new Set([...Object.keys(previousDetails), ...Object.keys(nextDetails)]);
+  procKeys.forEach(procKey=>{
+    const beforeProc = previousDetails[procKey] && typeof previousDetails[procKey] === 'object'
+      ? previousDetails[procKey]
+      : {};
+    const afterProc = nextDetails[procKey] && typeof nextDetails[procKey] === 'object'
+      ? nextDetails[procKey]
+      : {};
+    const fieldKeys = new Set([...Object.keys(beforeProc), ...Object.keys(afterProc)]);
+    fieldKeys.forEach(field=>{
+      const before = beforeProc[field];
+      const after = afterProc[field];
+      if(normalizeHistoryValue(before) === normalizeHistoryValue(after)) return;
+      entries.push({
+        source: 'form',
+        field: `procedureDetails.${field}`,
+        procedure: procKey,
+        before,
+        after
+      });
+    });
+  });
+  return entries;
+}
+
+function getAudienceProcedureFieldValue(procData, draftField){
+  if(!procData || !draftField) return '';
+  if(draftField === 'refDossier') return procData.referenceClient;
+  if(draftField === 'dateAudience') return procData.audience;
+  if(draftField === 'juge') return procData.juge;
+  if(draftField === 'sort') return procData.sort;
+  return procData[draftField];
+}
+
 function normalizeApiBaseCandidate(value){
   let base = String(value || '').trim();
   if(!base) return '';
   base = base.replace(/\/+$/, '');
   base = base.replace(/\/health$/i, '');
   return base.replace(/\/+$/, '');
+}
+
+function getAudienceViewerCacheKey(){
+  const user = currentUser || {};
+  const role = String(user.role || '').trim().toLowerCase();
+  const id = Number(user.id) || 0;
+  const clientIds = Array.isArray(user.clientIds)
+    ? [...user.clientIds].map(v=>Number(v)).filter(v=>Number.isFinite(v)).sort((a, b)=>a - b).join(',')
+    : '';
+  return `${id}::${role}::${clientIds}`;
+}
+
+function markAudienceRowsCacheDirty(){
+  audienceRowsRawDataVersion += 1;
+  audienceRowsRawCache = null;
+  audienceRowsDedupeCache = null;
+  audienceRowsViewCacheSource = null;
+  audienceRowsViewCacheKey = '';
+  audienceRowsViewCacheOutput = [];
+  audienceFilteredRowsCacheInput = null;
+  audienceFilteredRowsCacheKey = '';
+  audienceFilteredRowsCacheOutput = [];
+  audienceFilterOptionsRowsRef = null;
+  audienceDuplicateKeySetCacheInput = null;
+  audienceDuplicateKeySetCacheOutput = new Set();
+  suiviBaseRowsCache = null;
+  suiviFilterOptionsRowsMetaRef = null;
+  diligenceRowsCache = null;
+  diligenceFilteredRowsCacheInput = null;
+  diligenceFilteredRowsCacheKey = '';
+  diligenceFilteredRowsCacheOutput = [];
+  diligenceFilterProcedureRowsRef = null;
+  diligenceFilterTribunalRowsRef = null;
+  diligenceFilterSortRowsRef = null;
+  diligenceFilterDelegationRowsRef = null;
+  diligenceFilterOrdonnanceRowsRef = null;
 }
 
 function pushApiCandidate(candidates, seen, value){
@@ -161,7 +554,9 @@ function buildApiBaseCandidates(){
     appendCandidateVariants(out, seen, `${window.location.origin}/api`);
     appendCandidateVariants(out, seen, window.location.origin);
   }
-  appendCandidateVariants(out, seen, 'http://127.0.0.1:3000/api');
+  if(!IS_REMOTE_WEB_HOST){
+    appendCandidateVariants(out, seen, 'http://127.0.0.1:3000/api');
+  }
   return out;
 }
 
@@ -322,6 +717,7 @@ function getRenderForSection(section){
   if(section === 'audience') return renderAudience;
   if(section === 'suivi') return renderSuivi;
   if(section === 'diligence') return renderDiligence;
+  if(section === 'recycle') return renderRecycleBin;
   return null;
 }
 
@@ -532,13 +928,13 @@ function renderSuiviRowHtml(row){
       <td data-label="Ville">${escapeHtml(row.d.ville || '-')}</td>
       <td data-label="Statut">${renderStatusBadge(row.d.statut || 'En cours')}</td>
       <td data-label="Actions">
-        <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="openDossierDetails(${row.c.id}, ${row.index})">
+        <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}">
           <i class="fa-solid fa-eye"></i>
         </button>
-        <button type="button" class="btn-primary" data-action="edit" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="editDossier(${row.c.id}, ${row.index})" ${canEditClient(row.c) ? '' : 'disabled'}>
+        <button type="button" class="btn-primary" data-action="edit" data-client-id="${row.c.id}" data-dossier-index="${row.index}" ${canEditClient(row.c) ? '' : 'disabled'}>
           <i class="fa-solid fa-pen"></i>
         </button>
-        <button type="button" class="btn-danger" data-action="delete" data-client-id="${row.c.id}" data-dossier-index="${row.index}" onclick="deleteDossier(${row.c.id}, ${row.index})" ${canDeleteData() ? '' : 'disabled'}>
+        <button type="button" class="btn-danger" data-action="delete" data-client-id="${row.c.id}" data-dossier-index="${row.index}" ${canDeleteData() ? '' : 'disabled'}>
           <i class="fa-solid fa-trash"></i>
         </button>
       </td>
@@ -821,7 +1217,7 @@ async function resolveApiBase(forceRetry = false){
   }
   const candidates = buildApiBaseCandidates();
   for(const candidate of candidates){
-    if(await pingApiBase(candidate, 2500)){
+    if(await pingApiBase(candidate, API_PROBE_TIMEOUT_MS)){
       API_BASE = candidate;
       API_BASE_RESOLVED = true;
       if(typeof localStorage !== 'undefined'){
@@ -842,14 +1238,14 @@ async function resolveApiBase(forceRetry = false){
 }
 
 async function refreshServerConnectionStatus(){
-  const currentProbe = await pingApiBaseWithLatency(API_BASE, 3500);
+  const currentProbe = await pingApiBaseWithLatency(API_BASE, API_HEALTH_TIMEOUT_MS);
   if(currentProbe.ok){
     setPingMetric(currentProbe.latencyMs);
     setSyncStatus('ok', 'Connecte au serveur (actif)');
     return;
   }
   await resolveApiBase(true);
-  const retryProbe = await pingApiBaseWithLatency(API_BASE, 3500);
+  const retryProbe = await pingApiBaseWithLatency(API_BASE, API_HEALTH_TIMEOUT_MS);
   if(retryProbe.ok){
     setPingMetric(retryProbe.latencyMs);
     setSyncStatus('ok', 'Connecte au serveur (actif)');
@@ -2064,6 +2460,7 @@ function normalizeClient(rawClient){
         ...d,
         dateAffectation: normalizedDate || '',
         montant: getLowerMontantValue(d.montant || ''),
+        history: normalizeDossierHistoryEntries(d.history),
         montantByProcedure: normalizeProcedureMontantGroups(
           d.montantByProcedure,
           normalizedProcedures,
@@ -2074,6 +2471,331 @@ function normalizeClient(rawClient){
     : [];
   if(!Number.isFinite(id) || !name) return null;
   return { id, name, dossiers };
+}
+
+function normalizeRecycleBinEntries(rawEntries){
+  if(!Array.isArray(rawEntries)) return [];
+  return rawEntries
+    .map(entry=>{
+      if(!entry || typeof entry !== 'object') return null;
+      const type = String(entry.type || '').trim() || 'unknown';
+      const at = String(entry.at || '').trim() || new Date().toISOString();
+      const by = String(entry.by || '').trim() || '-';
+      const byRole = String(entry.byRole || '').trim() || '';
+      const payload = entry.payload && typeof entry.payload === 'object'
+        ? entry.payload
+        : {};
+      return { type, at, by, byRole, payload };
+    })
+    .filter(Boolean)
+    .slice(-RECYCLE_BIN_MAX_ENTRIES);
+}
+
+function normalizeRecycleArchiveEntries(rawEntries){
+  if(!Array.isArray(rawEntries)) return [];
+  return rawEntries
+    .map(entry=>{
+      if(!entry || typeof entry !== 'object') return null;
+      const type = String(entry.type || '').trim() || 'unknown';
+      const at = String(entry.at || '').trim() || new Date().toISOString();
+      const by = String(entry.by || '').trim() || '-';
+      const byRole = String(entry.byRole || '').trim() || '';
+      const payload = entry.payload && typeof entry.payload === 'object'
+        ? entry.payload
+        : {};
+      return { type, at, by, byRole, payload };
+    })
+    .filter(Boolean)
+    .slice(-RECYCLE_ARCHIVE_MAX_ENTRIES);
+}
+
+function pushRecycleBinEntry(type, payload){
+  if(!AppState || typeof AppState !== 'object') return;
+  if(!Array.isArray(AppState.recycleBin)) AppState.recycleBin = [];
+  AppState.recycleBin.push({
+    type: String(type || 'unknown'),
+    at: new Date().toISOString(),
+    by: String(currentUser?.username || '-'),
+    byRole: String(currentUser?.role || ''),
+    payload: payload && typeof payload === 'object' ? payload : {}
+  });
+  if(AppState.recycleBin.length > RECYCLE_BIN_MAX_ENTRIES){
+    AppState.recycleBin = AppState.recycleBin.slice(-RECYCLE_BIN_MAX_ENTRIES);
+  }
+}
+
+function pushRecycleArchiveEntries(entries){
+  if(!AppState || typeof AppState !== 'object') return;
+  if(!Array.isArray(entries) || !entries.length) return;
+  if(!Array.isArray(AppState.recycleArchive)) AppState.recycleArchive = [];
+  const normalized = normalizeRecycleArchiveEntries(entries);
+  if(!normalized.length) return;
+  AppState.recycleArchive.push(...normalized);
+  if(AppState.recycleArchive.length > RECYCLE_ARCHIVE_MAX_ENTRIES){
+    AppState.recycleArchive = AppState.recycleArchive.slice(-RECYCLE_ARCHIVE_MAX_ENTRIES);
+  }
+}
+
+function getNextClientId(preferred){
+  const used = new Set(
+    (Array.isArray(AppState.clients) ? AppState.clients : [])
+      .map(c=>Number(c?.id))
+      .filter(Number.isFinite)
+  );
+  let id = Number(preferred);
+  if(!Number.isFinite(id) || used.has(id)){
+    id = Date.now() + Math.floor(Math.random() * 1000000);
+  }
+  while(used.has(id)) id += 1;
+  return id;
+}
+
+function getUniqueClientName(baseName){
+  const source = String(baseName || '').trim() || 'Client restauré';
+  const names = new Set(
+    (Array.isArray(AppState.clients) ? AppState.clients : [])
+      .map(c=>String(c?.name || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  if(!names.has(source.toLowerCase())) return source;
+  let counter = 2;
+  let candidate = `${source} (${counter})`;
+  while(names.has(candidate.toLowerCase())){
+    counter += 1;
+    candidate = `${source} (${counter})`;
+  }
+  return candidate;
+}
+
+function getRecycleEntryActionLabel(entry){
+  const type = String(entry?.type || '').trim();
+  if(type === 'client_delete') return 'Suppression client';
+  if(type === 'dossier_delete') return 'Suppression dossier';
+  if(type === 'all_clients_delete') return 'Suppression globale';
+  return 'Suppression';
+}
+
+function getRecycleEntryTypeUi(entry){
+  const type = String(entry?.type || '').trim();
+  if(type === 'client_delete'){
+    return { icon: 'fa-solid fa-users', cls: 'client' };
+  }
+  if(type === 'dossier_delete'){
+    return { icon: 'fa-solid fa-folder-open', cls: 'dossier' };
+  }
+  if(type === 'all_clients_delete'){
+    return { icon: 'fa-solid fa-layer-group', cls: 'snapshot' };
+  }
+  return { icon: 'fa-solid fa-trash-can', cls: 'default' };
+}
+
+function getRecycleEntryActorLabel(entry){
+  const by = String(entry?.by || '-').trim() || '-';
+  let role = String(entry?.byRole || '').trim().toLowerCase();
+  if(!role && by && by !== '-'){
+    const found = (Array.isArray(USERS) ? USERS : []).find(u=>
+      String(u?.username || '').trim().toLowerCase() === by.toLowerCase()
+    );
+    role = String(found?.role || '').trim().toLowerCase();
+  }
+  if(!role) return by;
+  return `${by} (${getRoleLabel(role)})`;
+}
+
+function getRecycleEntryDetails(entry){
+  const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const type = String(entry?.type || '').trim();
+  if(type === 'client_delete'){
+    const client = payload.client && typeof payload.client === 'object' ? payload.client : {};
+    const dossierCount = Array.isArray(client.dossiers) ? client.dossiers.length : 0;
+    return `Client: ${client.name || '-'} (${dossierCount} dossier(s))`;
+  }
+  if(type === 'dossier_delete'){
+    const dossier = payload.dossier && typeof payload.dossier === 'object' ? payload.dossier : {};
+    const ref = dossier.referenceClient || dossier.debiteur || '-';
+    const clientName = payload.clientName || '-';
+    return `Client: ${clientName} | Réf dossier: ${ref}`;
+  }
+  if(type === 'all_clients_delete'){
+    const clients = Array.isArray(payload.clients) ? payload.clients : [];
+    const clientCount = clients.length;
+    const dossierCount = clients.reduce((sum, client)=>sum + (Array.isArray(client?.dossiers) ? client.dossiers.length : 0), 0);
+    return `Snapshot: ${clientCount} client(s), ${dossierCount} dossier(s)`;
+  }
+  return '-';
+}
+
+function refreshAfterRecycleRestore(){
+  queuePersistAppState();
+  renderClients();
+  updateClientDropdown();
+  renderDashboard();
+  renderSuivi();
+  renderAudience();
+  renderDiligence();
+  renderEquipe();
+  renderSalle();
+  renderRecycleBin();
+}
+
+function restoreRecycleEntryAt(index, options = {}){
+  if(!canDeleteData()) return false;
+  const idx = Number(index);
+  if(!Number.isFinite(idx)) return false;
+  const list = Array.isArray(AppState.recycleBin) ? AppState.recycleBin : [];
+  const entry = list[idx];
+  if(!entry) return false;
+  const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const type = String(entry.type || '').trim();
+  let restored = false;
+
+  if(type === 'client_delete'){
+    const rawClient = payload.client && typeof payload.client === 'object' ? payload.client : null;
+    const client = normalizeClient(rawClient);
+    if(client){
+      const restoredNameKey = String(client.name || '').trim().toLowerCase();
+      const existingClient = AppState.clients.find(c=>
+        String(c?.name || '').trim().toLowerCase() === restoredNameKey
+      );
+      if(existingClient){
+        if(!Array.isArray(existingClient.dossiers)) existingClient.dossiers = [];
+        const existingSignatures = new Set(
+          existingClient.dossiers
+            .map(d=>makeDossierMergeSignature(d))
+            .filter(Boolean)
+        );
+        const incomingDossiers = Array.isArray(client.dossiers) ? client.dossiers : [];
+        incomingDossiers.forEach(dossier=>{
+          const signature = makeDossierMergeSignature(dossier);
+          if(signature && existingSignatures.has(signature)) return;
+          if(signature) existingSignatures.add(signature);
+          existingClient.dossiers.push(dossier);
+        });
+      }else{
+        client.id = getNextClientId(client.id);
+        client.name = String(client.name || '').trim() || 'Client restauré';
+        AppState.clients.push(client);
+      }
+      restored = true;
+    }
+  }else if(type === 'dossier_delete'){
+    const rawDossier = payload.dossier && typeof payload.dossier === 'object' ? payload.dossier : null;
+    const dossier = rawDossier ? JSON.parse(JSON.stringify(rawDossier)) : null;
+    if(dossier){
+      const wantedClientId = Number(payload.clientId);
+      let client = AppState.clients.find(c=>Number(c?.id) === wantedClientId);
+      if(!client){
+        const fallbackName = getUniqueClientName(payload.clientName || 'Client restauré');
+        client = { id: getNextClientId(wantedClientId), name: fallbackName, dossiers: [] };
+        AppState.clients.push(client);
+      }
+      if(!Array.isArray(client.dossiers)) client.dossiers = [];
+      client.dossiers.push(dossier);
+      restored = true;
+    }
+  }else if(type === 'all_clients_delete'){
+    const rawClients = Array.isArray(payload.clients) ? payload.clients : [];
+    const restoredClients = rawClients.map(normalizeClient).filter(Boolean);
+    const restoredUsers = Array.isArray(payload.usersBeforeDelete)
+      ? payload.usersBeforeDelete.map(normalizeUser).filter(Boolean)
+      : [];
+    AppState.clients = restoredClients;
+    USERS = ensureManagerUser(restoredUsers.length ? restoredUsers : USERS);
+    restored = true;
+  }
+
+  if(!restored) return false;
+  AppState.recycleBin.splice(idx, 1);
+  if(!options.skipRefresh) refreshAfterRecycleRestore();
+  return true;
+}
+
+function restoreRecycleItem(index){
+  if(!canDeleteData()) return alert('Seul le gestionnaire peut restaurer');
+  const idx = Number(index);
+  if(!Number.isFinite(idx)) return;
+  const entry = (Array.isArray(AppState.recycleBin) ? AppState.recycleBin : [])[idx];
+  if(!entry) return;
+  const detail = getRecycleEntryDetails(entry);
+  if(!window.confirm(`Restaurer cet élément ?\n${detail}`)) return;
+  const ok = restoreRecycleEntryAt(idx);
+  if(!ok) alert('Impossible de restaurer cet élément');
+}
+
+function restoreAllRecycleItems(){
+  if(!canDeleteData()) return alert('Seul le gestionnaire peut restaurer');
+  const items = Array.isArray(AppState.recycleBin) ? AppState.recycleBin : [];
+  if(!items.length) return alert('Corbeille vide');
+  if(!window.confirm(`Restaurer tous les éléments (${items.length}) ?`)) return;
+  let restoredCount = 0;
+  for(let i = items.length - 1; i >= 0; i -= 1){
+    if(restoreRecycleEntryAt(i, { skipRefresh: true })) restoredCount += 1;
+  }
+  refreshAfterRecycleRestore();
+  alert(`Restauration terminée: ${restoredCount} élément(s) restauré(s).`);
+}
+
+function clearRecycleBinToBackup(){
+  if(!canDeleteData()) return alert('Seul le gestionnaire peut vider la corbeille');
+  const items = Array.isArray(AppState.recycleBin) ? AppState.recycleBin : [];
+  if(!items.length) return alert('Corbeille vide');
+  if(!window.confirm(`Vider la corbeille (${items.length} élément(s)) ?\nLes éléments seront gardés dans le backup interne.`)) return;
+  pushRecycleArchiveEntries(items);
+  AppState.recycleBin = [];
+  queuePersistAppState();
+  renderRecycleBin();
+  alert('Corbeille vidée. Backup interne conservé.');
+}
+
+function renderRecycleBin(){
+  const body = $('recycleBody');
+  if(!body) return;
+  const restoreAllBtn = $('restoreAllRecycleBtn');
+  const clearBtn = $('clearRecycleBinBtn');
+  if(restoreAllBtn) restoreAllBtn.style.display = canDeleteData() ? '' : 'none';
+  if(clearBtn) clearBtn.style.display = canDeleteData() ? '' : 'none';
+  if(!canDeleteData()){
+    if(clearBtn) clearBtn.disabled = true;
+    body.innerHTML = '<tr><td colspan="5">Accès réservé au gestionnaire.</td></tr>';
+    renderPagination('recycle', { totalRows: 0 });
+    return;
+  }
+  const source = Array.isArray(AppState.recycleBin) ? AppState.recycleBin : [];
+  if(clearBtn) clearBtn.disabled = source.length === 0;
+  const rows = source
+    .map((entry, originalIndex)=>({ entry, originalIndex }))
+    .slice()
+    .reverse();
+  const pagination = paginateRows(rows, 'recycle');
+  if(!pagination.rows.length){
+    body.innerHTML = '<tr><td colspan="5">Corbeille vide.</td></tr>';
+    renderPagination('recycle', { totalRows: 0 });
+    return;
+  }
+  body.innerHTML = pagination.rows.map(row=>{
+    const entry = row.entry;
+    const typeUi = getRecycleEntryTypeUi(entry);
+    const actionLabel = getRecycleEntryActionLabel(entry);
+    return `
+      <tr>
+        <td data-label="Date & heure">${escapeHtml(formatHistoryDateTime(entry.at))}</td>
+        <td data-label="Action">
+          <span class="recycle-type-badge recycle-type-${escapeHtml(typeUi.cls)}">
+            <i class="${escapeHtml(typeUi.icon)}"></i>
+            ${escapeHtml(actionLabel)}
+          </span>
+        </td>
+        <td data-label="Utilisateur">${escapeHtml(getRecycleEntryActorLabel(entry))}</td>
+        <td data-label="Détails">${escapeHtml(getRecycleEntryDetails(entry))}</td>
+        <td data-label="Restore">
+          <button type="button" class="btn-primary" data-action="restore" data-index="${row.originalIndex}">
+            <i class="fa-solid fa-rotate-left"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  renderPagination('recycle', pagination);
 }
 
 function getKnownJudges(){
@@ -2338,13 +3060,15 @@ function ensureManagerUser(users){
   return validUsers;
 }
 
-function buildStateSignature(clients, salleAssignments, users, draft){
+function buildStateSignature(clients, salleAssignments, users, draft, recycleBin, recycleArchive){
   try{
     return JSON.stringify({
       clients,
       salleAssignments,
       users,
-      audienceDraft: draft
+      audienceDraft: draft,
+      recycleBin,
+      recycleArchive
     });
   }catch(err){
     return '';
@@ -2356,7 +3080,9 @@ function buildAppStatePayload(){
     clients: AppState.clients,
     salleAssignments: AppState.salleAssignments,
     users: USERS,
-    audienceDraft: audienceDraft
+    audienceDraft: audienceDraft,
+    recycleBin: Array.isArray(AppState.recycleBin) ? AppState.recycleBin : [],
+    recycleArchive: Array.isArray(AppState.recycleArchive) ? AppState.recycleArchive : []
   };
 }
 
@@ -2785,6 +3511,87 @@ function hasDesktopStateBridge(){
     && typeof window.cabinetDesktopState.writeState === 'function';
 }
 
+function hasIndexedDbSupport(){
+  return typeof indexedDB !== 'undefined' && indexedDB !== null;
+}
+
+function getIndexedDbConnection(){
+  if(!hasIndexedDbSupport()) return Promise.resolve(null);
+  if(indexedDbOpenPromise) return indexedDbOpenPromise;
+  indexedDbOpenPromise = new Promise((resolve)=>{
+    try{
+      const req = indexedDB.open(INDEXED_DB_NAME, INDEXED_DB_VERSION);
+      req.onupgradeneeded = ()=>{
+        const db = req.result;
+        if(!db.objectStoreNames.contains(INDEXED_DB_STORE)){
+          db.createObjectStore(INDEXED_DB_STORE);
+        }
+      };
+      req.onsuccess = ()=>resolve(req.result || null);
+      req.onerror = ()=>{
+        console.warn('IndexedDB indisponible, fallback localStorage', req.error);
+        resolve(null);
+      };
+    }catch(err){
+      console.warn('Ouverture IndexedDB impossible', err);
+      resolve(null);
+    }
+  });
+  return indexedDbOpenPromise;
+}
+
+async function writeStateToIndexedDb(payload){
+  const db = await getIndexedDbConnection();
+  if(!db) return false;
+  return new Promise((resolve)=>{
+    try{
+      const tx = db.transaction(INDEXED_DB_STORE, 'readwrite');
+      const store = tx.objectStore(INDEXED_DB_STORE);
+      store.put(payload, INDEXED_DB_STATE_KEY);
+      tx.oncomplete = ()=>resolve(true);
+      tx.onerror = ()=>{
+        console.warn('Echec écriture IndexedDB', tx.error);
+        resolve(false);
+      };
+      tx.onabort = ()=>resolve(false);
+    }catch(err){
+      console.warn('Ecriture IndexedDB impossible', err);
+      resolve(false);
+    }
+  });
+}
+
+async function readStateFromIndexedDb(){
+  const db = await getIndexedDbConnection();
+  if(!db) return null;
+  return new Promise((resolve)=>{
+    try{
+      const tx = db.transaction(INDEXED_DB_STORE, 'readonly');
+      const store = tx.objectStore(INDEXED_DB_STORE);
+      const req = store.get(INDEXED_DB_STATE_KEY);
+      req.onsuccess = ()=>resolve(req.result || null);
+      req.onerror = ()=>{
+        console.warn('Lecture IndexedDB impossible', req.error);
+        resolve(null);
+      };
+    }catch(err){
+      console.warn('Transaction IndexedDB impossible', err);
+      resolve(null);
+    }
+  });
+}
+
+function writeStateToLocalStorage(payload){
+  if(typeof localStorage === 'undefined') return false;
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    return true;
+  }catch(err){
+    console.warn('Echec localStorage (quota/accès)', err);
+    return false;
+  }
+}
+
 async function openDesktopStateFile(){
   if(
     typeof window !== 'undefined'
@@ -2831,16 +3638,18 @@ function queueDesktopStateFilePersist(){
 }
 
 async function persistAppStateNow(){
+  flushAllDossierHistoryPendingEntries();
   const payload = buildAppStatePayload();
   lastPersistedStateSignature = buildStateSignature(
     payload.clients,
     payload.salleAssignments,
     payload.users,
-    payload.audienceDraft
+    payload.audienceDraft,
+    payload.recycleBin,
+    payload.recycleArchive
   );
-  if(typeof localStorage !== 'undefined'){
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }
+  await writeStateToIndexedDb(payload);
+  writeStateToLocalStorage(payload);
   queueDesktopStateFilePersist();
   setSyncStatus('syncing');
   try{
@@ -2858,10 +3667,10 @@ async function persistAppStateNow(){
 }
 
 function queuePersistAppState(){
+  markAudienceRowsCacheDirty();
   const payload = buildAppStatePayload();
-  if(typeof localStorage !== 'undefined'){
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }
+  writeStateToLocalStorage(payload);
+  writeStateToIndexedDb(payload).catch(()=>{});
   queueDesktopStateFilePersist();
   setSyncStatus('syncing');
   if(persistTimer) clearTimeout(persistTimer);
@@ -2875,7 +3684,7 @@ async function loadPersistedState(){
   let loaded = false;
   let changed = false;
   try{
-    const res = await fetchWithTimeout(`${API_BASE}/state`, { cache: 'no-store' }, 5000);
+    const res = await fetchWithTimeout(`${API_BASE}/state`, { cache: 'no-store' }, API_STATE_LOAD_TIMEOUT_MS);
     if(res.ok){
       const parsed = await res.json();
       const loadedClients = Array.isArray(parsed?.clients)
@@ -2888,12 +3697,16 @@ async function loadPersistedState(){
       const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
         ? parsed.audienceDraft
         : {};
+      const loadedRecycleBin = normalizeRecycleBinEntries(parsed?.recycleBin);
+      const loadedRecycleArchive = normalizeRecycleArchiveEntries(parsed?.recycleArchive);
       const nextUsers = ensureManagerUser(loadedUsers);
       const nextSignature = buildStateSignature(
         loadedClients,
         loadedSalleAssignments,
         nextUsers,
-        loadedDraft
+        loadedDraft,
+        loadedRecycleBin,
+        loadedRecycleArchive
       );
 
       if(nextSignature && nextSignature === lastPersistedStateSignature){
@@ -2905,28 +3718,32 @@ async function loadPersistedState(){
       AppState.clients = loadedClients;
       AppState.salleAssignments = loadedSalleAssignments;
       USERS = nextUsers;
+      markAudienceRowsCacheDirty();
       audienceDraft = loadedDraft;
+      AppState.recycleBin = loadedRecycleBin;
+      AppState.recycleArchive = loadedRecycleArchive;
       lastPersistedStateSignature = buildStateSignature(
         AppState.clients,
         AppState.salleAssignments,
         USERS,
-        audienceDraft
+        audienceDraft,
+        AppState.recycleBin,
+        AppState.recycleArchive
       );
       syncCurrentUserFromUsers();
       loaded = true;
       changed = true;
       setSyncStatus('ok', 'Etat charge depuis serveur');
-      if(typeof localStorage !== 'undefined'){
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            clients: AppState.clients,
-            salleAssignments: AppState.salleAssignments,
-            users: USERS,
-            audienceDraft: audienceDraft
-          })
-        );
-      }
+      const snapshot = {
+        clients: AppState.clients,
+        salleAssignments: AppState.salleAssignments,
+        users: USERS,
+        audienceDraft: audienceDraft,
+        recycleBin: AppState.recycleBin,
+        recycleArchive: AppState.recycleArchive
+      };
+      await writeStateToIndexedDb(snapshot);
+      writeStateToLocalStorage(snapshot);
     }
   }catch(err){
     console.warn('Impossible de charger depuis le serveur', err);
@@ -2951,12 +3768,16 @@ async function loadPersistedState(){
         const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
           ? parsed.audienceDraft
           : {};
+        const loadedRecycleBin = normalizeRecycleBinEntries(parsed?.recycleBin);
+        const loadedRecycleArchive = normalizeRecycleArchiveEntries(parsed?.recycleArchive);
         const nextUsers = ensureManagerUser(loadedUsers);
         const nextSignature = buildStateSignature(
           loadedClients,
           loadedSalleAssignments,
           nextUsers,
-          loadedDraft
+          loadedDraft,
+          loadedRecycleBin,
+          loadedRecycleArchive
         );
         if(nextSignature && nextSignature === lastPersistedStateSignature){
           return false;
@@ -2965,27 +3786,76 @@ async function loadPersistedState(){
         AppState.clients = loadedClients;
         AppState.salleAssignments = loadedSalleAssignments;
         USERS = nextUsers;
+        markAudienceRowsCacheDirty();
         audienceDraft = loadedDraft;
+        AppState.recycleBin = loadedRecycleBin;
+        AppState.recycleArchive = loadedRecycleArchive;
         lastPersistedStateSignature = buildStateSignature(
           AppState.clients,
           AppState.salleAssignments,
           USERS,
-          audienceDraft
+          audienceDraft,
+          AppState.recycleBin,
+          AppState.recycleArchive
         );
         syncCurrentUserFromUsers();
-        if(typeof localStorage !== 'undefined'){
-          localStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify(buildAppStatePayload())
-          );
-        }
+        const snapshot = buildAppStatePayload();
+        await writeStateToIndexedDb(snapshot);
+        writeStateToLocalStorage(snapshot);
         setSyncStatus('ok', 'Etat charge depuis appsavocat.json');
         return true;
       }
-    }catch(err){
-      console.warn('Impossible de charger appsavocat.json', err);
+  }catch(err){
+    console.warn('Impossible de charger appsavocat.json', err);
+  }
+  }
+
+  const indexedState = await readStateFromIndexedDb();
+  if(indexedState && typeof indexedState === 'object'){
+    const loadedClients = Array.isArray(indexedState?.clients)
+      ? indexedState.clients.map(normalizeClient).filter(Boolean)
+      : [];
+    const loadedUsers = Array.isArray(indexedState?.users)
+      ? indexedState.users.map(normalizeUser).filter(Boolean)
+      : [];
+    const loadedSalleAssignments = normalizeSalleAssignments(indexedState?.salleAssignments);
+    const loadedDraft = indexedState?.audienceDraft && typeof indexedState.audienceDraft === 'object'
+      ? indexedState.audienceDraft
+      : {};
+    const loadedRecycleBin = normalizeRecycleBinEntries(indexedState?.recycleBin);
+    const loadedRecycleArchive = normalizeRecycleArchiveEntries(indexedState?.recycleArchive);
+    const nextUsers = ensureManagerUser(loadedUsers);
+    const nextSignature = buildStateSignature(
+      loadedClients,
+      loadedSalleAssignments,
+      nextUsers,
+      loadedDraft,
+      loadedRecycleBin,
+      loadedRecycleArchive
+    );
+    if(nextSignature && nextSignature !== lastPersistedStateSignature){
+      AppState.clients = loadedClients;
+      AppState.salleAssignments = loadedSalleAssignments;
+      USERS = nextUsers;
+      markAudienceRowsCacheDirty();
+      audienceDraft = loadedDraft;
+      AppState.recycleBin = loadedRecycleBin;
+      AppState.recycleArchive = loadedRecycleArchive;
+      lastPersistedStateSignature = buildStateSignature(
+        AppState.clients,
+        AppState.salleAssignments,
+        USERS,
+        audienceDraft,
+        AppState.recycleBin,
+        AppState.recycleArchive
+      );
+      syncCurrentUserFromUsers();
+      writeStateToLocalStorage(buildAppStatePayload());
+      setSyncStatus('ok', 'Etat charge depuis IndexedDB');
+      return true;
     }
   }
+
   if(typeof localStorage === 'undefined') return false;
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -3001,12 +3871,16 @@ async function loadPersistedState(){
     const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
       ? parsed.audienceDraft
       : {};
+    const loadedRecycleBin = normalizeRecycleBinEntries(parsed?.recycleBin);
+    const loadedRecycleArchive = normalizeRecycleArchiveEntries(parsed?.recycleArchive);
     const nextUsers = ensureManagerUser(loadedUsers);
     const nextSignature = buildStateSignature(
       loadedClients,
       loadedSalleAssignments,
       nextUsers,
-      loadedDraft
+      loadedDraft,
+      loadedRecycleBin,
+      loadedRecycleArchive
     );
     if(nextSignature && nextSignature === lastPersistedStateSignature){
       return false;
@@ -3015,12 +3889,17 @@ async function loadPersistedState(){
     AppState.clients = loadedClients;
     AppState.salleAssignments = loadedSalleAssignments;
     USERS = nextUsers;
+    markAudienceRowsCacheDirty();
     audienceDraft = loadedDraft;
+    AppState.recycleBin = loadedRecycleBin;
+    AppState.recycleArchive = loadedRecycleArchive;
     lastPersistedStateSignature = buildStateSignature(
       AppState.clients,
       AppState.salleAssignments,
       USERS,
-      audienceDraft
+      audienceDraft,
+      AppState.recycleBin,
+      AppState.recycleArchive
     );
     syncCurrentUserFromUsers();
     return true;
@@ -4648,6 +5527,7 @@ async function initApplication(){
   renderAudience();
   renderDiligence();
   renderEquipe();
+  renderRecycleBin();
   warmupExcelLibrariesOnIdle();
   startRemoteSync();
   showView('dashboard');
@@ -4677,6 +5557,7 @@ function setupEvents(){
   $('diligenceLink').onclick = ()=>showView('diligence');
   $('salleLink').onclick = ()=>showView('salle');
   $('equipeLink')?.addEventListener('click', ()=>showView('equipe'));
+  $('recycleLink')?.addEventListener('click', ()=>showView('recycle'));
 
   $('loginBtn').onclick = login;
   $('username')?.addEventListener('keydown', (e)=>{
@@ -4890,6 +5771,15 @@ function setupEvents(){
   $('teamSaveBtn')?.addEventListener('click', saveTeamUser);
   $('teamResetBtn')?.addEventListener('click', resetTeamForm);
   $('teamClientSearchInput')?.addEventListener('input', filterTeamClientListDebounced);
+  $('restoreAllRecycleBtn')?.addEventListener('click', restoreAllRecycleItems);
+  $('clearRecycleBinBtn')?.addEventListener('click', clearRecycleBinToBackup);
+  $('recycleBody')?.addEventListener('click', (e)=>{
+    const btn = e.target.closest('button[data-action="restore"]');
+    if(!btn) return;
+    const idx = Number(btn.dataset.index);
+    if(!Number.isFinite(idx)) return;
+    restoreRecycleItem(idx);
+  });
   $('filterAudienceColor')?.addEventListener('change', (e)=>{
     filterAudienceColor = e.target.value;
     renderAudience();
@@ -4989,6 +5879,7 @@ function showView(v){
   setVisible('diligenceSection', v==='diligence');
   setVisible('salleSection', v==='salle');
   setVisible('equipeSection', v==='equipe');
+  setVisible('recycleSection', v==='recycle');
 
   document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
   const target = $(v+'Link');
@@ -4998,6 +5889,7 @@ function showView(v){
   if(v === 'diligence') renderDiligence();
   if(v === 'salle') renderSalle();
   if(v === 'equipe') renderEquipe();
+  if(v === 'recycle') renderRecycleBin();
   if(isMobileViewport()){
     setSidebarCollapsed(true);
   }
@@ -5026,7 +5918,8 @@ function login(){
       'audienceSection',
       'diligenceSection',
       'salleSection',
-      'equipeSection'
+      'equipeSection',
+      'recycleSection'
     ];
     sectionIds.forEach(id=>{
       const el = $(id);
@@ -5058,6 +5951,7 @@ function login(){
   safeRun('renderDiligence', renderDiligence);
   safeRun('renderSalle', renderSalle);
   safeRun('renderEquipe', renderEquipe);
+  safeRun('renderRecycleBin', renderRecycleBin);
   safeRun('renderSidebarSalleSessions', renderSidebarSalleSessions);
 
   const hasVisibleSection = [
@@ -5068,7 +5962,8 @@ function login(){
     'audienceSection',
     'diligenceSection',
     'salleSection',
-    'equipeSection'
+    'equipeSection',
+    'recycleSection'
   ].some(id=>{
     const el = $(id);
     return !!el && el.style.display !== 'none';
@@ -5108,6 +6003,7 @@ function applyRoleUI(){
   if($('creationLink')) $('creationLink').style.display = viewer ? 'none' : '';
   if($('clientsLink')) $('clientsLink').style.display = viewer ? 'none' : '';
   if($('equipeLink')) $('equipeLink').style.display = manager ? '' : 'none';
+  if($('recycleLink')) $('recycleLink').style.display = manager ? '' : 'none';
   if($('addClientBtn')) $('addClientBtn').style.display = canCreateClient ? '' : 'none';
   if($('deleteAllClientsBtn')) $('deleteAllClientsBtn').style.display = canDeleteData() ? '' : 'none';
   if($('totalClientsCard')) $('totalClientsCard').style.display = viewer ? 'none' : '';
@@ -5117,6 +6013,7 @@ function applyRoleUI(){
   if($('saveAudienceBtn')) $('saveAudienceBtn').style.display = audienceEditable ? '' : 'none';
 
   if(!manager){
+    if($('recycleSection')?.style.display !== 'none') showView('dashboard');
     showView('dashboard');
   }else if(viewer && $('creationSection')?.style.display !== 'none'){
     showView('dashboard');
@@ -5193,6 +6090,9 @@ function deleteClient(clientId){
     : `Supprimer le client "${client.name}" ?`;
   if(!window.confirm(warning)) return;
 
+  pushRecycleBinEntry('client_delete', {
+    client: JSON.parse(JSON.stringify(client || {}))
+  });
   AppState.clients.splice(idx, 1);
   USERS = USERS.map(user=>{
     if(!Array.isArray(user.clientIds)) return user;
@@ -5206,6 +6106,7 @@ function deleteClient(clientId){
   renderAudience();
   renderDiligence();
   renderEquipe();
+  renderRecycleBin();
 }
 
 function deleteAllClients(){
@@ -5221,6 +6122,10 @@ function deleteAllClients(){
     + 'Cette action est irréversible.';
   if(!window.confirm(warning)) return;
 
+  pushRecycleBinEntry('all_clients_delete', {
+    clients: JSON.parse(JSON.stringify(AppState.clients || [])),
+    usersBeforeDelete: JSON.parse(JSON.stringify(USERS || []))
+  });
   AppState.clients = [];
   audienceDraft = {};
   audiencePrintSelection = new Set();
@@ -5241,6 +6146,7 @@ function deleteAllClients(){
   renderDiligence();
   renderEquipe();
   renderSalle();
+  renderRecycleBin();
 }
 
 function goToCreation(clientId){
@@ -5336,10 +6242,16 @@ async function addDossier(){
       statut: $('statutInput')?.value || 'En cours',
       files: await serializeUploadedFiles(uploadedFiles)
     };
+    dossier.history = [];
     console.log('[ADD DOSSIER]', JSON.stringify(dossier, null, 2));
 
     if(editingDossier){
       const prevClient = AppState.clients.find(c=>c.id == editingDossier.clientId);
+      const previousDossier = prevClient?.dossiers?.[editingDossier.index];
+      dossier.history = normalizeDossierHistoryEntries(previousDossier?.history);
+      collectDossierDiffEntries(previousDossier, dossier).forEach(entry=>{
+        queueDossierHistoryEntry(dossier, entry, { immediate: true });
+      });
       if(prevClient && prevClient.id === client.id){
         prevClient.dossiers[editingDossier.index] = dossier;
       }else{
@@ -5347,6 +6259,7 @@ async function addDossier(){
         client.dossiers.push(dossier);
       }
     }else{
+      dossier.history = [];
       client.dossiers.push(dossier);
     }
     reconcileAudienceOrphanDossiers();
@@ -5449,9 +6362,71 @@ function renderSuivi(){
     renderPagination('suivi', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     return;
   }
-  const allRowsMeta = [];
-  const rawRows = [];
+  const base = getSuiviBaseRowsCached();
+  suiviTribunalAliasMap = base.tribunalState.aliasMap;
+  const noProcedureFilter = filterSuiviProcedure === 'all';
+  const noTribunalFilter = filterSuiviTribunal === 'all';
+  const noSearchFilter = !q;
+  let sortedRows = [];
 
+  if(noProcedureFilter && noTribunalFilter && noSearchFilter){
+    sortedRows = base.sortedDefaultRows;
+  }else{
+    const filteredRows = [];
+    base.rawRows.forEach(row=>{
+      const tribunalKeys = row.tribunalKeys || [];
+      if(!noProcedureFilter && !row.procSet.has(filterSuiviProcedure)) return;
+      if(!noTribunalFilter && !tribunalKeys.includes(filterSuiviTribunal)) return;
+      if(!noSearchFilter){
+        const haystack = row.__suiviHaystack
+          || (row.__suiviHaystack = buildSuiviSearchHaystack(
+            row.c.name,
+            row.d,
+            row.procSource,
+            (row.tribunalList && row.tribunalList.length) ? row.tribunalList : row.tribunalLabels
+          ));
+        if(!haystack.includes(q)) return;
+      }
+      filteredRows.push(row);
+    });
+
+    const duplicatePairCounts = new Map();
+    filteredRows.forEach(row=>{
+      const key = buildSuiviRefDebiteurKey(row);
+      if(!key) return;
+      duplicatePairCounts.set(key, (duplicatePairCounts.get(key) || 0) + 1);
+    });
+    sortedRows = filteredRows
+      .slice()
+      .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
+  }
+  const pageData = paginateRows(sortedRows, 'suivi');
+  const useVirtual = pageData.rows.length >= SUIVI_VIRTUAL_MIN_ROWS;
+  suiviVirtualRows = pageData.rows;
+  suiviVirtualLastRange = { start: -1, end: -1 };
+  if(!pageData.rows.length){
+    suiviBody.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
+  }else if(useVirtual){
+    renderSuiviVirtualWindow(true);
+  }else{
+    suiviBody.innerHTML = pageData.rows.map(renderSuiviRowHtml).join('');
+  }
+  renderPagination('suivi', pageData);
+
+  syncSuiviFilterOptions(base.rowsMeta);
+}
+
+function getSuiviBaseRowsCached(){
+  const viewerKey = getAudienceViewerCacheKey();
+  if(
+    suiviBaseRowsCache
+    && suiviBaseRowsCacheVersion === audienceRowsRawDataVersion
+    && suiviBaseRowsCacheViewerKey === viewerKey
+  ){
+    return suiviBaseRowsCache;
+  }
+
+  const rawRows = [];
   getVisibleClients().forEach(c=>{
     c.dossiers.forEach((d, index)=>{
       const procSource = normalizeProcedures(d);
@@ -5467,16 +6442,16 @@ function renderSuivi(){
         index,
         procSource,
         procSet,
-        tribunalLabels: [...new Set(tribunalLabels)]
+        tribunalLabels: [...new Set(tribunalLabels)],
+        tribunalKeys: [],
+        tribunalList: []
       });
     });
   });
 
   const tribunalState = buildTribunalClusterStateFromLabels(rawRows.flatMap(row=>row.tribunalLabels || []));
-  suiviTribunalAliasMap = tribunalState.aliasMap;
   const tribunalLabelByKey = new Map(tribunalState.options.map(v=>[v.key, v.label]));
-
-  const filteredRows = [];
+  const rowsMeta = [];
   rawRows.forEach(row=>{
     const tribunalKeys = [...new Set((row.tribunalLabels || [])
       .map(label=>resolveSuiviTribunalFilterKey(label))
@@ -5484,47 +6459,28 @@ function renderSuivi(){
     const tribunalList = tribunalKeys
       .map(key=>tribunalLabelByKey.get(key) || '')
       .filter(Boolean);
-
-    allRowsMeta.push({ procSet: row.procSet, tribunalList, tribunalKeys });
-    if(filterSuiviProcedure !== 'all' && !row.procSet.has(filterSuiviProcedure)) return;
-    if(filterSuiviTribunal !== 'all' && !tribunalKeys.includes(filterSuiviTribunal)) return;
-
-    if(q){
-      const haystack = buildSuiviSearchHaystack(
-        row.c.name,
-        row.d,
-        row.procSource,
-        tribunalList.length ? tribunalList : row.tribunalLabels
-      );
-      if(!haystack.includes(q)) return;
-    }
-    filteredRows.push({ ...row, tribunalKeys, tribunalList });
+    row.tribunalKeys = tribunalKeys;
+    row.tribunalList = tribunalList;
+    rowsMeta.push({ procSet: row.procSet, tribunalList, tribunalKeys });
   });
 
-  const duplicatePairCounts = new Map();
-  filteredRows.forEach(row=>{
-    const key = buildSuiviRefDebiteurKey(row);
-    if(!key) return;
-    duplicatePairCounts.set(key, (duplicatePairCounts.get(key) || 0) + 1);
-  });
-
-  const sortedRows = filteredRows
-    .slice()
-    .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
-  const pageData = paginateRows(sortedRows, 'suivi');
-  const useVirtual = pageData.rows.length >= SUIVI_VIRTUAL_MIN_ROWS;
-  suiviVirtualRows = pageData.rows;
-  suiviVirtualLastRange = { start: -1, end: -1 };
-  if(!pageData.rows.length){
-    suiviBody.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
-  }else if(useVirtual){
-    renderSuiviVirtualWindow(true);
-  }else{
-    suiviBody.innerHTML = pageData.rows.map(renderSuiviRowHtml).join('');
+  let sortedDefaultRows = rawRows;
+  if(rawRows.length <= SUIVI_DEFAULT_SORT_MAX_ROWS){
+    const duplicatePairCounts = new Map();
+    rawRows.forEach(row=>{
+      const key = buildSuiviRefDebiteurKey(row);
+      if(!key) return;
+      duplicatePairCounts.set(key, (duplicatePairCounts.get(key) || 0) + 1);
+    });
+    sortedDefaultRows = rawRows
+      .slice()
+      .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
   }
-  renderPagination('suivi', pageData);
 
-  syncSuiviFilterOptions(allRowsMeta);
+  suiviBaseRowsCache = { rawRows, rowsMeta, tribunalState, sortedDefaultRows };
+  suiviBaseRowsCacheVersion = audienceRowsRawDataVersion;
+  suiviBaseRowsCacheViewerKey = viewerKey;
+  return suiviBaseRowsCache;
 }
 
 function parseSuiviReferenceParts(value){
@@ -5619,6 +6575,11 @@ function syncSuiviFilterOptions(rowsMeta){
   const procedureSelect = $('filterSuiviProcedure');
   const tribunalSelect = $('filterSuiviTribunal');
   if(!procedureSelect || !tribunalSelect) return;
+  if(rowsMeta === suiviFilterOptionsRowsMetaRef){
+    procedureSelect.value = filterSuiviProcedure;
+    tribunalSelect.value = filterSuiviTribunal;
+    return;
+  }
 
   const procedures = new Set();
   const tribunaux = new Map();
@@ -5652,6 +6613,7 @@ function syncSuiviFilterOptions(rowsMeta){
 
   procedureSelect.value = filterSuiviProcedure;
   tribunalSelect.value = filterSuiviTribunal;
+  suiviFilterOptionsRowsMetaRef = rowsMeta;
 }
 
 function renderProcedureBadges(procedureText){
@@ -5759,6 +6721,21 @@ function buildAudienceSearchHaystack(clientName, dossier, procKey, procedureData
     .join(' ');
 }
 
+function computeAudienceRowContentScore(row){
+  const refDossier = String(row?.draft?.refDossier ?? row?.p?.referenceClient ?? '').trim();
+  const dateAudience = String(row?.draft?.dateAudience ?? row?.p?.audience ?? '').trim();
+  const juge = String(row?.draft?.juge ?? row?.p?.juge ?? '').trim();
+  const sort = String(row?.draft?.sort ?? row?.p?.sort ?? '').trim();
+  const tribunal = String(row?.p?.tribunal || '').trim();
+  let score = 0;
+  if(refDossier) score += 4;
+  if(dateAudience) score += 3;
+  if(juge) score += 2;
+  if(sort) score += 2;
+  if(tribunal) score += 1;
+  return score;
+}
+
 function editDossier(clientId, index){
   if(!canEditData()) return alert('Accès refusé');
   const client = AppState.clients.find(c=>c.id == clientId);
@@ -5862,6 +6839,12 @@ function deleteDossier(clientId, index){
   if(!dossier) return;
   const ref = dossier.referenceClient || dossier.debiteur || `#${index + 1}`;
   if(!window.confirm(`Supprimer définitivement le dossier "${ref}" ?`)) return;
+  pushRecycleBinEntry('dossier_delete', {
+    clientId: client.id,
+    clientName: client.name || '',
+    dossierIndex: index,
+    dossier: JSON.parse(JSON.stringify(dossier || {}))
+  });
   client.dossiers.splice(index, 1);
   queuePersistAppState();
   closeDossierModal();
@@ -5870,6 +6853,7 @@ function deleteDossier(clientId, index){
   renderSuivi();
   renderAudience();
   renderDiligence();
+  renderRecycleBin();
 }
 
 function resetCreationForm(clientId = ''){
@@ -5908,6 +6892,7 @@ function closeDossierModal(){
 }
 
 function openDossierDetails(clientId, index){
+  flushAllDossierHistoryPendingEntries();
   const client = AppState.clients.find(c=>c.id == clientId);
   if(!client) return;
   const dossier = client.dossiers[index];
@@ -5959,6 +6944,24 @@ function openDossierDetails(clientId, index){
       </div>
     `).join('')
     : '<div class="details-empty">Aucun document.</div>';
+  const historyEntries = normalizeDossierHistoryEntries(dossier.history);
+  const historyHtml = historyEntries.length
+    ? [...historyEntries].reverse().map(entry=>`
+      <div class="details-history-item">
+        <div class="details-history-meta">
+          <span>${escapeHtml(formatHistoryDateTime(entry.at))}</span>
+          <span>${escapeHtml(getHistorySourceLabel(entry.source))}</span>
+          <span>Par: ${escapeHtml(entry.by || '-')} (${escapeHtml(getRoleLabel(entry.byRole))})</span>
+          ${entry.procedure ? `<span>Procédure: ${escapeHtml(entry.procedure)}</span>` : ''}
+        </div>
+        <div class="details-history-change">
+          <strong>${escapeHtml(getHistoryFieldLabel(entry.field))}</strong>
+          <span class="details-history-before">Avant: ${escapeHtml(entry.before || '-')}</span>
+          <span class="details-history-after">Après: ${escapeHtml(entry.after || '-')}</span>
+        </div>
+      </div>
+    `).join('')
+    : '<div class="details-empty">Aucune modification enregistrée.</div>';
 
   body.innerHTML = `
     <div class="details-grid">
@@ -5967,6 +6970,10 @@ function openDossierDetails(clientId, index){
     <div class="details-files">
       <h3><i class="fa-solid fa-paperclip"></i> Documents</h3>
       ${filesHtml}
+    </div>
+    <div class="details-history">
+      <h3><i class="fa-solid fa-clock-rotate-left"></i> Historique des modifications</h3>
+      ${historyHtml}
     </div>
     <div class="details-actions">
       <button type="button" class="btn-primary" onclick="downloadDossierSummary(${client.id}, ${index})">
@@ -6095,6 +7102,14 @@ function setAllVisibleDiligenceRowsForPrint(checked){
 }
 
 function getDiligenceRows(){
+  const viewerKey = getAudienceViewerCacheKey();
+  if(
+    diligenceRowsCache
+    && diligenceRowsCacheVersion === audienceRowsRawDataVersion
+    && diligenceRowsCacheViewerKey === viewerKey
+  ){
+    return diligenceRowsCache;
+  }
   const rows = [];
   getVisibleClients().forEach(c=>{
     c.dossiers.forEach((d, di)=>{
@@ -6122,12 +7137,20 @@ function getDiligenceRows(){
       });
     });
   });
-  return dedupeDiligenceRowsByReferenceAndDebiteur(rows);
+  const out = dedupeDiligenceRowsByReferenceAndDebiteur(rows);
+  diligenceRowsCache = out;
+  diligenceRowsCacheVersion = audienceRowsRawDataVersion;
+  diligenceRowsCacheViewerKey = viewerKey;
+  return out;
 }
 
 function syncDiligenceProcedureFilter(rows){
   const select = $('diligenceProcedureFilter');
   if(!select) return;
+  if(rows === diligenceFilterProcedureRowsRef){
+    select.value = filterDiligenceProcedure;
+    return;
+  }
   const set = new Set();
   rows.forEach(r=>{
     if(r.procedure) set.add(String(r.procedure));
@@ -6138,11 +7161,16 @@ function syncDiligenceProcedureFilter(rows){
     filterDiligenceProcedure = set.has('SFDC') ? 'SFDC' : 'all';
   }
   select.value = filterDiligenceProcedure;
+  diligenceFilterProcedureRowsRef = rows;
 }
 
 function syncDiligenceTribunalFilter(rows){
   const select = $('diligenceTribunalFilter');
   if(!select) return;
+  if(rows === diligenceFilterTribunalRowsRef){
+    select.value = filterDiligenceTribunal;
+    return;
+  }
   const set = new Set();
   rows.forEach(r=>{
     const tribunal = String(r.tribunal || '').trim();
@@ -6154,11 +7182,16 @@ function syncDiligenceTribunalFilter(rows){
     filterDiligenceTribunal = 'all';
   }
   select.value = filterDiligenceTribunal;
+  diligenceFilterTribunalRowsRef = rows;
 }
 
 function syncDiligenceSortFilter(rows){
   const select = $('diligenceSortFilter');
   if(!select) return;
+  if(rows === diligenceFilterSortRowsRef){
+    select.value = filterDiligenceSort;
+    return;
+  }
   const set = new Set();
   rows.forEach(r=>{
     const sort = String(r.sort || '').trim();
@@ -6170,11 +7203,16 @@ function syncDiligenceSortFilter(rows){
     filterDiligenceSort = 'all';
   }
   select.value = filterDiligenceSort;
+  diligenceFilterSortRowsRef = rows;
 }
 
 function syncDiligenceDelegationFilter(rows){
   const select = $('diligenceDelegationFilter');
   if(!select) return;
+  if(rows === diligenceFilterDelegationRowsRef){
+    select.value = filterDiligenceDelegation;
+    return;
+  }
   const set = new Set();
   rows.forEach(r=>{
     const delegation = String(r.delegation || '').trim();
@@ -6186,11 +7224,16 @@ function syncDiligenceDelegationFilter(rows){
     filterDiligenceDelegation = 'all';
   }
   select.value = filterDiligenceDelegation;
+  diligenceFilterDelegationRowsRef = rows;
 }
 
 function syncDiligenceOrdonnanceFilter(rows){
   const select = $('diligenceOrdonnanceFilter');
   if(!select) return;
+  if(rows === diligenceFilterOrdonnanceRowsRef){
+    select.value = filterDiligenceOrdonnance;
+    return;
+  }
   const set = new Set();
   rows.forEach(r=>{
     const ordonnance = String(r.ordonnance || '').trim();
@@ -6202,6 +7245,7 @@ function syncDiligenceOrdonnanceFilter(rows){
     filterDiligenceOrdonnance = 'all';
   }
   select.value = filterDiligenceOrdonnance;
+  diligenceFilterOrdonnanceRowsRef = rows;
 }
 
 function renderDiligence(){
@@ -6473,6 +7517,7 @@ function updateDiligenceField(clientId, dossierIndex, procKey, field, value){
   if(!dossier.procedureDetails) dossier.procedureDetails = {};
   if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
   const details = dossier.procedureDetails[proc];
+  const previousValue = field === 'ville' ? dossier.ville : details[field];
   let nextValue = value;
   if(field === 'attOrdOrOrdOk' || field === 'attDelegationOuDelegat'){
     nextValue = normalizeDiligenceAttOk(value);
@@ -6484,6 +7529,13 @@ function updateDiligenceField(clientId, dossierIndex, procKey, field, value){
   }else{
     details[field] = nextValue;
   }
+  queueDossierHistoryEntry(dossier, {
+    source: 'diligence',
+    field: field === 'ville' ? 'ville' : `procedureDetails.${field}`,
+    procedure: field === 'ville' ? '' : proc,
+    before: previousValue,
+    after: nextValue
+  });
   queuePersistAppState();
 }
 
@@ -6493,21 +7545,36 @@ function updateDiligenceFieldEncoded(clientId, dossierIndex, procKeyEncoded, fie
 
 function getFilteredDiligenceRows(allRows){
   const q = $('diligenceSearchInput')?.value?.toLowerCase() || '';
-  return allRows.filter(row=>{
+  const filterKey = [
+    q,
+    filterDiligenceProcedure,
+    filterDiligenceSort,
+    filterDiligenceDelegation,
+    filterDiligenceOrdonnance,
+    filterDiligenceTribunal
+  ].join('||');
+  if(allRows === diligenceFilteredRowsCacheInput && filterKey === diligenceFilteredRowsCacheKey){
+    return diligenceFilteredRowsCacheOutput;
+  }
+  const out = allRows.filter(row=>{
     if(filterDiligenceProcedure !== 'all' && row.procedure !== filterDiligenceProcedure) return false;
     if(filterDiligenceSort !== 'all' && row.sort !== filterDiligenceSort) return false;
     if(filterDiligenceDelegation !== 'all' && row.delegation !== filterDiligenceDelegation) return false;
     if(filterDiligenceOrdonnance !== 'all' && row.ordonnance !== filterDiligenceOrdonnance) return false;
     if(filterDiligenceTribunal !== 'all' && row.tribunal !== filterDiligenceTribunal) return false;
     if(!q) return true;
-    const haystack = buildSuiviSearchHaystack(
+    const haystack = row.__diligenceHaystack || (row.__diligenceHaystack = buildSuiviSearchHaystack(
       row.clientName,
       row.dossier,
       [row.procedure],
       row.tribunal ? [row.tribunal] : []
-    );
+    ));
     return haystack.includes(q);
   });
+  diligenceFilteredRowsCacheInput = allRows;
+  diligenceFilteredRowsCacheKey = filterKey;
+  diligenceFilteredRowsCacheOutput = out;
+  return out;
 }
 
 function exportDiligenceXLS(){
@@ -7295,10 +8362,41 @@ function getAudiencePriorityBucket(row, duplicateKeySet, mismatchRefClientSet){
 
 function getFilteredAudienceRows(allRows = null){
   const rows = Array.isArray(allRows) ? allRows : getAudienceRows();
+  const priorityColor = getActiveAudiencePriorityColor();
+  const isDefaultView =
+    filterAudienceProcedure === 'all'
+    && filterAudienceTribunal === 'all'
+    && !filterAudienceDate
+    && !filterAudienceErrorsOnly
+    && (!priorityColor || priorityColor === 'all');
+  const filterKey = [
+    filterAudienceProcedure,
+    filterAudienceTribunal,
+    filterAudienceDate,
+    filterAudienceErrorsOnly ? '1' : '0',
+    priorityColor || 'all'
+  ].join('||');
+  if(rows === audienceFilteredRowsCacheInput && filterKey === audienceFilteredRowsCacheKey){
+    return audienceFilteredRowsCacheOutput;
+  }
+  if(isDefaultView){
+    if(rows.length > AUDIENCE_DEFAULT_SORT_MAX_ROWS){
+      audienceFilteredRowsCacheInput = rows;
+      audienceFilteredRowsCacheKey = filterKey;
+      audienceFilteredRowsCacheOutput = rows;
+      return rows;
+    }
+    const decorated = rows.map(row=>({ row, sortMeta: buildAudienceSortMeta(row) }));
+    decorated.sort((a, b)=>compareAudienceSortMeta(a.sortMeta, b.sortMeta));
+    const out = decorated.map(item=>item.row);
+    audienceFilteredRowsCacheInput = rows;
+    audienceFilteredRowsCacheKey = filterKey;
+    audienceFilteredRowsCacheOutput = out;
+    return out;
+  }
   const duplicateKeySet = getAudienceDuplicateKeySet(rows);
   const mismatchRefClientSet = buildAudienceMismatchRefClientSet(rows);
-  const priorityColor = getActiveAudiencePriorityColor();
-  return rows.filter(row=>{
+  const filtered = rows.filter(row=>{
     const tribunalKey = resolveAudienceTribunalFilterKey(row.p.tribunal || '');
     const rowProcFilterKey = getAudienceProcedureFilterKey(row.procKey);
     if(filterAudienceProcedure !== 'all' && rowProcFilterKey !== filterAudienceProcedure) return false;
@@ -7310,18 +8408,25 @@ function getFilteredAudienceRows(allRows = null){
     }
     if(filterAudienceErrorsOnly && !isAudienceRowInvalid(row, duplicateKeySet)) return false;
     return true;
-  }).sort((a, b)=>{
-    const bucketA = getAudiencePriorityBucket(a, duplicateKeySet, mismatchRefClientSet);
-    const bucketB = getAudiencePriorityBucket(b, duplicateKeySet, mismatchRefClientSet);
-    if(bucketA !== bucketB) return bucketA - bucketB;
-
-    if(!filterAudienceErrorsOnly && priorityColor && priorityColor !== 'all'){
-      const aMatch = String(a?.p?.color || '') === priorityColor ? 1 : 0;
-      const bMatch = String(b?.p?.color || '') === priorityColor ? 1 : 0;
-      if(aMatch !== bMatch) return bMatch - aMatch;
-    }
-    return compareAudienceRowsByReferenceProximity(a, b);
   });
+  const decorated = filtered.map(row=>{
+    const bucket = getAudiencePriorityBucket(row, duplicateKeySet, mismatchRefClientSet);
+    const colorMatch = (!filterAudienceErrorsOnly && priorityColor && priorityColor !== 'all')
+      ? (String(row?.p?.color || '') === priorityColor ? 1 : 0)
+      : 0;
+    const sortMeta = buildAudienceSortMeta(row);
+    return { row, bucket, colorMatch, sortMeta };
+  });
+  decorated.sort((a, b)=>{
+    if(a.bucket !== b.bucket) return a.bucket - b.bucket;
+    if(a.colorMatch !== b.colorMatch) return b.colorMatch - a.colorMatch;
+    return compareAudienceSortMeta(a.sortMeta, b.sortMeta);
+  });
+  const out = decorated.map(item=>item.row);
+  audienceFilteredRowsCacheInput = rows;
+  audienceFilteredRowsCacheKey = filterKey;
+  audienceFilteredRowsCacheOutput = out;
+  return out;
 }
 
 function setAllVisibleAudienceRowsForPrint(checked){
@@ -7352,7 +8457,7 @@ function renderAudience(){
   );
   const body = $('audienceBody');
   if(!body){
-    renderSidebarSalleSessions();
+    queueSidebarSalleSessionsRender();
     return;
   }
   body.innerHTML='';
@@ -7363,7 +8468,7 @@ function renderAudience(){
     body.innerHTML = '<tr><td colspan="11" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
     renderPagination('audience', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     updateAudienceCheckedCount();
-    renderSidebarSalleSessions();
+    queueSidebarSalleSessionsRender();
     return;
   }
 
@@ -7386,7 +8491,7 @@ function renderAudience(){
   }
   renderPagination('audience', pageData);
   updateAudienceCheckedCount();
-  renderSidebarSalleSessions();
+  queueSidebarSalleSessionsRender();
 }
 
 function shouldUseAudienceVirtualization(rowCount){
@@ -7517,7 +8622,46 @@ function compareAudienceRowsByReferenceProximity(a, b){
   return String(a?.d?.debiteur || '').localeCompare(String(b?.d?.debiteur || ''), 'fr', { sensitivity: 'base' });
 }
 
+function buildAudienceSortMeta(row){
+  if(row?.__sortMeta && typeof row.__sortMeta === 'object'){
+    return row.__sortMeta;
+  }
+  const ref = getAudienceRowReferenceValue(row);
+  const parts = parseAudienceReferenceParts(ref);
+  const out = {
+    ref,
+    parts,
+    client: String(row?.c?.name || ''),
+    refClient: String(row?.d?.referenceClient || ''),
+    debiteur: String(row?.d?.debiteur || '')
+  };
+  if(row && typeof row === 'object') row.__sortMeta = out;
+  return out;
+}
+
+function compareAudienceSortMeta(aMeta, bMeta){
+  const pa = aMeta?.parts;
+  const pb = bMeta?.parts;
+  if(pa && pb){
+    if(pa.year !== pb.year) return pb.year - pa.year;
+    if(pa.middle !== pb.middle) return pa.middle - pb.middle;
+    if(pa.first !== pb.first) return pa.first - pb.first;
+  }else if(pa){
+    return -1;
+  }else if(pb){
+    return 1;
+  }
+  const byRef = String(aMeta?.ref || '').localeCompare(String(bMeta?.ref || ''), 'fr', { numeric: true, sensitivity: 'base' });
+  if(byRef !== 0) return byRef;
+  const byClient = String(aMeta?.client || '').localeCompare(String(bMeta?.client || ''), 'fr', { sensitivity: 'base' });
+  if(byClient !== 0) return byClient;
+  const byRefClient = String(aMeta?.refClient || '').localeCompare(String(bMeta?.refClient || ''), 'fr', { sensitivity: 'base' });
+  if(byRefClient !== 0) return byRefClient;
+  return String(aMeta?.debiteur || '').localeCompare(String(bMeta?.debiteur || ''), 'fr', { sensitivity: 'base' });
+}
+
 function buildAudienceDuplicateKey(row){
+  if(typeof row?.__dupKey === 'string') return row.__dupKey;
   const refDossier = normalizeReferenceForAudienceLookup(String(row?.draft?.refDossier ?? row?.p?.referenceClient ?? '').trim());
   const procedure = String(row?.procKey || '').trim().toLowerCase();
   const debiteur = String(row?.d?.debiteur || '')
@@ -7530,6 +8674,9 @@ function buildAudienceDuplicateKey(row){
 }
 
 function getAudienceDuplicateKeySet(rows){
+  if(rows === audienceDuplicateKeySetCacheInput){
+    return audienceDuplicateKeySetCacheOutput;
+  }
   const counts = new Map();
   (rows || []).forEach(row=>{
     const key = buildAudienceDuplicateKey(row);
@@ -7540,22 +8687,22 @@ function getAudienceDuplicateKeySet(rows){
   counts.forEach((count, key)=>{
     if(count >= 2) duplicates.add(key);
   });
+  audienceDuplicateKeySetCacheInput = rows;
+  audienceDuplicateKeySetCacheOutput = duplicates;
   return duplicates;
 }
 
+function queueSidebarSalleSessionsRender(){
+  if(sidebarSalleRenderTimer) return;
+  sidebarSalleRenderTimer = setTimeout(()=>{
+    sidebarSalleRenderTimer = null;
+    renderSidebarSalleSessions();
+  }, 80);
+}
+
 function getAudienceRowContentScore(row){
-  const refDossier = String(row?.draft?.refDossier ?? row?.p?.referenceClient ?? '').trim();
-  const dateAudience = String(row?.draft?.dateAudience ?? row?.p?.audience ?? '').trim();
-  const juge = String(row?.draft?.juge ?? row?.p?.juge ?? '').trim();
-  const sort = String(row?.draft?.sort ?? row?.p?.sort ?? '').trim();
-  const tribunal = String(row?.p?.tribunal || '').trim();
-  let score = 0;
-  if(refDossier) score += 4;
-  if(dateAudience) score += 3;
-  if(juge) score += 2;
-  if(sort) score += 2;
-  if(tribunal) score += 1;
-  return score;
+  if(Number.isFinite(row?.__contentScore)) return row.__contentScore;
+  return computeAudienceRowContentScore(row);
 }
 
 function getDiligenceRowReferenceValue(row){
@@ -7663,13 +8810,25 @@ function syncAudienceFilterOptions(rows){
   const procedureSelect = $('filterAudienceProcedure');
   const tribunalSelect = $('filterAudienceTribunal');
   if(!procedureSelect || !tribunalSelect) return;
+  if(rows === audienceFilterOptionsRowsRef){
+    procedureSelect.value = filterAudienceProcedure;
+    tribunalSelect.value = filterAudienceTribunal;
+    return;
+  }
 
-  const procedureSet = new Set();
-  rows.forEach(row=>{
-    const key = getAudienceProcedureFilterKey(row.procKey);
-    if(key) procedureSet.add(key);
-  });
-  const tribunalState = buildAudienceTribunalClusterState(rows);
+  let meta = audienceFilterOptionsMetaCache.get(rows);
+  if(!meta){
+    const procedureSet = new Set();
+    rows.forEach(row=>{
+      const key = getAudienceProcedureFilterKey(row.procKey);
+      if(key) procedureSet.add(key);
+    });
+    const tribunalState = buildAudienceTribunalClusterState(rows);
+    meta = { procedureSet, tribunalState };
+    audienceFilterOptionsMetaCache.set(rows, meta);
+  }
+  const procedureSet = meta.procedureSet;
+  const tribunalState = meta.tribunalState;
   audienceTribunalAliasMap = tribunalState.aliasMap;
 
   const procedures = [...procedureSet].sort((a, b)=>a.localeCompare(b, 'fr'));
@@ -7690,6 +8849,7 @@ function syncAudienceFilterOptions(rows){
 
   procedureSelect.value = filterAudienceProcedure;
   tribunalSelect.value = filterAudienceTribunal;
+  audienceFilterOptionsRowsRef = rows;
 }
 
 function hasAudienceProcedureData(procData, draftData){
@@ -7711,58 +8871,113 @@ function hasAudienceProcedureData(procData, draftData){
   return fields.some(value=>String(value || '').trim().length > 0);
 }
 
+function getAudienceRowsRawCached(){
+  const viewerKey = getAudienceViewerCacheKey();
+  if(
+    audienceRowsRawCache
+    && audienceRowsRawCacheVersion === audienceRowsRawDataVersion
+    && audienceRowsRawCacheViewerKey === viewerKey
+  ){
+    return audienceRowsRawCache;
+  }
+  const rows = [];
+  AppState.clients.forEach((c, ci)=>{
+    if(!canViewClient(c)) return;
+    c.dossiers.forEach((d, di)=>{
+      let procKeys = Object.keys(d.procedureDetails || {});
+      if(!procKeys.length){
+        procKeys = normalizeProcedures(d);
+      }
+      if(!procKeys.length) return;
+      procKeys.forEach(procKey=>{
+        if(!isAudienceProcedure(procKey)) return;
+        const p = getAudienceProcedure(ci, di, procKey);
+        const key = makeAudienceDraftKey(ci, di, procKey);
+        const draft = audienceDraft[key] || {};
+        if(!hasAudienceProcedureData(p, draft)) return;
+        const refDossier = normalizeReferenceForAudienceLookup(String(draft?.refDossier ?? p?.referenceClient ?? '').trim());
+        const procedureNorm = String(procKey || '').trim().toLowerCase();
+        const debiteurNorm = String(d?.debiteur || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const duplicateKey = (refDossier && procedureNorm && debiteurNorm)
+          ? `${procedureNorm}__${debiteurNorm}__${refDossier}`
+          : '';
+        const row = {
+          c,
+          d,
+          procKey,
+          p,
+          color: p.color || '',
+          key,
+          draft,
+          ci,
+          di,
+          __dupKey: duplicateKey
+        };
+        rows.push(row);
+      });
+    });
+  });
+  audienceRowsRawCache = rows;
+  audienceRowsRawCacheVersion = audienceRowsRawDataVersion;
+  audienceRowsRawCacheViewerKey = viewerKey;
+  return rows;
+}
+
+function getAudienceRowsDedupedCached(){
+  const viewerKey = getAudienceViewerCacheKey();
+  if(
+    audienceRowsDedupeCache
+    && audienceRowsDedupeCacheVersion === audienceRowsRawDataVersion
+    && audienceRowsDedupeCacheViewerKey === viewerKey
+  ){
+    return audienceRowsDedupeCache;
+  }
+  const deduped = dedupeAudienceRowsByReferenceAndDebiteur(getAudienceRowsRawCached());
+  audienceRowsDedupeCache = deduped;
+  audienceRowsDedupeCacheVersion = audienceRowsRawDataVersion;
+  audienceRowsDedupeCacheViewerKey = viewerKey;
+  return deduped;
+}
+
 function getAudienceRows(options = {}){
   const opts = options && typeof options === 'object' ? options : {};
   const ignoreSearch = !!opts.ignoreSearch;
   const ignoreColor = !!opts.ignoreColor;
   const q = ignoreSearch ? '' : ($('filterAudience')?.value?.toLowerCase() || '');
-  const rows = [];
-  AppState.clients.forEach((c, ci)=>{
-    if(!canViewClient(c)) return;
-    c.dossiers.forEach((d, di)=>{
-      let procKeys = Object.keys(d.procedureDetails || {});
-      if(!procKeys.length){
-        procKeys = normalizeProcedures(d);
-      }
-      if(!procKeys.length) return;
-      procKeys.forEach(procKey=>{
-        if(!isAudienceProcedure(procKey)) return;
-        const p = getAudienceProcedure(ci, di, procKey);
-        const color = p.color || '';
-        if(!ignoreColor && filterAudienceColor !== 'all' && color !== filterAudienceColor) return;
-        const key = makeAudienceDraftKey(ci, di, procKey);
-        const draft = audienceDraft[key] || {};
-        if(!hasAudienceProcedureData(p, draft)) return;
-        const haystack = buildAudienceSearchHaystack(c.name, d, procKey, p, draft);
-        if(!ignoreSearch && q && !haystack.includes(q)) return;
-        rows.push({ c, d, procKey, p, color, key, draft, ci, di });
-      });
-    });
+  const baseRows = getAudienceRowsDedupedCached();
+  const noColorFilter = ignoreColor || filterAudienceColor === 'all';
+  const noSearchFilter = ignoreSearch || !q;
+  const viewKey = [
+    ignoreSearch ? '1' : '0',
+    ignoreColor ? '1' : '0',
+    ignoreSearch ? '' : q,
+    ignoreColor ? '' : filterAudienceColor
+  ].join('||');
+  if(baseRows === audienceRowsViewCacheSource && viewKey === audienceRowsViewCacheKey){
+    return audienceRowsViewCacheOutput;
+  }
+  if(noColorFilter && noSearchFilter){
+    audienceRowsViewCacheSource = baseRows;
+    audienceRowsViewCacheKey = viewKey;
+    audienceRowsViewCacheOutput = baseRows;
+    return baseRows;
+  }
+  const out = baseRows.filter(row=>{
+    if(!ignoreColor && filterAudienceColor !== 'all' && row.color !== filterAudienceColor) return false;
+    if(!ignoreSearch && q){
+      const haystack = row.__haystack || (row.__haystack = buildAudienceSearchHaystack(row.c?.name, row.d, row.procKey, row.p, row.draft));
+      if(!haystack.includes(q)) return false;
+    }
+    return true;
   });
-  return dedupeAudienceRowsByReferenceAndDebiteur(rows);
+  audienceRowsViewCacheSource = baseRows;
+  audienceRowsViewCacheKey = viewKey;
+  audienceRowsViewCacheOutput = out;
+  return out;
 }
 
 function getAudienceRowsForSidebar(){
-  const rows = [];
-  AppState.clients.forEach((c, ci)=>{
-    if(!canViewClient(c)) return;
-    c.dossiers.forEach((d, di)=>{
-      let procKeys = Object.keys(d.procedureDetails || {});
-      if(!procKeys.length){
-        procKeys = normalizeProcedures(d);
-      }
-      if(!procKeys.length) return;
-      procKeys.forEach(procKey=>{
-        if(!isAudienceProcedure(procKey)) return;
-        const p = getAudienceProcedure(ci, di, procKey);
-        const key = makeAudienceDraftKey(ci, di, procKey);
-        const draft = audienceDraft[key] || {};
-        if(!hasAudienceProcedureData(p, draft)) return;
-        rows.push({ c, d, procKey, p, key, draft, ci, di });
-      });
-    });
-  });
-  return dedupeAudienceRowsByReferenceAndDebiteur(rows);
+  return getAudienceRowsDedupedCached();
 }
 
 async function exportAudienceRegularXLS(){
@@ -7887,23 +9102,19 @@ function setAudienceColor(ci, di, procKey, checked){
     if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif'){
       dossier.statut = 'En cours';
     }
-    queuePersistAppState();
-    renderDashboard();
-    renderAudienceKeepingPosition();
+    markAudienceRowsCacheDirty();
+    queueAudienceColorBatchUpdate({ persist: true, dashboard: true, suivi: false });
     return;
   }
   if(selectedAudienceColor === 'all' || !allowed.has(selectedAudienceColor)){
-    renderDashboard();
-    renderAudienceKeepingPosition();
+    queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
     return;
   }
   p.color = selectedAudienceColor;
   if(selectedAudienceColor === 'purple-dark') dossier.statut = 'Soldé';
   if(selectedAudienceColor === 'purple-light') dossier.statut = 'Arrêt définitif';
-  queuePersistAppState();
-  renderDashboard();
-  renderAudienceKeepingPosition();
-  renderSuivi();
+  markAudienceRowsCacheDirty();
+  queueAudienceColorBatchUpdate({ persist: true, dashboard: true, suivi: true });
 }
 
 function setAudienceColorEncoded(ci, di, procKeyEncoded, checked){
@@ -7916,6 +9127,33 @@ function getAudienceProcedure(ci, di, procKey){
   if(!dossier.procedureDetails) dossier.procedureDetails = {};
   if(!dossier.procedureDetails[procKey]) dossier.procedureDetails[procKey] = {};
   return dossier.procedureDetails[procKey];
+}
+
+function queueAudienceColorBatchUpdate(options = {}){
+  const opts = options && typeof options === 'object' ? options : {};
+  if(opts.persist) audienceColorBatchNeedsPersist = true;
+  if(opts.dashboard) audienceColorBatchNeedsDashboard = true;
+  if(opts.suivi) audienceColorBatchNeedsSuivi = true;
+  if(audienceColorBatchTimer) return;
+  audienceColorBatchTimer = setTimeout(()=>{
+    audienceColorBatchTimer = null;
+    const doPersist = audienceColorBatchNeedsPersist;
+    const doDashboard = audienceColorBatchNeedsDashboard;
+    const doSuivi = audienceColorBatchNeedsSuivi;
+    audienceColorBatchNeedsPersist = false;
+    audienceColorBatchNeedsDashboard = false;
+    audienceColorBatchNeedsSuivi = false;
+    if(doPersist){
+      queuePersistAppState();
+    }
+    if(doDashboard){
+      renderDashboard();
+    }
+    renderAudienceKeepingPosition();
+    if(doSuivi){
+      renderSuivi();
+    }
+  }, AUDIENCE_COLOR_BATCH_MS);
 }
 
 function queueAudienceLinkedRenders(){
@@ -7950,11 +9188,30 @@ function applyAudienceFieldToProcedure(p, field, value){
 
 function updateAudienceDraft(key, field, value){
   if(!canEditData()) return;
+  markAudienceRowsCacheDirty();
   if(!audienceDraft[key]) audienceDraft[key] = {};
   audienceDraft[key][field] = value;
   const { ci, di, procKey } = parseAudienceDraftKey(key);
+  const dossier = AppState.clients?.[ci]?.dossiers?.[di];
   const p = getAudienceProcedure(ci, di, procKey);
+  const before = getAudienceProcedureFieldValue(p, field);
   applyAudienceFieldToProcedure(p, field, value);
+  const after = getAudienceProcedureFieldValue(p, field);
+  const fieldMap = {
+    refDossier: 'procedureDetails.referenceClient',
+    dateAudience: 'procedureDetails.audience',
+    juge: 'procedureDetails.juge',
+    sort: 'procedureDetails.sort'
+  };
+  if(fieldMap[field]){
+    queueDossierHistoryEntry(dossier, {
+      source: 'audience',
+      field: fieldMap[field],
+      procedure: procKey,
+      before,
+      after
+    });
+  }
   // Avoid full-state persist and linked heavy renders on every keystroke.
   // We keep in-memory update immediate and persist through debounced autosave.
   queueAudienceAutoSave();
@@ -7989,11 +9246,56 @@ function saveAllAudience(options = {}){
   const rerender = options.rerender !== false;
   Object.entries(audienceDraft).forEach(([key, data])=>{
     const { ci, di, procKey } = parseAudienceDraftKey(key);
+    const dossier = AppState.clients?.[ci]?.dossiers?.[di];
     const p = getAudienceProcedure(ci, di, procKey);
-    if(data.refDossier!==undefined) applyAudienceFieldToProcedure(p, 'refDossier', data.refDossier);
-    if(data.dateAudience!==undefined) applyAudienceFieldToProcedure(p, 'dateAudience', data.dateAudience);
-    if(data.juge!==undefined) applyAudienceFieldToProcedure(p, 'juge', data.juge);
-    if(data.sort!==undefined) applyAudienceFieldToProcedure(p, 'sort', data.sort);
+    if(data.refDossier!==undefined){
+      const before = getAudienceProcedureFieldValue(p, 'refDossier');
+      applyAudienceFieldToProcedure(p, 'refDossier', data.refDossier);
+      const after = getAudienceProcedureFieldValue(p, 'refDossier');
+      queueDossierHistoryEntry(dossier, {
+        source: 'audience',
+        field: 'procedureDetails.referenceClient',
+        procedure: procKey,
+        before,
+        after
+      });
+    }
+    if(data.dateAudience!==undefined){
+      const before = getAudienceProcedureFieldValue(p, 'dateAudience');
+      applyAudienceFieldToProcedure(p, 'dateAudience', data.dateAudience);
+      const after = getAudienceProcedureFieldValue(p, 'dateAudience');
+      queueDossierHistoryEntry(dossier, {
+        source: 'audience',
+        field: 'procedureDetails.audience',
+        procedure: procKey,
+        before,
+        after
+      });
+    }
+    if(data.juge!==undefined){
+      const before = getAudienceProcedureFieldValue(p, 'juge');
+      applyAudienceFieldToProcedure(p, 'juge', data.juge);
+      const after = getAudienceProcedureFieldValue(p, 'juge');
+      queueDossierHistoryEntry(dossier, {
+        source: 'audience',
+        field: 'procedureDetails.juge',
+        procedure: procKey,
+        before,
+        after
+      });
+    }
+    if(data.sort!==undefined){
+      const before = getAudienceProcedureFieldValue(p, 'sort');
+      applyAudienceFieldToProcedure(p, 'sort', data.sort);
+      const after = getAudienceProcedureFieldValue(p, 'sort');
+      queueDossierHistoryEntry(dossier, {
+        source: 'audience',
+        field: 'procedureDetails.sort',
+        procedure: procKey,
+        before,
+        after
+      });
+    }
   });
 
   if(clearDraft){

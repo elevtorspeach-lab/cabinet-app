@@ -73,6 +73,9 @@
     <div id="equipeLink" class="nav-link">
         <i class="fa-solid fa-user-group"></i> Equipe
       </div>
+    <div id="recycleLink" class="nav-link">
+        <i class="fa-solid fa-trash-arrow-up"></i> Corbeille
+      </div>
 
     <button id="logoutBtn" class="btn-danger logout-btn">
       <i class="fa-solid fa-right-from-bracket"></i> Déconnecter
@@ -202,11 +205,6 @@
         <select id="filterAudienceTribunal">
           <option value="all">Tous</option>
         </select>
-      </div>
-
-      <div class="audience-color-filter">
-        <label for="filterAudienceDate">Date d'audience</label>
-        <input type="date" id="filterAudienceDate">
       </div>
     </div>
 
@@ -458,9 +456,6 @@
           <button id="importExcelBtn" class="btn-primary">
             <i class="fa-solid fa-file-import"></i> Importer Excel
           </button>
-          <button id="deleteAllClientsBtn" class="btn-danger" type="button">
-            <i class="fa-solid fa-trash-can"></i> Supprimer tous
-          </button>
           <button id="exportBackupExcelBtn" class="btn-primary" type="button">
             <i class="fa-solid fa-file-export"></i> Sauvegarde Excel
           </button>
@@ -688,6 +683,37 @@
         </table>
       </div>
       <div id="suiviPagination" class="table-pagination"></div>
+    </div>
+
+    <!-- CORBEILLE -->
+    <div id="recycleSection" class="section" style="display:none;">
+      <h1><i class="fa-solid fa-trash-arrow-up"></i> Corbeille</h1>
+      <div class="clients-toolbar recycle-toolbar">
+        <div class="recycle-toolbar-text">
+          Restaurer un dossier/client supprimé, ou tout restaurer d'un coup.
+        </div>
+        <button id="restoreAllRecycleBtn" class="btn-primary" type="button">
+          <i class="fa-solid fa-rotate-left"></i> Restaurer tout
+        </button>
+        <button id="clearRecycleBinBtn" class="btn-danger" type="button">
+          <i class="fa-solid fa-trash"></i> Vider corbeille
+        </button>
+      </div>
+      <div id="recycleTableContainer" class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Date & heure</th>
+              <th>Action</th>
+              <th>Utilisateur</th>
+              <th>Détails</th>
+              <th>Restore</th>
+            </tr>
+          </thead>
+          <tbody id="recycleBody"></tbody>
+        </table>
+      </div>
+      <div id="recyclePagination" class="table-pagination"></div>
     </div>
 
   </div>

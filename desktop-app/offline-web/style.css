@@ -179,6 +179,7 @@ body{
   height:100dvh;
   border-right:1px solid rgba(148,163,184,.22);
   box-shadow:10px 0 30px rgba(15,23,42,.18);
+  overflow-y:auto;
   background:
     radial-gradient(500px 180px at 15% -20%, rgba(59,130,246,.28), transparent 70%),
     linear-gradient(180deg,#173894 0%, #17327f 38%, #132b71 100%);
@@ -272,7 +273,12 @@ body{
   box-shadow:0 10px 22px rgba(15,23,42,.22);
   transform:translateX(2px);
 }
-.logout-btn{margin-top:auto}
+.logout-btn{
+  margin-top:auto;
+  position:sticky;
+  bottom:8px;
+  z-index:2;
+}
 .sidebar-salle-sessions{
   padding:12px;
   border-radius:10px;
@@ -554,6 +560,52 @@ tr:hover{background:#f1f5f9}
   color:#1e3a8a;
   font-weight:700;
   font-size:13px;
+}
+.recycle-toolbar{
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:14px;
+}
+.recycle-toolbar-text{
+  color:#475569;
+  font-weight:600;
+}
+#recycleSection td .btn-primary{
+  margin-right:0;
+}
+.recycle-type-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border-radius:999px;
+  padding:4px 10px;
+  font-size:12px;
+  font-weight:700;
+  border:1px solid transparent;
+}
+.recycle-type-badge i{
+  font-size:12px;
+}
+.recycle-type-client{
+  background:#e0f2fe;
+  color:#0c4a6e;
+  border-color:#bae6fd;
+}
+.recycle-type-dossier{
+  background:#ecfccb;
+  color:#365314;
+  border-color:#d9f99d;
+}
+.recycle-type-snapshot{
+  background:#f3e8ff;
+  color:#6b21a8;
+  border-color:#e9d5ff;
+}
+.recycle-type-default{
+  background:#f1f5f9;
+  color:#334155;
+  border-color:#e2e8f0;
 }
 
 /* ================== SEARCH BOX ================== */
@@ -931,6 +983,8 @@ tr:hover{background:#f1f5f9}
   }
   .logout-btn{
     margin-top:12px;
+    position:sticky;
+    bottom:8px;
     justify-content:center;
     min-height:42px;
     border-radius:12px;
@@ -2076,6 +2130,49 @@ tr.color-purple-light{border-left:6px solid #f97316;background:#fff7ed}
   display:flex;
   gap:8px;
   flex-wrap:wrap;
+}
+
+.details-history{
+  margin-top:14px;
+}
+
+.details-history h3{
+  margin:0 0 8px;
+  color:#1e3a8a;
+  font-size:18px;
+}
+
+.details-history-item{
+  border:1px solid #e2e8f0;
+  border-radius:10px;
+  background:#f8fafc;
+  padding:10px 12px;
+  margin-bottom:8px;
+}
+
+.details-history-meta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  font-size:12px;
+  color:#64748b;
+  margin-bottom:6px;
+}
+
+.details-history-change{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  color:#0f172a;
+}
+
+.details-history-before,
+.details-history-after{
+  background:#fff;
+  border:1px solid #e2e8f0;
+  border-radius:999px;
+  padding:2px 8px;
+  font-size:12px;
 }
 
 .import-result-card{
