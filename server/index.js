@@ -10,6 +10,9 @@ const WEB_DIR = path.join(__dirname, '..');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const SERVER_BACKUP_RETENTION_COUNT = 20;
+const SERVER_BACKUP_MIN_INTERVAL_MS = 3 * 60 * 1000;
 
 const DEFAULT_STATE = {
   clients: [],
@@ -22,6 +25,8 @@ const DEFAULT_STATE = {
 };
 
 let cachedState = null;
+let lastBackupSignature = '';
+let lastBackupAt = 0;
 const sseClients = new Set();
 
 app.use(express.json({ limit: '120mb' }));
@@ -39,6 +44,7 @@ app.use((req, res, next) => {
 
 async function ensureDataFile() {
   await fsp.mkdir(DATA_DIR, { recursive: true });
+  await fsp.mkdir(BACKUP_DIR, { recursive: true });
   try {
     await fsp.access(STATE_FILE, fs.constants.F_OK);
   } catch {
@@ -63,6 +69,58 @@ async function readState() {
   }
 }
 
+function buildBackupSignature(state) {
+  try {
+    return JSON.stringify({
+      clients: Array.isArray(state?.clients) ? state.clients : [],
+      salleAssignments: Array.isArray(state?.salleAssignments) ? state.salleAssignments : [],
+      users: Array.isArray(state?.users) ? state.users : [],
+      audienceDraft: state?.audienceDraft && typeof state.audienceDraft === 'object' ? state.audienceDraft : {},
+      recycleBin: Array.isArray(state?.recycleBin) ? state.recycleBin : [],
+      recycleArchive: Array.isArray(state?.recycleArchive) ? state.recycleArchive : []
+    });
+  } catch {
+    return '';
+  }
+}
+
+function buildBackupFileName(ts = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `state_${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())}_${pad(ts.getHours())}-${pad(ts.getMinutes())}-${pad(ts.getSeconds())}.json`;
+}
+
+async function pruneBackupFiles() {
+  try {
+    const entries = await fsp.readdir(BACKUP_DIR, { withFileTypes: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+    const extras = files.slice(SERVER_BACKUP_RETENTION_COUNT);
+    await Promise.all(extras.map((name) => fsp.unlink(path.join(BACKUP_DIR, name)).catch(() => {})));
+  } catch (err) {
+    console.warn('Failed to prune state backups:', err);
+  }
+}
+
+async function maybeWriteBackupSnapshot(state) {
+  const now = Date.now();
+  const signature = buildBackupSignature(state);
+  if (signature && signature === lastBackupSignature) return;
+  if (lastBackupAt && (now - lastBackupAt) < SERVER_BACKUP_MIN_INTERVAL_MS) return;
+
+  const snapshot = {
+    savedAt: new Date(now).toISOString(),
+    ...state
+  };
+  const backupPath = path.join(BACKUP_DIR, buildBackupFileName(new Date(now)));
+  await fsp.writeFile(backupPath, JSON.stringify(snapshot, null, 2), 'utf8');
+  lastBackupAt = now;
+  lastBackupSignature = signature;
+  await pruneBackupFiles();
+}
+
 async function writeState(nextState) {
   const safe = {
     ...DEFAULT_STATE,
@@ -73,6 +131,7 @@ async function writeState(nextState) {
   await fsp.writeFile(tmpFile, JSON.stringify(safe), 'utf8');
   await fsp.rename(tmpFile, STATE_FILE);
   cachedState = safe;
+  await maybeWriteBackupSnapshot(safe);
   return safe;
 }
 
