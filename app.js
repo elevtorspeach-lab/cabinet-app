@@ -706,6 +706,19 @@ function dossierHasAudienceImpact(dossier){
   return normalizeProcedures(dossier).some(procName=>isAudienceProcedure(procName));
 }
 
+function handleDossierDataChange(options = {}){
+  const hasAudienceImpact = options.audience === true;
+  const rerenderLinked = options.rerenderLinked === true;
+  if(hasAudienceImpact){
+    markAudienceRowsCacheDirty();
+  }else{
+    markNonAudienceDossierCachesDirty();
+  }
+  if(rerenderLinked){
+    queueDossierLinkedRenders();
+  }
+}
+
 function pushApiCandidate(candidates, seen, value){
   const normalized = normalizeApiBaseCandidate(value);
   if(!normalized || seen.has(normalized)) return;
@@ -921,11 +934,7 @@ function applyRemoteSlicePatchLocally(patchKind, patch){
 }
 
 function finalizeRemoteStateUpdateLocally(options = {}){
-  if(options.audience === false){
-    markNonAudienceDossierCachesDirty();
-  }else{
-    markAudienceRowsCacheDirty();
-  }
+  handleDossierDataChange({ audience: options.audience !== false });
   // Avoid expensive full-state signature recomputation on every live patch.
   // A later full reload can rebuild the signature if needed.
   lastPersistedStateSignature = '';
@@ -1277,279 +1286,6 @@ function getVirtualWindowByContainer(containerId, rowsLength){
   const visibleCount = Math.ceil(viewportHeight / AUDIENCE_VIRTUAL_ROW_HEIGHT) + (AUDIENCE_VIRTUAL_OVERSCAN * 2);
   const end = Math.min(total, start + visibleCount);
   return { start, end };
-}
-
-function getAudienceVirtualWindow(rowsLength){
-  return getVirtualWindowByContainer('audienceTableContainer', rowsLength);
-}
-
-function queueAudienceVirtualRender(){
-  if(audienceVirtualRafId) return;
-  audienceVirtualRafId = window.requestAnimationFrame(()=>{
-    audienceVirtualRafId = null;
-    renderAudienceVirtualWindow();
-  });
-}
-
-function renderAudienceRowHtml(row, duplicateKeySet){
-  const { c, d, procKey, p, key, draft } = row;
-  const canEdit = canEditClient(c) && canEditData();
-  const canView = Number.isFinite(Number(row?.c?.id)) && Number.isFinite(Number(row?.di));
-  const liveColor = String(p?.color || '').trim();
-  const safeColor = ['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light'].includes(liveColor) ? liveColor : '';
-  const duplicateKey = buildAudienceDuplicateKey(row);
-  const isDuplicate = !!(duplicateKey && duplicateKeySet.has(duplicateKey));
-  const hasError = isAudienceRowInvalid(row, duplicateKeySet);
-  const isMissingGlobal = !!row?.p?._missingGlobal;
-  const isRefClientMismatch = !!row?.p?._refClientMismatch;
-  const refClientDisplay = isRefClientMismatch
-    ? String(row?.p?._refClientProvided || d.referenceClient || '-')
-    : String(d.referenceClient || '-');
-  const rowColor = (isDuplicate || hasError) ? 'red' : safeColor;
-  const procKeyEncoded = encodeURIComponent(String(procKey));
-  const keyEncoded = encodeURIComponent(String(key));
-  const isPrintChecked = isAudienceSelectedForPrint(row.ci, row.di, procKey);
-  const displayDateDepot = getAudienceDateDepotDisplayValue(row);
-  const audienceDateValueRaw = String(draft.dateAudience || p.audience || '');
-  const audienceDateValue = normalizeDateDDMMYYYY(audienceDateValueRaw) || audienceDateValueRaw;
-  return `
-    <tr class="color-${rowColor}">
-      <td data-label="Sélection">
-        <input type="checkbox" class="audience-print-check"
-          data-ci="${row.ci}"
-          data-di="${row.di}"
-          data-proc-key="${procKeyEncoded}"
-          ${isPrintChecked ? 'checked' : ''}
-          onchange="toggleAudienceSelectionAndColorEncoded(${row.ci},${row.di},'${procKeyEncoded}', this.checked)">
-      </td>
-      <td data-label="Client">${escapeHtml(c.name)}</td>
-      <td data-label="Référence Client" class="${isRefClientMismatch ? 'audience-refclient-mismatch' : ''}">
-        ${escapeHtml(refClientDisplay)}
-        ${isRefClientMismatch ? '<div class="audience-inline-error">Réf client audience différente du global</div>' : ''}
-      </td>
-      <td data-label="Débiteur">${escapeHtml(d.debiteur || '-')}</td>
-      <td data-label="Référence dossier">
-        <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(draft.refDossier || p.referenceClient || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)">
-        ${isMissingGlobal ? '<div class="audience-inline-error">Introuvable dans dossier global</div>' : ''}
-      </td>
-      <td data-label="Date d’audience"><input value="${escapeAttr(audienceDateValue)}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','dateAudience',this.value)" onblur="normalizeAudienceDateDraftInputFromEncoded('${keyEncoded}', this)"></td>
-      <td data-label="Juge"><input value="${escapeAttr(draft.juge || p.juge || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','juge',this.value)"></td>
-      <td data-label="Sort"><input value="${escapeAttr(draft.sort || p.sort || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','sort',this.value)"></td>
-      <td data-label="Tribunal">${escapeHtml(p.tribunal || '-')}</td>
-      <td data-label="Procédure">${escapeHtml(procKey || '-')}</td>
-      <td data-label="Date dépôt">${escapeHtml(displayDateDepot)}</td>
-      <td data-label="Actions">
-        <div class="table-actions">
-          <button type="button" class="btn-primary" ${canView ? `onclick="openDossierDetails(${Number(row.c.id)}, ${Number(row.di)})"` : 'disabled'}>
-            <i class="fa-solid fa-eye"></i>
-          </button>
-          <button type="button" class="btn-primary" ${(canEdit && canView) ? `onclick="editDossier(${Number(row.c.id)}, ${Number(row.di)})"` : 'disabled'}>
-            <i class="fa-solid fa-pen"></i>
-          </button>
-        </div>
-      </td>
-    </tr>
-  `;
-}
-
-function renderAudienceVirtualWindow(force = false){
-  const body = $('audienceBody');
-  if(!body) return;
-  const rows = Array.isArray(audienceVirtualRows) ? audienceVirtualRows : [];
-  if(!rows.length){
-    audienceVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
-    return;
-  }
-
-  const { start, end } = getAudienceVirtualWindow(rows.length);
-  if(!force && start === audienceVirtualLastRange.start && end === audienceVirtualLastRange.end){
-    return;
-  }
-  audienceVirtualLastRange = { start, end };
-
-  const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
-  const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
-  const topSpacer = topHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="12" style="height:${topHeight}px"></td></tr>`
-    : '';
-  const bottomSpacer = bottomHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="12" style="height:${bottomHeight}px"></td></tr>`
-    : '';
-  const rowsHtml = rows
-    .slice(start, end)
-    .map(row=>renderAudienceRowHtml(row, audienceVirtualDuplicateKeySet))
-    .join('');
-  body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
-}
-
-function renderSuiviRowHtml(row){
-  const displayDateAffectation = normalizeDateDDMMYYYY(row.d.dateAffectation || '') || '-';
-  return `
-    <tr>
-      <td data-label="Client">${escapeHtml(row.c.name)}</td>
-      <td data-label="Date d’affectation">${escapeHtml(displayDateAffectation)}</td>
-      <td data-label="Référence Client">${escapeHtml(row.d.referenceClient || '-')}</td>
-      <td class="procedure-cell" data-label="Procédure">${renderProcedureBadges(row.procSource)}</td>
-      <td data-label="Débiteur">${escapeHtml(row.d.debiteur || '-')}</td>
-      <td data-label="Montant">${escapeHtml(row.d.montant || '-')}</td>
-      <td data-label="Ville">${escapeHtml(row.d.ville || '-')}</td>
-      <td data-label="Statut">${renderStatusBadge(row.d.statut || 'En cours')}</td>
-      <td data-label="Actions">
-        <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}">
-          <i class="fa-solid fa-eye"></i>
-        </button>
-        <button type="button" class="btn-primary" data-action="edit" data-client-id="${row.c.id}" data-dossier-index="${row.index}" ${canEditClient(row.c) ? '' : 'disabled'}>
-          <i class="fa-solid fa-pen"></i>
-        </button>
-        <button type="button" class="btn-danger" data-action="delete" data-client-id="${row.c.id}" data-dossier-index="${row.index}" ${canDeleteData() ? '' : 'disabled'}>
-          <i class="fa-solid fa-trash"></i>
-        </button>
-      </td>
-    </tr>
-  `;
-}
-
-function renderSuiviVirtualWindow(force = false){
-  const body = $('suiviBody');
-  if(!body) return;
-  const rows = Array.isArray(suiviVirtualRows) ? suiviVirtualRows : [];
-  if(!rows.length){
-    suiviVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
-    return;
-  }
-  const { start, end } = getVirtualWindowByContainer('suiviTableContainer', rows.length);
-  if(!force && start === suiviVirtualLastRange.start && end === suiviVirtualLastRange.end) return;
-  suiviVirtualLastRange = { start, end };
-
-  const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
-  const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
-  const topSpacer = topHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="9" style="height:${topHeight}px"></td></tr>`
-    : '';
-  const bottomSpacer = bottomHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="9" style="height:${bottomHeight}px"></td></tr>`
-    : '';
-  const rowsHtml = rows.slice(start, end).map(renderSuiviRowHtml).join('');
-  body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
-}
-
-function queueSuiviVirtualRender(){
-  if(suiviVirtualRafId) return;
-  suiviVirtualRafId = window.requestAnimationFrame(()=>{
-    suiviVirtualRafId = null;
-    renderSuiviVirtualWindow();
-  });
-}
-
-function renderDiligenceRowHtml(row, showInjonctionColumns){
-  const procEncoded = encodeURIComponent(String(row.procedure || ''));
-  const isChecked = isDiligenceSelectedForPrint(row);
-  const refValue = row.details?.referenceClient || '';
-  const ordValue = row.details?.attOrdOrOrdOk || '';
-  const notificationNoValue = row.details?.notificationNo || '';
-  const notificationStatusValue = row.details?.notificationStatus || '';
-  const dateNotificationValue = row.details?.dateNotification || '';
-  const certificatNonAppelValue = row.details?.certificatNonAppelStatus || '';
-  const executionValue = row.details?.executionNo || '';
-  const villeValue = row.dossier?.ville || '';
-  const delegationValue = row.details?.attDelegationOuDelegat || '';
-  const huissierValue = row.details?.huissier || '';
-  const sortValue = row.details?.sort || '';
-  const tribunalValue = row.details?.tribunal || '';
-  if(showInjonctionColumns){
-    return `
-    <tr>
-      <td>
-        <label class="diligence-client-cell">
-          <input
-            type="checkbox"
-            class="diligence-print-check"
-            ${isChecked ? 'checked' : ''}
-            onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
-          <span>${escapeHtml(row.clientName || '-')}</span>
-        </label>
-      </td>
-      <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
-      <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationNo', notificationNoValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationStatus', notificationStatusValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'dateNotification', dateNotificationValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
-    </tr>
-  `;
-  }
-  return `
-    <tr>
-      <td>
-        <label class="diligence-client-cell">
-          <input
-            type="checkbox"
-            class="diligence-print-check"
-            ${isChecked ? 'checked' : ''}
-            onchange="toggleDiligencePrintSelectionEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}', this.checked)">
-          <span>${escapeHtml(row.clientName || '-')}</span>
-        </label>
-      </td>
-      <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
-      <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'referenceClient', refValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
-    </tr>
-  `;
-}
-
-function renderDiligenceVirtualWindow(force = false){
-  const body = $('diligenceBody');
-  if(!body) return;
-  const rows = Array.isArray(diligenceVirtualRows) ? diligenceVirtualRows : [];
-  const colCount = diligenceVirtualShowInjonctionColumns ? 15 : 11;
-  if(!rows.length){
-    diligenceVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = `<tr><td colspan="${colCount}" class="diligence-empty">Aucun dossier SFDC/S-bien/Injonction trouvé.</td></tr>`;
-    return;
-  }
-  const { start, end } = getVirtualWindowByContainer('diligenceTableContainer', rows.length);
-  if(!force && start === diligenceVirtualLastRange.start && end === diligenceVirtualLastRange.end) return;
-  diligenceVirtualLastRange = { start, end };
-
-  const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
-  const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
-  const topSpacer = topHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="${colCount}" style="height:${topHeight}px"></td></tr>`
-    : '';
-  const bottomSpacer = bottomHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="${colCount}" style="height:${bottomHeight}px"></td></tr>`
-    : '';
-  const rowsHtml = rows
-    .slice(start, end)
-    .map(row=>renderDiligenceRowHtml(row, diligenceVirtualShowInjonctionColumns))
-    .join('');
-  body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
-  applyDiligenceAutoSizing(body);
-}
-
-function queueDiligenceVirtualRender(){
-  if(diligenceVirtualRafId) return;
-  diligenceVirtualRafId = window.requestAnimationFrame(()=>{
-    diligenceVirtualRafId = null;
-    renderDiligenceVirtualWindow();
-  });
 }
 
 function loadExternalScript(url, key){
@@ -3265,15 +3001,33 @@ function getRecycleEntryDetails(entry){
 
 function refreshAfterRecycleRestore(){
   queuePersistAppState();
+  refreshPrimaryViews({ includeSalle: true, includeRecycle: true });
+}
+
+function refreshPrimaryViews(options = {}){
   renderClients();
   updateClientDropdown();
-  renderDashboard();
+  if(options.dashboardOptions){
+    renderDashboard(options.dashboardOptions);
+  }else{
+    renderDashboard();
+  }
   renderSuivi();
   renderAudience();
   renderDiligence();
   renderEquipe();
-  renderSalle();
-  renderRecycleBin();
+  if(options.includeSalle){
+    renderSalle();
+  }
+  if(options.includeRecycle){
+    renderRecycleBin();
+  }
+  if(options.resetCreationForm){
+    resetCreationForm();
+  }
+  if(options.showView){
+    showView(options.showView);
+  }
 }
 
 function restoreRecycleEntryAt(index, options = {}){
@@ -4134,17 +3888,13 @@ async function importAppsavocatPayload(rawPayload){
     // audienceDraft keys depend on table indexes; imported draft keys may mismatch after merge.
     audienceDraft = {};
     const reconciliation = reconcileAudienceOrphanDossiers();
-    markAudienceRowsCacheDirty();
+    handleDossierDataChange({ audience: true });
 
     await persistAppStateNow();
-    renderClients();
-    renderDashboard({ force: true, immediate: true });
-    updateClientDropdown();
-    renderSuivi();
-    renderAudience();
-    renderDiligence();
-    renderSalle();
-    renderEquipe();
+    refreshPrimaryViews({
+      dashboardOptions: { force: true, immediate: true },
+      includeSalle: true
+    });
 
     alert(
       [
@@ -4571,63 +4321,19 @@ async function loadPersistedState(){
       if(res.ok){
         const parsed = await res.json();
         updateRemoteStateMetadata(parsed);
-        const loadedClients = Array.isArray(parsed?.clients)
-          ? parsed.clients.map(client=>normalizeClient(client, { deep: false })).filter(Boolean)
-          : [];
-        const loadedUsers = Array.isArray(parsed?.users)
-          ? parsed.users.map(normalizeUser).filter(Boolean)
-          : [];
-        const loadedSalleAssignments = normalizeSalleAssignments(parsed?.salleAssignments);
-        const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
-          ? parsed.audienceDraft
-          : {};
-        const loadedRecycleBin = normalizeRecycleBinEntries(parsed?.recycleBin);
-        const loadedRecycleArchive = normalizeRecycleArchiveEntries(parsed?.recycleArchive);
-        const nextUsers = ensureManagerUser(loadedUsers);
-        const nextSignature = buildStateSignature(
-          loadedClients,
-          loadedSalleAssignments,
-          nextUsers,
-          loadedDraft,
-          loadedRecycleBin,
-          loadedRecycleArchive
-        );
-
-        if(nextSignature && nextSignature === lastPersistedStateSignature){
+        const normalizedState = normalizePersistedStateSource(parsed);
+        if(normalizedState.signature && normalizedState.signature === lastPersistedStateSignature){
           loaded = true;
           setSyncStatus('ok', 'Etat charge depuis serveur');
           return false;
         }
-
-        AppState.clients = loadedClients;
-        AppState.salleAssignments = loadedSalleAssignments;
-        USERS = nextUsers;
-        markAudienceRowsCacheDirty();
-        audienceDraft = loadedDraft;
-        AppState.recycleBin = loadedRecycleBin;
-        AppState.recycleArchive = loadedRecycleArchive;
-        lastPersistedStateSignature = buildStateSignature(
-          AppState.clients,
-          AppState.salleAssignments,
-          USERS,
-          audienceDraft,
-          AppState.recycleBin,
-          AppState.recycleArchive
-        );
-        syncCurrentUserFromUsers();
+        await applyPersistedStateSource(normalizedState, {
+          writeIndexedDb: true,
+          writeLocalStorage: true,
+          syncStatusMessage: 'Etat charge depuis serveur'
+        });
         loaded = true;
         changed = true;
-        setSyncStatus('ok', 'Etat charge depuis serveur');
-        const snapshot = {
-          clients: AppState.clients,
-          salleAssignments: AppState.salleAssignments,
-          users: USERS,
-          audienceDraft: audienceDraft,
-          recycleBin: AppState.recycleBin,
-          recycleArchive: AppState.recycleArchive
-        };
-        await writeStateToIndexedDb(snapshot);
-        writeStateToLocalStorage(snapshot);
       }
     }catch(err){
       console.warn('Impossible de charger depuis le serveur', err);
@@ -4641,102 +4347,32 @@ async function loadPersistedState(){
   ){
     try{
       const desktopResult = await window.cabinetDesktopState.readState();
-        const parsed = desktopResult?.data;
-        if(parsed && typeof parsed === 'object'){
-          const loadedClients = Array.isArray(parsed?.clients)
-          ? parsed.clients.map(client=>normalizeClient(client, { deep: false })).filter(Boolean)
-          : [];
-        const loadedUsers = Array.isArray(parsed?.users)
-          ? parsed.users.map(normalizeUser).filter(Boolean)
-          : [];
-        const loadedSalleAssignments = normalizeSalleAssignments(parsed?.salleAssignments);
-        const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
-          ? parsed.audienceDraft
-          : {};
-        const loadedRecycleBin = normalizeRecycleBinEntries(parsed?.recycleBin);
-        const loadedRecycleArchive = normalizeRecycleArchiveEntries(parsed?.recycleArchive);
-        const nextUsers = ensureManagerUser(loadedUsers);
-        const nextSignature = buildStateSignature(
-          loadedClients,
-          loadedSalleAssignments,
-          nextUsers,
-          loadedDraft,
-          loadedRecycleBin,
-          loadedRecycleArchive
-        );
-        if(nextSignature && nextSignature === lastPersistedStateSignature){
+      const parsed = desktopResult?.data;
+      if(parsed && typeof parsed === 'object'){
+        const normalizedState = normalizePersistedStateSource(parsed);
+        if(normalizedState.signature && normalizedState.signature === lastPersistedStateSignature){
           return false;
         }
-
-        AppState.clients = loadedClients;
-        AppState.salleAssignments = loadedSalleAssignments;
-        USERS = nextUsers;
-        markAudienceRowsCacheDirty();
-        audienceDraft = loadedDraft;
-        AppState.recycleBin = loadedRecycleBin;
-        AppState.recycleArchive = loadedRecycleArchive;
-        lastPersistedStateSignature = buildStateSignature(
-          AppState.clients,
-          AppState.salleAssignments,
-          USERS,
-          audienceDraft,
-          AppState.recycleBin,
-          AppState.recycleArchive
-        );
-        syncCurrentUserFromUsers();
-        const snapshot = buildAppStatePayload();
-        await writeStateToIndexedDb(snapshot);
-        writeStateToLocalStorage(snapshot);
-        setSyncStatus('ok', 'Etat charge depuis appsavocat.json');
+        await applyPersistedStateSource(normalizedState, {
+          writeIndexedDb: true,
+          writeLocalStorage: true,
+          syncStatusMessage: 'Etat charge depuis appsavocat.json'
+        });
         return true;
       }
-  }catch(err){
-    console.warn('Impossible de charger appsavocat.json', err);
-  }
+    }catch(err){
+      console.warn('Impossible de charger appsavocat.json', err);
+    }
   }
 
   const indexedState = await readStateFromIndexedDb();
   if(indexedState && typeof indexedState === 'object'){
-    const loadedClients = Array.isArray(indexedState?.clients)
-      ? indexedState.clients.map(client=>normalizeClient(client, { deep: false })).filter(Boolean)
-      : [];
-    const loadedUsers = Array.isArray(indexedState?.users)
-      ? indexedState.users.map(normalizeUser).filter(Boolean)
-      : [];
-    const loadedSalleAssignments = normalizeSalleAssignments(indexedState?.salleAssignments);
-    const loadedDraft = indexedState?.audienceDraft && typeof indexedState.audienceDraft === 'object'
-      ? indexedState.audienceDraft
-      : {};
-    const loadedRecycleBin = normalizeRecycleBinEntries(indexedState?.recycleBin);
-    const loadedRecycleArchive = normalizeRecycleArchiveEntries(indexedState?.recycleArchive);
-    const nextUsers = ensureManagerUser(loadedUsers);
-    const nextSignature = buildStateSignature(
-      loadedClients,
-      loadedSalleAssignments,
-      nextUsers,
-      loadedDraft,
-      loadedRecycleBin,
-      loadedRecycleArchive
-    );
-    if(nextSignature && nextSignature !== lastPersistedStateSignature){
-      AppState.clients = loadedClients;
-      AppState.salleAssignments = loadedSalleAssignments;
-      USERS = nextUsers;
-      markAudienceRowsCacheDirty();
-      audienceDraft = loadedDraft;
-      AppState.recycleBin = loadedRecycleBin;
-      AppState.recycleArchive = loadedRecycleArchive;
-      lastPersistedStateSignature = buildStateSignature(
-        AppState.clients,
-        AppState.salleAssignments,
-        USERS,
-        audienceDraft,
-        AppState.recycleBin,
-        AppState.recycleArchive
-      );
-      syncCurrentUserFromUsers();
-      writeStateToLocalStorage(buildAppStatePayload());
-      setSyncStatus('ok', 'Etat charge depuis IndexedDB');
+    const normalizedState = normalizePersistedStateSource(indexedState);
+    if(normalizedState.signature && normalizedState.signature !== lastPersistedStateSignature){
+      await applyPersistedStateSource(normalizedState, {
+        writeLocalStorage: true,
+        syncStatusMessage: 'Etat charge depuis IndexedDB'
+      });
       return true;
     }
   }
@@ -4746,47 +4382,11 @@ async function loadPersistedState(){
     const raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return false;
     const parsed = JSON.parse(raw);
-    const loadedClients = Array.isArray(parsed?.clients)
-      ? parsed.clients.map(client=>normalizeClient(client, { deep: false })).filter(Boolean)
-      : [];
-    const loadedUsers = Array.isArray(parsed?.users)
-      ? parsed.users.map(normalizeUser).filter(Boolean)
-      : [];
-    const loadedSalleAssignments = normalizeSalleAssignments(parsed?.salleAssignments);
-    const loadedDraft = parsed?.audienceDraft && typeof parsed.audienceDraft === 'object'
-      ? parsed.audienceDraft
-      : {};
-    const loadedRecycleBin = normalizeRecycleBinEntries(parsed?.recycleBin);
-    const loadedRecycleArchive = normalizeRecycleArchiveEntries(parsed?.recycleArchive);
-    const nextUsers = ensureManagerUser(loadedUsers);
-    const nextSignature = buildStateSignature(
-      loadedClients,
-      loadedSalleAssignments,
-      nextUsers,
-      loadedDraft,
-      loadedRecycleBin,
-      loadedRecycleArchive
-    );
-    if(nextSignature && nextSignature === lastPersistedStateSignature){
+    const normalizedState = normalizePersistedStateSource(parsed);
+    if(normalizedState.signature && normalizedState.signature === lastPersistedStateSignature){
       return false;
     }
-
-    AppState.clients = loadedClients;
-    AppState.salleAssignments = loadedSalleAssignments;
-    USERS = nextUsers;
-    markAudienceRowsCacheDirty();
-    audienceDraft = loadedDraft;
-    AppState.recycleBin = loadedRecycleBin;
-    AppState.recycleArchive = loadedRecycleArchive;
-    lastPersistedStateSignature = buildStateSignature(
-      AppState.clients,
-      AppState.salleAssignments,
-      USERS,
-      audienceDraft,
-      AppState.recycleBin,
-      AppState.recycleArchive
-    );
-    syncCurrentUserFromUsers();
+    await applyPersistedStateSource(normalizedState);
     return true;
   }catch(err){
     console.warn('Etat local corrompu, utilisation des valeurs par défaut', err);
@@ -6116,15 +5716,9 @@ async function applyExcelImport(payload, options = {}){
     }
   }
 
-  markAudienceRowsCacheDirty();
+  handleDossierDataChange({ audience: true });
   await persistAppStateNow();
-  renderClients();
-  renderDashboard();
-  updateClientDropdown();
-  renderSuivi();
-  renderAudience();
-  renderDiligence();
-  renderEquipe();
+  refreshPrimaryViews();
   const issuesText = buildExcelImportIssueMessage(importIgnoredRows);
   const summaryLines = [
     `Import terminé.`,
@@ -7366,22 +6960,15 @@ async function addDossier(){
     const dossierRequiresAudienceRefresh = previousAudienceImpact || dossierHasAudienceImpact(dossier);
     if(dossierRequiresAudienceRefresh){
       reconcileAudienceOrphanDossiers();
-    }else{
-      markNonAudienceDossierCachesDirty();
     }
+    handleDossierDataChange({ audience: dossierRequiresAudienceRefresh });
     if(dossierPatch){
       await persistDossierPatchNow(dossierPatch, { source: 'dossier' });
     }else{
       queuePersistAppState();
     }
 
-    renderSuivi();
-    renderDashboard();
-    renderClients();
-    renderAudience();
-    renderDiligence();
-    resetCreationForm();
-    showView('suivi');
+    refreshPrimaryViews({ resetCreationForm: true, showView: 'suivi' });
   }catch(err){
     console.error(err);
     alert('Erreur pendant la sauvegarde du dossier');
@@ -7456,83 +7043,6 @@ function downloadFile(index){
 function removeFile(index){
   uploadedFiles.splice(index, 1);
   renderFileList();
-}
-
-// ================== SUIVI ==================
-function renderSuivi(options = {}){
-  if(!shouldRenderDeferredSection('suivi', options)) return;
-  const q = $('filterGlobal')?.value?.toLowerCase() || '';
-  const suiviFilterKey = [q, filterSuiviProcedure, filterSuiviTribunal].join('||');
-  syncPaginationFilterState('suivi', suiviFilterKey);
-  const suiviBody = $('suiviBody');
-  if(!suiviBody) return;
-  suiviBody.innerHTML='';
-  if(!isManager() && getVisibleClients().length === 0){
-    suiviVirtualRows = [];
-    suiviVirtualLastRange = { start: -1, end: -1 };
-    suiviBody.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
-    renderPagination('suivi', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
-    return;
-  }
-  const base = getSuiviBaseRowsCached();
-  suiviTribunalAliasMap = base.tribunalState.aliasMap;
-  const noProcedureFilter = filterSuiviProcedure === 'all';
-  const noTribunalFilter = filterSuiviTribunal === 'all';
-  const noSearchFilter = !q;
-  let sortedRows = [];
-  if(base === suiviFilteredRowsCacheSource && suiviFilterKey === suiviFilteredRowsCacheKey){
-    sortedRows = suiviFilteredRowsCacheOutput;
-  }else if(noProcedureFilter && noTribunalFilter && noSearchFilter){
-    sortedRows = base.sortedDefaultRows;
-    suiviFilteredRowsCacheSource = base;
-    suiviFilteredRowsCacheKey = suiviFilterKey;
-    suiviFilteredRowsCacheOutput = sortedRows;
-  }else{
-    const filteredRows = [];
-    base.rawRows.forEach(row=>{
-      const tribunalKeys = row.tribunalKeys || [];
-      if(!noProcedureFilter && !row.procSet.has(filterSuiviProcedure)) return;
-      if(!noTribunalFilter && !tribunalKeys.includes(filterSuiviTribunal)) return;
-      if(!noSearchFilter){
-        const haystack = row.__suiviHaystack
-          || (row.__suiviHaystack = buildSuiviSearchHaystack(
-            row.c.name,
-            row.d,
-            row.procSource,
-            (row.tribunalList && row.tribunalList.length) ? row.tribunalList : row.tribunalLabels
-          ));
-        if(!haystack.includes(q)) return;
-      }
-      filteredRows.push(row);
-    });
-
-    const duplicatePairCounts = new Map();
-    filteredRows.forEach(row=>{
-      const key = buildSuiviRefDebiteurKey(row);
-      if(!key) return;
-      duplicatePairCounts.set(key, (duplicatePairCounts.get(key) || 0) + 1);
-    });
-    sortedRows = filteredRows
-      .slice()
-      .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
-    suiviFilteredRowsCacheSource = base;
-    suiviFilteredRowsCacheKey = suiviFilterKey;
-    suiviFilteredRowsCacheOutput = sortedRows;
-  }
-  const pageData = paginateRows(sortedRows, 'suivi');
-  const useVirtual = pageData.rows.length >= SUIVI_VIRTUAL_MIN_ROWS;
-  suiviVirtualRows = pageData.rows;
-  suiviVirtualLastRange = { start: -1, end: -1 };
-  if(!pageData.rows.length){
-    suiviBody.innerHTML = '<tr><td colspan="9" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
-  }else if(useVirtual){
-    renderSuiviVirtualWindow(true);
-  }else{
-    suiviBody.innerHTML = pageData.rows.map(renderSuiviRowHtml).join('');
-  }
-  renderPagination('suivi', pageData);
-
-  syncSuiviFilterOptions(base.rowsMeta);
 }
 
 function getSuiviBaseRowsCached(){
@@ -8422,103 +7932,6 @@ function syncDiligenceOrdonnanceFilter(rows){
   diligenceFilterOrdonnanceRowsRef = rows;
 }
 
-function renderDiligence(options = {}){
-  if(!shouldRenderDeferredSection('diligence', options)) return;
-  const diligenceQuery = $('diligenceSearchInput')?.value?.toLowerCase() || '';
-  syncPaginationFilterState(
-    'diligence',
-    [
-      diligenceQuery,
-      filterDiligenceProcedure,
-      filterDiligenceSort,
-      filterDiligenceDelegation,
-      filterDiligenceOrdonnance,
-      filterDiligenceTribunal
-    ].join('||')
-  );
-  const body = $('diligenceBody');
-  const count = $('diligenceCount');
-  const headRow = $('diligenceHeadRow');
-  if(!body) return;
-  const allRows = getDiligenceRows();
-  syncDiligencePrintSelection(allRows);
-  syncDiligenceProcedureFilter(allRows);
-  syncDiligenceSortFilter(allRows);
-  syncDiligenceDelegationFilter(allRows);
-  syncDiligenceOrdonnanceFilter(allRows);
-  syncDiligenceTribunalFilter(allRows);
-  const rows = getFilteredDiligenceRows(allRows);
-  const showInjonctionColumns = rows.some(row=>String(row?.procedure || '').trim() === 'Injonction');
-
-  if(headRow){
-    if(showInjonctionColumns){
-      headRow.innerHTML = `
-        <th>Client</th>
-        <th>Débiteur</th>
-        <th>Date dépôt</th>
-        <th>Référence dossier</th>
-        <th>Ordonnance</th>
-        <th>Notification N°</th>
-        <th>Statut notification</th>
-        <th>Date notification</th>
-        <th>Certificat non appel</th>
-        <th>Execution N°</th>
-        <th>Ville</th>
-        <th>Délégation</th>
-        <th>Huissier</th>
-        <th>Sort</th>
-        <th>Tribunal</th>
-      `;
-    }else{
-      headRow.innerHTML = `
-        <th>Client</th>
-        <th>Débiteur</th>
-        <th>Date dépôt</th>
-        <th>Référence dossier</th>
-        <th>Ordonnance</th>
-        <th>Execution N°</th>
-        <th>Ville</th>
-        <th>Délégation</th>
-        <th>Huissier</th>
-        <th>Sort</th>
-        <th>Tribunal</th>
-      `;
-    }
-  }
-
-  if(count){
-    const labels = [];
-    labels.push(filterDiligenceProcedure === 'all' ? 'toutes les procédures' : `procédure: ${filterDiligenceProcedure}`);
-    labels.push(filterDiligenceSort === 'all' ? 'tous les sorts' : `sort: ${filterDiligenceSort}`);
-    labels.push(filterDiligenceDelegation === 'all' ? 'toutes les délégations' : `délégation: ${filterDiligenceDelegation}`);
-    labels.push(filterDiligenceOrdonnance === 'all' ? 'toutes les ordonnances' : `ordonnance: ${filterDiligenceOrdonnance}`);
-    labels.push(filterDiligenceTribunal === 'all' ? 'tous les tribunaux' : `tribunal: ${filterDiligenceTribunal}`);
-    const label = labels.join(', ');
-    count.textContent = `${rows.length} ligne(s) diligence (${label})`;
-  }
-
-  if(!rows.length){
-    diligenceVirtualRows = [];
-    diligenceVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = `<tr><td colspan="${showInjonctionColumns ? 15 : 11}" class="diligence-empty">Aucun dossier SFDC/S-bien/Injonction trouvé.</td></tr>`;
-    renderPagination('diligence', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
-    return;
-  }
-
-  const pageData = paginateRows(rows, 'diligence');
-  const useVirtual = pageData.rows.length >= DILIGENCE_VIRTUAL_MIN_ROWS;
-  diligenceVirtualRows = pageData.rows;
-  diligenceVirtualShowInjonctionColumns = showInjonctionColumns;
-  diligenceVirtualLastRange = { start: -1, end: -1 };
-  if(useVirtual){
-    renderDiligenceVirtualWindow(true);
-  }else{
-    body.innerHTML = pageData.rows.map(row=>renderDiligenceRowHtml(row, showInjonctionColumns)).join('');
-    applyDiligenceAutoSizing(body);
-  }
-  renderPagination('diligence', pageData);
-}
-
 function normalizeDiligenceAttOk(value){
   const raw = String(value ?? '').trim().toLowerCase();
   if(!raw) return '';
@@ -8711,8 +8124,7 @@ function updateDiligenceField(clientId, dossierIndex, procKey, field, value){
     before: previousValue,
     after: nextValue
   });
-  invalidateDerivedCaches({ audience: true });
-  queueDossierLinkedRenders();
+  handleDossierDataChange({ audience: true, rerenderLinked: true });
   persistDossierReferenceNow(clientId, dossier, { source: 'diligence' }).catch(()=>{});
 }
 
@@ -9353,134 +8765,6 @@ function getDashboardAudienceMetrics(){
   return metrics;
 }
 
-function getDashboardCalendarEvents(){
-  const userKey = getCurrentClientAccessCacheKey();
-  if(
-    dashboardCalendarEventsCache
-    && dashboardCalendarEventsCacheVersion === audienceRowsRawDataVersion
-    && dashboardCalendarEventsCacheUserKey === userKey
-  ){
-    return dashboardCalendarEventsCache;
-  }
-  const byDate = {};
-  const audienceRows = getAudienceRowsForSidebar();
-  audienceRows.forEach(row=>{
-    const dt = parseDateForAge(row?.draft?.dateAudience || row?.p?.audience || '');
-    if(!dt) return;
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const day = String(dt.getDate()).padStart(2, '0');
-    const key = `${y}-${m}-${day}`;
-    if(!byDate[key]) byDate[key] = [];
-    byDate[key].push({
-      client: row?.c?.name || '-',
-      procedure: row?.procKey || '-',
-      debiteur: row?.d?.debiteur || '-'
-    });
-  });
-  dashboardCalendarEventsCache = byDate;
-  dashboardCalendarEventsCacheVersion = audienceRowsRawDataVersion;
-  dashboardCalendarEventsCacheUserKey = userKey;
-  return byDate;
-}
-
-function renderDashboardCalendar(){
-  const label = $('calendarMonthLabel');
-  const grid = $('dashboardCalendarGrid');
-  if(!label || !grid) return;
-
-  const year = dashboardCalendarCursor.getFullYear();
-  const month = dashboardCalendarCursor.getMonth();
-  label.textContent = dashboardCalendarCursor.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-
-  const eventsByDate = getDashboardCalendarEvents();
-  const headers = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
-  const firstDay = new Date(year, month, 1);
-  const firstWeekday = (firstDay.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const today = new Date();
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-  let html = headers.map(h=>`<div class="dashboard-calendar-weekday">${h}</div>`).join('');
-  for(let i = 0; i < firstWeekday; i++){
-    html += '<div class="dashboard-calendar-day is-empty"></div>';
-  }
-  for(let day = 1; day <= daysInMonth; day++){
-    const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const events = eventsByDate[key] || [];
-    const classes = ['dashboard-calendar-day'];
-    if(key === todayKey) classes.push('is-today');
-    const tooltip = events
-      .map(e=>`${e.client} / ${e.procedure} / ${e.debiteur}`)
-      .join(' | ');
-    html += `
-      <div class="${classes.join(' ')}" title="${escapeAttr(tooltip)}">
-        <span class="day-num">${day}</span>
-        ${key === todayKey && events.length ? `<span class="day-count">${events.length}</span>` : ''}
-      </div>
-    `;
-  }
-  grid.innerHTML = html;
-}
-
-function queueDashboardCalendarRender(){
-  if(dashboardCalendarRenderTimer) return;
-  const render = ()=>{
-    dashboardCalendarRenderTimer = null;
-    renderDashboardCalendar();
-  };
-  if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-    dashboardCalendarRenderTimer = window.requestIdleCallback(render, { timeout: 1200 });
-    return;
-  }
-  dashboardCalendarRenderTimer = setTimeout(render, 120);
-}
-
-function queueDashboardHeavyRender(options = {}){
-  if(dashboardHeavyRenderTimer) return;
-  const render = ()=>{
-    dashboardHeavyRenderTimer = null;
-    const snapshot = getDashboardSnapshot();
-    const audienceMetrics = options.includeAudienceMetrics === false
-      ? null
-      : getDashboardAudienceMetrics();
-    animateDashboardMetric('dossiersEnCours', snapshot.enCours);
-    animateDashboardMetric('dossiersTermines', snapshot.clotureCount);
-    if($('dossiersAttSort')) animateDashboardMetric('dossiersAttSort', audienceMetrics ? audienceMetrics.attSortCount : 0);
-    if($('audienceErrorsCount')) animateDashboardMetric('audienceErrorsCount', audienceMetrics ? audienceMetrics.audienceErrors : 0);
-    if(options.includeAudienceMetrics !== false){
-      queueDashboardCalendarRender();
-    }
-  };
-  const delayMs = Math.max(0, Number(options?.delayMs) || 0);
-  if(delayMs > 0){
-    dashboardHeavyRenderTimer = setTimeout(()=>{
-      dashboardHeavyRenderTimer = null;
-      if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-        dashboardHeavyRenderTimer = window.requestIdleCallback(render, { timeout: 2000 });
-        return;
-      }
-      render();
-    }, delayMs);
-    return;
-  }
-  if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-    dashboardHeavyRenderTimer = window.requestIdleCallback(render, { timeout: 1500 });
-    return;
-  }
-  dashboardHeavyRenderTimer = setTimeout(render, 80);
-}
-
-// ================== DASHBOARD ==================
-function renderDashboard(options = {}){
-  if(!shouldRenderDeferredSection('dashboard', options)) return;
-  animateDashboardMetric('totalClients', getVisibleClients().length, options);
-  queueDashboardHeavyRender({
-    delayMs: options.deferHeavy ? 1800 : 0,
-    includeAudienceMetrics: options.includeAudienceMetrics
-  });
-}
-
 function animateDashboardMetric(id, nextValue, options = {}){
   const el = $(id);
   if(!el) return;
@@ -9750,119 +9034,6 @@ function setAllVisibleAudienceRowsForPrint(checked){
   }
   queueAudienceCheckedCountRender();
   renderAudience();
-}
-
-function renderAudience(options = {}){
-  if(!shouldRenderDeferredSection('audience', options)) return;
-  const audienceQuery = $('filterAudience')?.value?.toLowerCase() || '';
-  syncPaginationFilterState(
-    'audience',
-    [
-      audienceQuery,
-      filterAudienceColor,
-      filterAudienceProcedure,
-      filterAudienceTribunal,
-      filterAudienceDate,
-      filterAudienceErrorsOnly ? '1' : '0',
-      selectedAudienceColor
-    ].join('||')
-  );
-  const body = $('audienceBody');
-  if(!body){
-    queueSidebarSalleSessionsRender();
-    return;
-  }
-  body.innerHTML='';
-  if(!isManager() && getVisibleClients().length === 0){
-    audienceVirtualRows = [];
-    audienceVirtualDuplicateKeySet = new Set();
-    audienceVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
-    renderPagination('audience', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
-    updateAudienceCheckedCount();
-    queueSidebarSalleSessionsRender();
-    return;
-  }
-
-  const allRows = getAudienceRows();
-  const selectionPruned = pruneAudiencePrintSelection(allRows);
-  syncAudienceFilterOptions(allRows);
-  const duplicateKeySet = getAudienceDuplicateKeySet(allRows);
-  const rows = getFilteredAudienceRows(allRows);
-  lastAudienceRenderedRows = rows;
-  const pageData = paginateRows(rows, 'audience');
-  const useVirtual = shouldUseAudienceVirtualization(pageData.rows.length);
-  audienceVirtualRows = pageData.rows;
-  audienceVirtualDuplicateKeySet = duplicateKeySet;
-  audienceVirtualLastRange = { start: -1, end: -1 };
-  if(!pageData.rows.length){
-    body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
-  }else if(useVirtual){
-    renderAudienceVirtualWindow(true);
-  }else{
-    body.innerHTML = pageData.rows.map(row=>renderAudienceRowHtml(row, duplicateKeySet)).join('');
-  }
-  renderPagination('audience', pageData);
-  if(selectionPruned){
-    queueAudienceCheckedCountRender();
-  }else{
-    updateAudienceCheckedCount();
-  }
-  queueSidebarSalleSessionsRender();
-}
-
-function shouldUseAudienceVirtualization(rowCount){
-  if(Number(rowCount) < AUDIENCE_VIRTUAL_MIN_ROWS) return false;
-  const container = $('audienceTableContainer');
-  if(!container) return false;
-  if(typeof window === 'undefined' || typeof window.getComputedStyle !== 'function'){
-    return false;
-  }
-  const style = window.getComputedStyle(container);
-  const overflowY = String(style.overflowY || '').toLowerCase();
-  const maxHeight = String(style.maxHeight || '').trim().toLowerCase();
-  const height = String(style.height || '').trim().toLowerCase();
-  const hasConstrainedHeight = (maxHeight && maxHeight !== 'none') || (height && height !== 'auto');
-  if(!hasConstrainedHeight) return false;
-  return overflowY === 'auto' || overflowY === 'scroll';
-}
-
-function captureAudienceScrollState(){
-  const container = $('audienceTableContainer');
-  return {
-    containerTop: container ? Number(container.scrollTop) || 0 : null,
-    containerLeft: container ? Number(container.scrollLeft) || 0 : null,
-    pageX: (typeof window !== 'undefined' ? Number(window.scrollX) : 0) || 0,
-    pageY: (typeof window !== 'undefined' ? Number(window.scrollY) : 0) || 0
-  };
-}
-
-function restoreAudienceScrollState(snapshot){
-  if(!snapshot || typeof snapshot !== 'object') return;
-  const container = $('audienceTableContainer');
-  if(container && Number.isFinite(snapshot.containerTop)){
-    container.scrollTop = Math.max(0, snapshot.containerTop);
-    if(Number.isFinite(snapshot.containerLeft)){
-      container.scrollLeft = Math.max(0, snapshot.containerLeft);
-    }
-    if(Array.isArray(audienceVirtualRows) && audienceVirtualRows.length >= AUDIENCE_VIRTUAL_MIN_ROWS){
-      queueAudienceVirtualRender();
-    }
-  }
-  if(typeof window !== 'undefined' && typeof window.scrollTo === 'function'){
-    window.scrollTo(snapshot.pageX || 0, snapshot.pageY || 0);
-  }
-}
-
-function renderAudienceKeepingPosition(){
-  const snapshot = captureAudienceScrollState();
-  renderAudience();
-  const apply = ()=>restoreAudienceScrollState(snapshot);
-  if(typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'){
-    window.requestAnimationFrame(()=>window.requestAnimationFrame(apply));
-    return;
-  }
-  setTimeout(apply, 0);
 }
 
 function getAudienceDateDepotDisplayValue(row){
