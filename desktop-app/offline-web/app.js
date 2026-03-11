@@ -104,7 +104,7 @@ const INDEXED_DB_STATE_KEY = 'app_state';
 const API_BASE_STORAGE_KEY = 'applicationversion1-api-base-v1';
 const APP_INSTANCE_ID = `cabinet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const AUTO_BACKUP_STORAGE_KEY = 'cabinet-avocat-auto-backups-v1';
-let API_BASE = CONFIGURED_API_BASE || 'http://127.0.0.1:3000/api';
+let API_BASE = 'http://127.0.0.1:3000/api';
 let API_BASE_RESOLVED = false;
 let persistTimer = null;
 let queuedPersistPayload = null;
@@ -348,7 +348,7 @@ const DILIGENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_COLOR_BATCH_MS = 80;
 const SEARCH_CACHE_WARMUP_CHUNK_SIZE = 240;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
-const DEFAULT_SHARED_API_BASE = 'http://172.20.10.3:3000/api';
+const DEFAULT_SHARED_API_BASE = '';
 const CONFIGURED_API_BASE = (() => {
   if(typeof window === 'undefined') return DEFAULT_SHARED_API_BASE;
   const query = new URLSearchParams(window.location.search);
@@ -363,6 +363,9 @@ const CONFIGURED_API_BASE = (() => {
   }
   return DEFAULT_SHARED_API_BASE;
 })();
+if(CONFIGURED_API_BASE){
+  API_BASE = CONFIGURED_API_BASE;
+}
 const LOCAL_ONLY_MODE = (() => {
   if(typeof window === 'undefined') return false;
   const query = new URLSearchParams(window.location.search);
@@ -376,8 +379,7 @@ const LOCAL_ONLY_MODE = (() => {
   }
   if(typeof window.CABINET_LOCAL_ONLY === 'boolean') return window.CABINET_LOCAL_ONLY;
   if(CONFIGURED_API_BASE) return false;
-  if(IS_FILE_PROTOCOL) return true;
-  return !!window.cabinetDesktopState;
+  return true;
 })();
 const IS_REMOTE_WEB_HOST = (() => {
   if(typeof window === 'undefined' || !window.location) return false;
@@ -7115,8 +7117,7 @@ function setupEvents(){
     if(!file) return;
     handleExcelImportFile(file, {
       importDossiers: true,
-      importAudiences: false,
-      clearAudienceOnDossierOnly: true
+      importAudiences: false
     }).catch(err=>console.error(err));
     e.target.value = '';
   });
@@ -10516,8 +10517,7 @@ function hasAudienceProcedureData(procData, draftData){
     d.sort,
     p.sort,
     d.instruction,
-    p.instruction,
-    p.tribunal
+    p.instruction
   ];
   return fields.some(value=>String(value || '').trim().length > 0);
 }

@@ -16,6 +16,38 @@ function buildSeedUsers(){
       role: 'manager',
       clientIds: [],
       mustChangePassword: true
+    },
+    {
+      id: 2,
+      username: 'walid',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'manager',
+      clientIds: [],
+      mustChangePassword: true
+    },
+    {
+      id: 3,
+      username: 'najwa',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'admin',
+      clientIds: [],
+      mustChangePassword: true
+    },
+    {
+      id: 4,
+      username: 'doha',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'admin',
+      clientIds: [],
+      mustChangePassword: true
+    },
+    {
+      id: 5,
+      username: 'amine',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'manager',
+      clientIds: [],
+      mustChangePassword: true
     }
   ];
 
@@ -348,6 +380,24 @@ const DILIGENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_COLOR_BATCH_MS = 80;
 const SEARCH_CACHE_WARMUP_CHUNK_SIZE = 240;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
+const DEFAULT_SHARED_API_BASE = '';
+const CONFIGURED_API_BASE = (() => {
+  if(typeof window === 'undefined') return DEFAULT_SHARED_API_BASE;
+  const query = new URLSearchParams(window.location.search);
+  const queryApiBase = String(query.get('apiBase') || '').trim();
+  if(queryApiBase) return queryApiBase;
+  if(typeof window.CABINET_API_BASE === 'string' && window.CABINET_API_BASE.trim()){
+    return window.CABINET_API_BASE.trim();
+  }
+  const metaApiBase = document.querySelector('meta[name="api-base"]')?.getAttribute('content');
+  if(typeof metaApiBase === 'string' && metaApiBase.trim()){
+    return metaApiBase.trim();
+  }
+  return DEFAULT_SHARED_API_BASE;
+})();
+if(CONFIGURED_API_BASE){
+  API_BASE = CONFIGURED_API_BASE;
+}
 const LOCAL_ONLY_MODE = (() => {
   if(typeof window === 'undefined') return false;
   const query = new URLSearchParams(window.location.search);
@@ -360,8 +410,8 @@ const LOCAL_ONLY_MODE = (() => {
     return !['0', 'false', 'no', 'off'].includes(rawFlag);
   }
   if(typeof window.CABINET_LOCAL_ONLY === 'boolean') return window.CABINET_LOCAL_ONLY;
-  if(IS_FILE_PROTOCOL) return true;
-  return !!window.cabinetDesktopState;
+  if(CONFIGURED_API_BASE) return false;
+  return true;
 })();
 const IS_REMOTE_WEB_HOST = (() => {
   if(typeof window === 'undefined' || !window.location) return false;
@@ -7099,8 +7149,7 @@ function setupEvents(){
     if(!file) return;
     handleExcelImportFile(file, {
       importDossiers: true,
-      importAudiences: false,
-      clearAudienceOnDossierOnly: true
+      importAudiences: false
     }).catch(err=>console.error(err));
     e.target.value = '';
   });
@@ -10500,8 +10549,7 @@ function hasAudienceProcedureData(procData, draftData){
     d.sort,
     p.sort,
     d.instruction,
-    p.instruction,
-    p.tribunal
+    p.instruction
   ];
   return fields.some(value=>String(value || '').trim().length > 0);
 }

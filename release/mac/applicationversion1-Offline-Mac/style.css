@@ -526,6 +526,17 @@ td .btn-primary, td .btn-danger{
 }
 td .btn-primary{margin-right:6px}
 
+#clientSection tbody td.client-actions-cell{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px;
+}
+#clientSection tbody td.client-actions-cell .btn-primary,
+#clientSection tbody td.client-actions-cell .btn-danger{
+  margin-right:0;
+}
+
 /* ================== TABLE ================== */
 .table-container{overflow:auto}
 table{width:100%;border-collapse:collapse}
