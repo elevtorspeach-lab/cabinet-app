@@ -1,10 +1,11 @@
 // ================== STATE ==================
 const AppState = { clients: [], salleAssignments: [], recycleBin: [], recycleArchive: [] };
 const DEFAULT_MANAGER_USERNAME = 'manager';
-const DEFAULT_MANAGER_PASSWORD = 'Araqi@2026!';
-const DEFAULT_SEEDED_PASSWORD = 'Araqi@2026!';
+const DEFAULT_MANAGER_PASSWORD = '1234';
+const DEFAULT_SEEDED_PASSWORD = '1234';
 const MIN_PASSWORD_LENGTH = 10;
 const PASSWORD_HASH_VERSION = 'sha256-v1';
+const ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD = true;
 
 function buildSeedUsers(){
   const users = [
@@ -2076,6 +2077,7 @@ function getPasswordPolicyMessage(){
 
 function passwordNeedsReset(user, rawPassword = ''){
   const candidate = String(rawPassword || user?.password || '').trim();
+  if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && isDefaultPasswordValue(candidate)) return false;
   if(user?.mustChangePassword) return true;
   return !isPasswordStrong(candidate, user?.username || '');
 }
@@ -9256,7 +9258,7 @@ async function saveTeamUser(){
   const role = normalizeUserRole($('teamRole')?.value || 'client');
   if(!username) return alert('Username obligatoire');
   if(!editingTeamUserId && !password) return alert('Mot de passe obligatoire');
-  if(password && !isPasswordStrong(password, username)){
+  if(password && !ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && !isPasswordStrong(password, username)){
     return alert(getPasswordPolicyMessage());
   }
 
