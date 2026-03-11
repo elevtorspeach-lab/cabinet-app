@@ -7538,6 +7538,32 @@ async function login(){
       break;
     }
   }
+  if(
+    !u
+    && usernameInput === DEFAULT_MANAGER_USERNAME
+    && passwordInput === normalizeLoginPassword(DEFAULT_MANAGER_PASSWORD)
+  ){
+    const managerIdx = USERS.findIndex(candidate=>
+      String(candidate?.username || '').trim().toLowerCase() === DEFAULT_MANAGER_USERNAME
+    );
+    if(managerIdx >= 0){
+      const recoveredManager = {
+        ...USERS[managerIdx],
+        username: DEFAULT_MANAGER_USERNAME,
+        role: 'manager',
+        password: DEFAULT_MANAGER_PASSWORD,
+        passwordHash: '',
+        passwordVersion: '',
+        passwordUpdatedAt: '',
+        mustChangePassword: false
+      };
+      USERS[managerIdx] = recoveredManager;
+      u = recoveredManager;
+      persistStateSliceNow('users', USERS, { source: 'manager-recovery' }).catch((err)=>{
+        console.warn('Impossible de persister la récupération du compte manager', err);
+      });
+    }
+  }
   if(!u){ $('errorMsg').style.display='block'; return; }
   if(!ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && passwordNeedsReset(u, passwordInput)){
     const changed = await promptPasswordResetForUser(u);
