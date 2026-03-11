@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs/promises');
 
 const STATE_FILE_NAME = 'Cabinet-Maitre-Araqi-Houssaini.json';
+const SHARED_SERVER_API_BASE = 'http://172.20.10.3:3000/api';
 
 function getDesktopStateFilePath() {
   return path.join(app.getPath('downloads'), STATE_FILE_NAME);
@@ -65,7 +66,12 @@ async function createWindow() {
   });
 
   const appIndexPath = path.join(__dirname, 'offline-web', 'index.html');
-  await win.loadFile(appIndexPath);
+  await win.loadFile(appIndexPath, {
+    query: {
+      apiBase: SHARED_SERVER_API_BASE,
+      localOnly: '0'
+    }
+  });
 
   win.once('ready-to-show', () => {
     win.show();

@@ -16,6 +16,38 @@ function buildSeedUsers(){
       role: 'manager',
       clientIds: [],
       mustChangePassword: true
+    },
+    {
+      id: 2,
+      username: 'walid',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'manager',
+      clientIds: [],
+      mustChangePassword: true
+    },
+    {
+      id: 3,
+      username: 'najwa',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'admin',
+      clientIds: [],
+      mustChangePassword: true
+    },
+    {
+      id: 4,
+      username: 'doha',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'admin',
+      clientIds: [],
+      mustChangePassword: true
+    },
+    {
+      id: 5,
+      username: 'amine',
+      password: DEFAULT_SEEDED_PASSWORD,
+      role: 'manager',
+      clientIds: [],
+      mustChangePassword: true
     }
   ];
 
@@ -104,7 +136,7 @@ const INDEXED_DB_STATE_KEY = 'app_state';
 const API_BASE_STORAGE_KEY = 'applicationversion1-api-base-v1';
 const APP_INSTANCE_ID = `cabinet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const AUTO_BACKUP_STORAGE_KEY = 'cabinet-avocat-auto-backups-v1';
-let API_BASE = 'http://127.0.0.1:3000/api';
+let API_BASE = CONFIGURED_API_BASE || 'http://127.0.0.1:3000/api';
 let API_BASE_RESOLVED = false;
 let persistTimer = null;
 let queuedPersistPayload = null;
@@ -348,6 +380,21 @@ const DILIGENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_COLOR_BATCH_MS = 80;
 const SEARCH_CACHE_WARMUP_CHUNK_SIZE = 240;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
+const DEFAULT_SHARED_API_BASE = 'http://172.20.10.3:3000/api';
+const CONFIGURED_API_BASE = (() => {
+  if(typeof window === 'undefined') return DEFAULT_SHARED_API_BASE;
+  const query = new URLSearchParams(window.location.search);
+  const queryApiBase = String(query.get('apiBase') || '').trim();
+  if(queryApiBase) return queryApiBase;
+  if(typeof window.CABINET_API_BASE === 'string' && window.CABINET_API_BASE.trim()){
+    return window.CABINET_API_BASE.trim();
+  }
+  const metaApiBase = document.querySelector('meta[name="api-base"]')?.getAttribute('content');
+  if(typeof metaApiBase === 'string' && metaApiBase.trim()){
+    return metaApiBase.trim();
+  }
+  return DEFAULT_SHARED_API_BASE;
+})();
 const LOCAL_ONLY_MODE = (() => {
   if(typeof window === 'undefined') return false;
   const query = new URLSearchParams(window.location.search);
@@ -360,6 +407,7 @@ const LOCAL_ONLY_MODE = (() => {
     return !['0', 'false', 'no', 'off'].includes(rawFlag);
   }
   if(typeof window.CABINET_LOCAL_ONLY === 'boolean') return window.CABINET_LOCAL_ONLY;
+  if(CONFIGURED_API_BASE) return false;
   if(IS_FILE_PROTOCOL) return true;
   return !!window.cabinetDesktopState;
 })();
