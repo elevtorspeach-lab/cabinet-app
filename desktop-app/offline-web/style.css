@@ -1623,6 +1623,16 @@ tr:hover{background:#f1f5f9}
   box-shadow:0 6px 14px rgba(37,99,235,.32);
 }
 
+.audience-selection-helper{
+  padding:10px 14px;
+  border-radius:12px;
+  border:1px solid #dbe4f0;
+  background:#f8fbff;
+  color:#475569;
+  font-size:13px;
+  line-height:1.45;
+}
+
 .audience-filter-row{
   display:flex;
   flex-wrap:wrap;
