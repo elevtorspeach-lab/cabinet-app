@@ -3,7 +3,7 @@ const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 
-const STATE_FILE_NAME = 'applicationversion1.json';
+const STATE_FILE_NAME = 'Cabinet-Maitre-Araqi-Houssaini.json';
 
 function getDesktopStateFilePath() {
   return path.join(app.getPath('downloads'), STATE_FILE_NAME);
@@ -79,7 +79,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   ensureDesktopStateFileExists().catch((err) => {
-    console.warn('Unable to initialize applicationversion1.json', err);
+    console.warn('Unable to initialize Cabinet-Maitre-Araqi-Houssaini.json', err);
   });
 
   ipcMain.handle('desktop-state:get-path', async () => {

@@ -1,4 +1,4 @@
-# Guide d'utilisation - applicationversion1
+# Guide d'utilisation - Cabinet Maitre Araqi Houssaini
 
 ## 1. Objectif de l'application
 
@@ -12,6 +12,7 @@ Cette application sert a gerer:
 - la corbeille et la restauration
 
 Elle peut fonctionner en mode local/offline et conserver les donnees de travail.
+Lors de la premiere connexion, il est recommande de changer le mot de passe.
 
 ## 2. Connexion
 
@@ -19,7 +20,7 @@ Au lancement, l'utilisateur arrive sur l'ecran de connexion.
 
 Compte par defaut:
 - Username: `manager`
-- Mot de passe: `1234`
+- Mot de passe: `Araqi@2026!`
 
 Apres connexion, l'utilisateur accede au menu principal a gauche.
 
@@ -37,8 +38,8 @@ Le menu contient:
 - `Corbeille`
 
 Il contient aussi:
-- `Fichier applicationversion1`
-- `Importer applicationversion1`
+- `Fichier Cabinet Maitre Araqi Houssaini`
+- `Importer Cabinet Maitre Araqi Houssaini`
 - `Deconnecter`
 
 ## 4. Dashboard
@@ -364,16 +365,16 @@ Utiliser cette section avec prudence avant de vider la corbeille.
 
 ## 17. Import / Export
 
-### Import applicationversion1
+### Import Cabinet Maitre Araqi Houssaini
 
 Permet de recharger un fichier de donnees de l'application.
 
 Utilisation:
-1. cliquer sur `Importer applicationversion1`
+1. cliquer sur `Importer Cabinet Maitre Araqi Houssaini`
 2. choisir le fichier `.json`, `.appsavocat` ou `.applicationversion1`
 3. attendre la fin du chargement
 
-### Fichier applicationversion1
+### Fichier Cabinet Maitre Araqi Houssaini
 
 Permet d'ouvrir ou de travailler avec le fichier de donnees local.
 

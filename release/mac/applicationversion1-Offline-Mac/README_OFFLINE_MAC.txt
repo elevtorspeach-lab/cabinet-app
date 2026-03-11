@@ -1,4 +1,4 @@
-applicationversion1 - Version Mac Offline
+Cabinet Maitre Araqi Houssaini - Version Mac Offline
 
 Utilisation:
 1) Dézipper le dossier.

@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-start "applicationversion1" "index.html"
+start "Cabinet Maitre Araqi Houssaini" "index.html"

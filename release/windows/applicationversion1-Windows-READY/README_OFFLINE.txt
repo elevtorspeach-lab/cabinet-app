@@ -1,4 +1,4 @@
-applicationversion1 - Mode Offline (sans serveur)
+Cabinet Maitre Araqi Houssaini - Mode Offline (sans serveur)
 
 Utilisation:
 1) Ouvrir le dossier.

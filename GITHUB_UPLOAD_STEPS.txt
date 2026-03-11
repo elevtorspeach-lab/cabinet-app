@@ -1,10 +1,10 @@
 GitHub quick upload (from project root):
 
-1) Create empty repo on GitHub (example: applicationversion1-offline)
+1) Create empty repo on GitHub (example: cabinet-maitre-araqi-houssaini-offline)
 2) Run:
    git init
    git add .
-   git commit -m "applicationversion1 offline package"
+   git commit -m "Cabinet Maitre Araqi Houssaini offline package"
    git branch -M main
    git remote add origin https://github.com/<YOUR_USER>/<YOUR_REPO>.git
    git push -u origin main
@@ -15,7 +15,7 @@ If repo already exists locally:
    git push
 
 Windows package to publish on GitHub (recommended to avoid installer issues):
-   release/windows/Cabinet-Avocat-Windows-READY/
+   release/windows/applicationversion1-Windows-READY/
 
 Create ZIP before upload:
    cd release/windows

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>applicationversion1</title>
+  <title>Cabinet Maitre Araqi Houssaini</title>
   <link rel="stylesheet" href="vendor/local-icons.css"/>
   <link rel="stylesheet" href="style.css"/>
 </head>
@@ -15,19 +15,19 @@
   <div class="login-orb login-orb-b"></div>
   <div class="login-box">
     <div class="login-badge"><i class="fa-solid fa-shield-halved"></i></div>
-    <h2><i class="fa-solid fa-gavel"></i> applicationversion1</h2>
+    <h2><i class="fa-solid fa-gavel"></i> Cabinet Maitre Araqi Houssaini</h2>
     <p class="login-subtitle">Plateforme sécurisée de gestion des dossiers</p>
 
     <label class="login-label" for="username">Nom d'utilisateur</label>
     <div class="login-input-wrap">
       <i class="fa-regular fa-user"></i>
-      <input type="text" id="username" placeholder="Entrer votre utilisateur"/>
+      <input type="text" id="username" placeholder="Entrer votre utilisateur" autocomplete="username"/>
     </div>
 
     <label class="login-label" for="password">Mot de passe</label>
     <div class="login-input-wrap">
       <i class="fa-solid fa-key"></i>
-      <input type="password" id="password" placeholder="Entrer votre mot de passe"/>
+      <input type="password" id="password" placeholder="Entrer votre mot de passe" autocomplete="current-password"/>
     </div>
 
     <button id="loginBtn" class="btn-success login-submit">Se connecter</button>
@@ -38,7 +38,7 @@
 <!-- APP -->
 <div id="appContent" class="app-content" style="display:none;">
   <div class="sidebar">
-    <h2><i class="fa-solid fa-gavel"></i> applicationversion1</h2>
+    <h2><i class="fa-solid fa-gavel"></i> Cabinet Maitre Araqi Houssaini</h2>
     <div id="syncStatusBadge" class="sync-status is-syncing">
       <span class="dot"></span>
       <span id="syncStatusText">Synchronisation serveur...</span>
@@ -48,11 +48,11 @@
       <span id="syncLiveMetric" class="sync-metric">Live: --</span>
     </div>
     <button id="openDesktopStateFileBtn" class="sidebar-file-btn" type="button">
-      <i class="fa-solid fa-file-lines"></i> Fichier applicationversion1
+      <i class="fa-solid fa-file-lines"></i> Fichier Cabinet Maitre Araqi Houssaini
     </button>
     <input type="file" id="importAppsavocatInput" accept=".json,.appsavocat,.applicationversion1" style="display:none;">
     <button id="importAppsavocatBtn" class="sidebar-file-btn" type="button">
-      <i class="fa-solid fa-file-import"></i> Importer applicationversion1
+      <i class="fa-solid fa-file-import"></i> Importer Cabinet Maitre Araqi Houssaini
     </button>
     <div id="dashboardLink" class="nav-link active"><i class="fa-solid fa-chart-pie"></i> Dashboard</div>
     <div id="clientsLink" class="nav-link"><i class="fa-solid fa-users"></i> Clients</div>
@@ -394,11 +394,12 @@
           <div class="pro-body">
             <div class="form-group">
               <label>Username</label>
-              <input type="text" id="teamUsername" placeholder="username" />
+              <input type="text" id="teamUsername" placeholder="username" autocomplete="username" />
             </div>
             <div class="form-group">
               <label>Mot de passe</label>
-              <input type="password" id="teamPassword" placeholder="mot de passe" />
+              <input type="password" id="teamPassword" placeholder="mot de passe fort" autocomplete="new-password" minlength="10" />
+              <small class="input-help">10+ caractères avec majuscule, minuscule, chiffre et symbole.</small>
             </div>
             <div class="form-group">
               <label>Rôle</label>

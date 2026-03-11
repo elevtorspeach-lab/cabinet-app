@@ -1,12 +1,21 @@
 // ================== STATE ==================
 const AppState = { clients: [], salleAssignments: [], recycleBin: [], recycleArchive: [] };
 const DEFAULT_MANAGER_USERNAME = 'manager';
-const DEFAULT_MANAGER_PASSWORD = '1234';
-const DEFAULT_SEEDED_PASSWORD = '1234';
+const DEFAULT_MANAGER_PASSWORD = 'Araqi@2026!';
+const DEFAULT_SEEDED_PASSWORD = 'Araqi@2026!';
+const MIN_PASSWORD_LENGTH = 10;
+const PASSWORD_HASH_VERSION = 'sha256-v1';
 
 function buildSeedUsers(){
   const users = [
-    { id: 1, username: DEFAULT_MANAGER_USERNAME, password: DEFAULT_MANAGER_PASSWORD, role: 'manager', clientIds: [] }
+    {
+      id: 1,
+      username: DEFAULT_MANAGER_USERNAME,
+      password: DEFAULT_MANAGER_PASSWORD,
+      role: 'manager',
+      clientIds: [],
+      mustChangePassword: true
+    }
   ];
 
   for(let i = 1; i <= 10; i += 1){
@@ -15,7 +24,8 @@ function buildSeedUsers(){
       username: `admin${String(i).padStart(2, '0')}`,
       password: DEFAULT_SEEDED_PASSWORD,
       role: 'admin',
-      clientIds: []
+      clientIds: [],
+      mustChangePassword: true
     });
   }
 
@@ -25,7 +35,8 @@ function buildSeedUsers(){
       username: `gestionnaire${String(i).padStart(2, '0')}`,
       password: DEFAULT_SEEDED_PASSWORD,
       role: 'manager',
-      clientIds: []
+      clientIds: [],
+      mustChangePassword: true
     });
   }
 
@@ -35,7 +46,8 @@ function buildSeedUsers(){
       username: `client${String(i).padStart(2, '0')}`,
       password: DEFAULT_SEEDED_PASSWORD,
       role: 'client',
-      clientIds: []
+      clientIds: [],
+      mustChangePassword: true
     });
   }
 
@@ -2036,6 +2048,140 @@ function isDefaultManagerUser(user){
   return String(user?.username || '').trim().toLowerCase() === DEFAULT_MANAGER_USERNAME;
 }
 
+function hasProtectedPassword(user){
+  return String(user?.passwordHash || '').trim().length > 0;
+}
+
+function isDefaultPasswordValue(value){
+  const normalized = normalizeLoginPassword(value);
+  return normalized === normalizeLoginPassword(DEFAULT_MANAGER_PASSWORD)
+    || normalized === normalizeLoginPassword(DEFAULT_SEEDED_PASSWORD);
+}
+
+function isPasswordStrong(password, username = ''){
+  const normalized = normalizeLoginPassword(password);
+  const normalizedUsername = String(username || '').trim().toLowerCase();
+  if(normalized.length < MIN_PASSWORD_LENGTH) return false;
+  if(normalizedUsername && normalized.toLowerCase() === normalizedUsername) return false;
+  if(isDefaultPasswordValue(normalized)) return false;
+  return /[a-z]/.test(normalized)
+    && /[A-Z]/.test(normalized)
+    && /\d/.test(normalized)
+    && /[^A-Za-z0-9]/.test(normalized);
+}
+
+function getPasswordPolicyMessage(){
+  return `Le mot de passe doit contenir au moins ${MIN_PASSWORD_LENGTH} caractères avec majuscule, minuscule, chiffre et symbole.`;
+}
+
+function passwordNeedsReset(user, rawPassword = ''){
+  const candidate = String(rawPassword || user?.password || '').trim();
+  if(user?.mustChangePassword) return true;
+  return !isPasswordStrong(candidate, user?.username || '');
+}
+
+function fallbackHashPassword(value){
+  let hash = 2166136261;
+  const normalized = normalizeLoginPassword(value);
+  for(let i = 0; i < normalized.length; i += 1){
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${PASSWORD_HASH_VERSION}:fnv:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+async function hashPassword(value){
+  const normalized = normalizeLoginPassword(value);
+  if(
+    typeof crypto !== 'undefined'
+    && crypto
+    && crypto.subtle
+    && typeof crypto.subtle.digest === 'function'
+    && typeof TextEncoder !== 'undefined'
+  ){
+    const data = new TextEncoder().encode(normalized);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    const hashHex = Array.from(new Uint8Array(digest))
+      .map(byte=>byte.toString(16).padStart(2, '0'))
+      .join('');
+    return `${PASSWORD_HASH_VERSION}:sha256:${hashHex}`;
+  }
+  return fallbackHashPassword(normalized);
+}
+
+async function verifyUserPassword(user, rawPassword){
+  if(!user) return false;
+  const normalizedInput = normalizeLoginPassword(rawPassword);
+  if(hasProtectedPassword(user)){
+    return user.passwordHash === await hashPassword(normalizedInput);
+  }
+  return normalizeLoginPassword(user.password) === normalizedInput;
+}
+
+async function setUserPassword(user, rawPassword, options = {}){
+  if(!user) return;
+  user.passwordHash = await hashPassword(rawPassword);
+  user.passwordVersion = PASSWORD_HASH_VERSION;
+  user.passwordUpdatedAt = new Date().toISOString();
+  user.password = '';
+  if(options.forceReset === true){
+    user.mustChangePassword = true;
+  }else if(options.clearReset !== false){
+    user.mustChangePassword = false;
+  }
+}
+
+async function hardenUsersSecurity(options = {}){
+  const opts = options && typeof options === 'object' ? options : {};
+  const users = Array.isArray(USERS) ? USERS : [];
+  let changed = false;
+  for(const user of users){
+    if(!user || typeof user !== 'object') continue;
+    const legacyPassword = String(user.password || '');
+    if(!hasProtectedPassword(user) && legacyPassword){
+      const mustReset = passwordNeedsReset(user, legacyPassword);
+      await setUserPassword(user, legacyPassword, {
+        forceReset: mustReset,
+        clearReset: !mustReset
+      });
+      changed = true;
+      continue;
+    }
+    if(passwordNeedsReset(user) && user.mustChangePassword !== true){
+      user.mustChangePassword = true;
+      changed = true;
+    }
+  }
+  if(changed && opts.persist !== false){
+    await persistStateSliceNow('users', USERS, { source: 'security-upgrade' });
+  }
+  return changed;
+}
+
+async function promptPasswordResetForUser(user){
+  if(!user) return false;
+  const username = String(user.username || '').trim() || 'utilisateur';
+  while(true){
+    const nextPassword = window.prompt(
+      `Sécurité renforcée pour ${username}.\nChoisissez un nouveau mot de passe.\n${getPasswordPolicyMessage()}`
+    );
+    if(nextPassword === null) return false;
+    if(!isPasswordStrong(nextPassword, username)){
+      alert(getPasswordPolicyMessage());
+      continue;
+    }
+    const confirmation = window.prompt('Confirmez le nouveau mot de passe.');
+    if(confirmation === null) return false;
+    if(normalizeLoginPassword(nextPassword) !== normalizeLoginPassword(confirmation)){
+      alert('La confirmation du mot de passe ne correspond pas.');
+      continue;
+    }
+    await setUserPassword(user, nextPassword, { clearReset: true });
+    await persistStateSliceNow('users', USERS, { source: 'password-reset' });
+    return true;
+  }
+}
+
 function canEditData(){
   return isManager() || isAdmin();
 }
@@ -3309,12 +3455,26 @@ function normalizeUser(rawUser){
   const id = Number(rawUser.id);
   const username = String(rawUser.username || '').trim();
   const password = String(rawUser.password || '');
+  const passwordHash = String(rawUser.passwordHash || '').trim();
+  const passwordVersion = String(rawUser.passwordVersion || '').trim();
+  const passwordUpdatedAt = String(rawUser.passwordUpdatedAt || '').trim();
+  const mustChangePassword = rawUser.mustChangePassword === true;
   const role = normalizeUserRole(rawUser.role);
   const clientIds = Array.isArray(rawUser.clientIds)
     ? [...new Set(rawUser.clientIds.map(v=>Number(v)).filter(v=>Number.isFinite(v)))]
     : [];
   if(!Number.isFinite(id) || !username) return null;
-  return { id, username, password, role, clientIds };
+  return {
+    id,
+    username,
+    password,
+    passwordHash,
+    passwordVersion,
+    passwordUpdatedAt,
+    mustChangePassword,
+    role,
+    clientIds
+  };
 }
 
 function normalizeClient(rawClient, options = {}){
@@ -4011,12 +4171,13 @@ function ensureManagerUser(users){
   );
 
   if(defaultManagerIdx >= 0){
-    // Keep "manager/1234" always available.
     validUsers[defaultManagerIdx].username = DEFAULT_MANAGER_USERNAME;
-    validUsers[defaultManagerIdx].password = DEFAULT_MANAGER_PASSWORD;
     validUsers[defaultManagerIdx].role = 'manager';
     if(!Array.isArray(validUsers[defaultManagerIdx].clientIds)){
       validUsers[defaultManagerIdx].clientIds = [];
+    }
+    if(typeof validUsers[defaultManagerIdx].mustChangePassword !== 'boolean'){
+      validUsers[defaultManagerIdx].mustChangePassword = passwordNeedsReset(validUsers[defaultManagerIdx]);
     }
     return validUsers;
   }
@@ -4026,6 +4187,7 @@ function ensureManagerUser(users){
     id: Math.max(1, maxId + 1),
     username: DEFAULT_MANAGER_USERNAME,
     password: DEFAULT_MANAGER_PASSWORD,
+    mustChangePassword: true,
     role: 'manager',
     clientIds: []
   });
@@ -4374,7 +4536,7 @@ async function importAppsavocatPayload(rawPayload){
     let addedDossiers = 0;
     let skippedDossiers = 0;
 
-    const reportClientsProgress = makeProgressReporter('Import applicationversion1 - clients');
+    const reportClientsProgress = makeProgressReporter('Import Cabinet Maitre Araqi Houssaini - clients');
     await runChunked(importedClients, async (importedClient)=>{
     const key = makeClientMatchKey(importedClient.name || '');
     if(!key) return;
@@ -4422,7 +4584,7 @@ async function importAppsavocatPayload(rawPayload){
       USERS.map(user=>[String(user?.username || '').trim().toLowerCase(), user])
     );
     let addedUsers = 0;
-    const reportUsersProgress = makeProgressReporter('Import applicationversion1 - utilisateurs');
+    const reportUsersProgress = makeProgressReporter('Import Cabinet Maitre Araqi Houssaini - utilisateurs');
     await runChunked(importedUsers, async (user)=>{
     const usernameKey = String(user?.username || '').trim().toLowerCase();
     if(!usernameKey) return;
@@ -4465,7 +4627,7 @@ async function importAppsavocatPayload(rawPayload){
 
     alert(
       [
-        'Import applicationversion1 terminé.',
+        'Import Cabinet Maitre Araqi Houssaini terminé.',
         `Clients ajoutés: ${addedClients}`,
         `Dossiers ajoutés: ${addedDossiers}`,
         `Dossiers ignorés (doublons): ${skippedDossiers}`,
@@ -4488,9 +4650,9 @@ async function handleAppsavocatImportFile(file){
   }
   importInProgress = true;
   try{
-    openImportProgressModal('Import applicationversion1');
+    openImportProgressModal('Import Cabinet Maitre Araqi Houssaini');
     updateImportProgress('Lecture du fichier...', 0, 1);
-    setSyncStatus('syncing', 'Import applicationversion1 en cours...');
+    setSyncStatus('syncing', 'Import Cabinet Maitre Araqi Houssaini en cours...');
     const text = await file.text();
     updateImportProgress('Analyse du fichier...', 1, 3);
     const parsed = JSON.parse(text);
@@ -4500,7 +4662,7 @@ async function handleAppsavocatImportFile(file){
   }catch(err){
     console.error(err);
     const details = String(err?.message || '').trim();
-    alert(`Import applicationversion1 impossible.${details ? `\nDétail: ${details}` : ''}`);
+    alert(`Import Cabinet Maitre Araqi Houssaini impossible.${details ? `\nDétail: ${details}` : ''}`);
   }finally{
     closeImportProgressModal(false);
     importInProgress = false;
@@ -4718,14 +4880,14 @@ async function openDesktopStateFile(){
       if(result?.ok) return;
       const fallbackPath = String(result?.filePath || '').trim();
       if(fallbackPath){
-        alert(`Fichier applicationversion1 créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
+        alert(`Fichier Cabinet Maitre Araqi Houssaini créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
         return;
       }
-      alert('Impossible d’ouvrir applicationversion1.json.');
+      alert('Impossible d’ouvrir Cabinet-Maitre-Araqi-Houssaini.json.');
       return;
     }catch(err){
-      console.warn('Ouverture applicationversion1.json impossible', err);
-      alert('Impossible d’ouvrir applicationversion1.json.');
+      console.warn('Ouverture Cabinet-Maitre-Araqi-Houssaini.json impossible', err);
+      alert('Impossible d’ouvrir Cabinet-Maitre-Araqi-Houssaini.json.');
       return;
     }
   }
@@ -4737,7 +4899,7 @@ async function persistDesktopStateFileNow(payload = buildAppStatePayload()){
   try{
     await window.cabinetDesktopState.writeState(payload);
   }catch(err){
-    console.warn('Impossible de sauvegarder applicationversion1.json', err);
+    console.warn('Impossible de sauvegarder Cabinet-Maitre-Araqi-Houssaini.json', err);
   }
 }
 
@@ -4991,12 +5153,12 @@ async function loadPersistedState(){
         await applyPersistedStateSource(normalizedState, {
           writeIndexedDb: true,
           writeLocalStorage: true,
-          syncStatusMessage: 'Etat charge depuis applicationversion1.json'
+          syncStatusMessage: 'Etat charge depuis Cabinet-Maitre-Araqi-Houssaini.json'
         });
         return true;
       }
     }catch(err){
-      console.warn('Impossible de charger applicationversion1.json', err);
+      console.warn('Impossible de charger Cabinet-Maitre-Araqi-Houssaini.json', err);
     }
   }
 
@@ -6790,6 +6952,7 @@ async function initApplication(){
     await resolveApiBase();
   }
   await loadPersistedState();
+  await hardenUsersSecurity({ persist: true });
   await persistDesktopStateFileNow();
   hasLoadedState = true;
   setupEvents();
@@ -7187,15 +7350,29 @@ function showView(v, options = {}){
 }
 
 // ================== LOGIN ==================
-function login(){
+async function login(){
   const usernameInput = String($('username').value || '').trim().toLowerCase();
   const passwordInput = normalizeLoginPassword($('password').value);
   USERS = ensureManagerUser(Array.isArray(USERS) ? USERS : []);
-  const u = USERS.find(x=>
-    String(x.username || '').trim().toLowerCase() === usernameInput
-    && normalizeLoginPassword(x.password) === passwordInput
-  );
+  await hardenUsersSecurity({ persist: true });
+  let u = null;
+  for(const candidate of USERS){
+    if(String(candidate?.username || '').trim().toLowerCase() !== usernameInput) continue;
+    if(await verifyUserPassword(candidate, passwordInput)){
+      u = candidate;
+      break;
+    }
+  }
   if(!u){ $('errorMsg').style.display='block'; return; }
+  if(passwordNeedsReset(u, passwordInput)){
+    const changed = await promptPasswordResetForUser(u);
+    if(!changed){
+      $('errorMsg').style.display='block';
+      return;
+    }
+    syncCurrentUserFromUsers();
+    u = USERS.find(x=>Number(x?.id) === Number(u?.id)) || u;
+  }
   currentUser = u;
   visibleClientsCache = null;
   visibleClientsCacheVersion = -1;
@@ -9079,6 +9256,9 @@ async function saveTeamUser(){
   const role = normalizeUserRole($('teamRole')?.value || 'client');
   if(!username) return alert('Username obligatoire');
   if(!editingTeamUserId && !password) return alert('Mot de passe obligatoire');
+  if(password && !isPasswordStrong(password, username)){
+    return alert(getPasswordPolicyMessage());
+  }
 
   const selectedClientIds = role === 'manager' ? [] : getSelectedTeamClientIds();
   const finalClientIds = role === 'client' ? selectedClientIds : [];
@@ -9097,23 +9277,28 @@ async function saveTeamUser(){
     if(!user) return;
     if(isDefaultManagerUser(user)){
       user.username = DEFAULT_MANAGER_USERNAME;
-      user.password = DEFAULT_MANAGER_PASSWORD;
       user.role = 'manager';
       user.clientIds = [];
+      if(password){
+        await setUserPassword(user, password, { clearReset: true });
+      }
     }else{
       user.username = username;
-      if(password) user.password = password;
+      if(password){
+        await setUserPassword(user, password, { clearReset: true });
+      }
       user.role = role;
       user.clientIds = finalClientIds;
     }
   }else{
-    USERS.push({
+    const nextUser = {
       id: Date.now(),
       username,
-      password,
       role,
       clientIds: finalClientIds
-    });
+    };
+    await setUserPassword(nextUser, password, { clearReset: true });
+    USERS.push(nextUser);
   }
   await persistStateSliceNow('users', USERS, { source: 'team' });
   renderEquipe();

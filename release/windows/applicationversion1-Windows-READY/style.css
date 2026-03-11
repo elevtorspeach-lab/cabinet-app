@@ -504,6 +504,7 @@ body{
 /* ================== FORMS ================== */
 .add-client-form,.pro-body{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
 .form-group{display:flex;flex-direction:column;gap:6px}
+.input-help{font-size:12px;color:#64748b;line-height:1.4}
 .caution-cin-rc-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .full{grid-column:1 / -1}
 input,select,textarea{padding:10px 12px;border-radius:8px;border:2px solid #e5e7eb}
