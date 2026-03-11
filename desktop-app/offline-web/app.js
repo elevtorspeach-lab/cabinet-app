@@ -1,10 +1,11 @@
 // ================== STATE ==================
 const AppState = { clients: [], salleAssignments: [], recycleBin: [], recycleArchive: [] };
 const DEFAULT_MANAGER_USERNAME = 'manager';
-const DEFAULT_MANAGER_PASSWORD = 'Araqi@2026!';
-const DEFAULT_SEEDED_PASSWORD = 'Araqi@2026!';
+const DEFAULT_MANAGER_PASSWORD = '1234';
+const DEFAULT_SEEDED_PASSWORD = '1234';
 const MIN_PASSWORD_LENGTH = 10;
 const PASSWORD_HASH_VERSION = 'sha256-v1';
+const ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD = true;
 
 function buildSeedUsers(){
   const users = [
@@ -2076,6 +2077,8 @@ function getPasswordPolicyMessage(){
 
 function passwordNeedsReset(user, rawPassword = ''){
   const candidate = String(rawPassword || user?.password || '').trim();
+  if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && isDefaultPasswordValue(candidate)) return false;
+  if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD) return false;
   if(user?.mustChangePassword) return true;
   return !isPasswordStrong(candidate, user?.username || '');
 }
@@ -2137,6 +2140,13 @@ async function hardenUsersSecurity(options = {}){
   let changed = false;
   for(const user of users){
     if(!user || typeof user !== 'object') continue;
+    if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD){
+      if(user.mustChangePassword){
+        user.mustChangePassword = false;
+        changed = true;
+      }
+      continue;
+    }
     const legacyPassword = String(user.password || '');
     if(!hasProtectedPassword(user) && legacyPassword){
       const mustReset = passwordNeedsReset(user, legacyPassword);
@@ -5383,7 +5393,8 @@ function parseExcelData(rows){
     notificationNo: ['notification', 'notification n', 'notification n°', 'notificat', 'notification no', 'notification numero', 'num notification', 'numéro notification'],
     executionNo: ['execution n', 'execution no', 'execution n°', 'execution numero', 'num execution', 'numero execution', 'numéro execution'],
     sort: ['sort'],
-    tribunal: ['tribunal', 'trib', 'tr']
+    tribunal: ['tribunal', 'trib', 'tr'],
+    statut: ['statut', 'status', 'etat', 'état']
   };
 
   const audienceHeaderKeys = {
@@ -5481,7 +5492,8 @@ function parseExcelData(rows){
       notificationNo: getColIndex(dossierColMap, dossierHeaderKeys.notificationNo),
       executionNo: getColIndex(dossierColMap, dossierHeaderKeys.executionNo),
       sort: getColIndex(dossierColMap, dossierHeaderKeys.sort),
-      tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal)
+      tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal),
+      statut: getColIndex(dossierColMap, dossierHeaderKeys.statut)
     };
 
     let carriedAffectationDate = '';
@@ -5536,6 +5548,7 @@ function parseExcelData(rows){
       const executionNo = idx.executionNo !== -1 ? String(row[idx.executionNo] || '').trim() : '';
       const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
+      const statutRaw = idx.statut !== -1 ? String(row[idx.statut] || '').trim() : '';
       if(isEmptyDossierRow) break;
       const hasExplicitReferences = !!(refAssignation || refRestitution || refSfdc || refInjonction);
       const hasOtherDossierSignals = !!(immatriculation || boiteNo || caution || marque || adresse || ville || cautionAdresse || cautionVille || cautionCin || cautionRc);
@@ -5586,7 +5599,8 @@ function parseExcelData(rows){
         notificationNo,
         executionNo,
         sort,
-        tribunal
+        tribunal,
+        statutRaw
       });
       carriedAffectationDate = '';
       carriedMontant = '';
@@ -5712,6 +5726,37 @@ function buildExcelImportIssueMessage(issues){
     lines.push(`... +${issues.length - maxIssues} autres lignes ignorées`);
   }
   return lines.join('\n');
+}
+
+function normalizeImportedDossierStatus(value){
+  const raw = normalizeLooseText(value);
+  if(!raw) return { statut: 'En cours', detail: '' };
+  const asciiRaw = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const lowerAsciiRaw = asciiRaw.toLowerCase();
+  const knownStatuses = [
+    { label: 'Arrêt définitif', key: 'arret definitif' },
+    { label: 'Suspension', key: 'suspension' },
+    { label: 'Clôture', key: 'cloture' },
+    { label: 'Soldé', key: 'solde' },
+    { label: 'En cours', key: 'en cours' }
+  ];
+  for(const item of knownStatuses){
+    if(!lowerAsciiRaw.startsWith(item.key)) continue;
+    const detail = raw
+      .slice(item.key.length)
+      .replace(/^[\s\-–—/:;,.|]+/g, '')
+      .trim();
+    return {
+      statut: item.label,
+      detail
+    };
+  }
+  return {
+    statut: 'En cours',
+    detail: raw
+  };
 }
 
 function isExcelImportDisplayError(issue){
@@ -6206,6 +6251,7 @@ async function applyExcelImport(payload, options = {}){
     const primaryDateCandidate = carriedAffectationDate || rowDateAffectation;
     const secondaryDateCandidate = carriedAffectationDate ? rowDateAffectation : rowDateAffectationExtra;
     const principalMontant = primaryMontant;
+    const importedStatus = normalizeImportedDossierStatus(row.statutRaw || '');
 
     const dossier = {
       debiteur: row.debiteur,
@@ -6229,7 +6275,8 @@ async function applyExcelImport(payload, options = {}){
       type: row.type,
       note: '',
       avancement: '',
-      statut: 'En cours',
+      statut: importedStatus.statut || 'En cours',
+      statutDetails: importedStatus.detail || '',
       files: []
     };
 
@@ -7270,23 +7317,15 @@ function setupEvents(){
   audienceColorButtons.forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const color = btn.dataset.color;
-      // Color buttons are paint mode selectors (not table filters).
       filterAudienceErrorsOnly = false;
       const errBtn = $('audienceErrorsBtn');
       if(errBtn) errBtn.classList.remove('active');
       setSelectedAudienceColor(color, false);
-      filterAudienceColor = 'all';
-      const colorSel = $('filterAudienceColor');
-      if(colorSel) colorSel.value = 'all';
       if(color === 'all'){
-        audiencePrintSelection = new Set();
-      }else{
-        const rows = getAudienceRows().filter(r=>String(r?.p?.color || '') === color);
-        audiencePrintSelection = new Set(
-          rows.map(r=>makeAudiencePrintKey(r.ci, r.di, r.procKey))
-        );
+        renderAudience();
+        return;
       }
-      renderAudience();
+      applyAudienceColorToSelectedRows(color);
     });
   });
   window.addEventListener('beforeunload', ()=>{
@@ -7364,7 +7403,7 @@ async function login(){
     }
   }
   if(!u){ $('errorMsg').style.display='block'; return; }
-  if(passwordNeedsReset(u, passwordInput)){
+  if(!ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && passwordNeedsReset(u, passwordInput)){
     const changed = await promptPasswordResetForUser(u);
     if(!changed){
       $('errorMsg').style.display='block';
@@ -7751,6 +7790,15 @@ async function addDossier(){
     const montantInputValue = String($('montantInput')?.value || '').trim();
     const montantFallbackRaw = montantInputValue || montantGroups.map(g=>String(g.montant || '').trim()).filter(Boolean).join(' | ');
     const montantFallback = getLowerMontantValue(montantFallbackRaw);
+    let previousImportedStatusDetail = '';
+    if(editingDossier){
+      previousImportedStatusDetail = String(
+        AppState.clients
+          .find(c=>c.id == editingDossier.clientId)
+          ?.dossiers?.[editingDossier.index]
+          ?.statutDetails || ''
+      ).trim();
+    }
 
     const dossier = {
       debiteur: $('debiteurInput').value.trim(),
@@ -7775,6 +7823,7 @@ async function addDossier(){
       note: $('noteInput')?.value.trim() || '',
       avancement: $('avancementInput')?.value.trim() || '',
       statut: $('statutInput')?.value || 'En cours',
+      statutDetails: previousImportedStatusDetail,
       files: await serializeUploadedFiles(uploadedFiles)
     };
     dossier.history = [];
@@ -8132,6 +8181,16 @@ function renderStatusBadge(status){
   return `<span class="status-badge ${cls}">${escapeHtml(value)}</span>`;
 }
 
+function renderStatusContent(status, detail = ''){
+  const detailText = String(detail || '').trim();
+  return `
+    <div class="status-stack">
+      ${renderStatusBadge(status)}
+      ${detailText ? `<div class="status-detail">${escapeHtml(detailText)}</div>` : ''}
+    </div>
+  `;
+}
+
 function buildSuiviSearchHaystack(clientName, dossier, procedures, tribunaux){
   const fileNames = Array.isArray(dossier?.files)
     ? dossier.files.map(f=>String(f?.name || '').trim()).filter(Boolean)
@@ -8448,7 +8507,7 @@ function openDossierDetails(clientId, index){
   const detailsHtml = detailsRows.map(([label, value])=>`
     <div class="details-row">
       <div class="details-label">${escapeHtml(label)}</div>
-      <div class="details-value">${label === 'Statut' ? renderStatusBadge(value) : escapeHtml(value)}</div>
+      <div class="details-value">${label === 'Statut' ? renderStatusContent(value, dossier.statutDetails || '') : escapeHtml(value)}</div>
     </div>
   `).join('');
 
@@ -9789,13 +9848,10 @@ function toggleAudiencePrintSelectionEncoded(ci, di, procKeyEncoded, checked){
 function toggleAudienceSelectionAndColorEncoded(ci, di, procKeyEncoded, checked){
   const procKey = decodeURIComponent(String(procKeyEncoded));
   toggleAudiencePrintSelection(ci, di, procKey, checked);
-  setAudienceColor(ci, di, procKey, checked);
 }
 
 function getActiveAudiencePriorityColor(){
-  const activeBtn = document.querySelector('.color-btn[data-color].active');
-  const color = String(activeBtn?.dataset?.color || '').trim();
-  return color || selectedAudienceColor || 'all';
+  return String(filterAudienceColor || 'all').trim() || 'all';
 }
 
 function getAudienceRowDateValue(row){
@@ -10541,34 +10597,59 @@ function escapeHtml(str){
 }
 
 function setAudienceColor(ci, di, procKey, checked){
-  const client = AppState.clients?.[ci];
-  if(!canEditData() || !canEditClient(client)) return;
-  const dossier = AppState.clients?.[ci]?.dossiers?.[di];
-  if(!dossier) return;
-  const p = getAudienceProcedure(ci, di, procKey);
-  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
-  if(!checked){
-    p.color = '';
-    if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif'){
-      dossier.statut = 'En cours';
-    }
-    markAudienceColorCachesDirty();
-    queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: false });
-    return;
-  }
-  if(selectedAudienceColor === 'all' || !allowed.has(selectedAudienceColor)){
-    queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
-    return;
-  }
-  p.color = selectedAudienceColor;
-  if(selectedAudienceColor === 'purple-dark') dossier.statut = 'Soldé';
-  if(selectedAudienceColor === 'purple-light') dossier.statut = 'Arrêt définitif';
+  const color = checked ? selectedAudienceColor : '';
+  if(!applyAudienceColorValue(ci, di, procKey, color)) return;
   markAudienceColorCachesDirty();
-  queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: true });
+  queueAudienceColorBatchUpdate({ persist: true, dashboard: true, suivi: true });
 }
 
 function setAudienceColorEncoded(ci, di, procKeyEncoded, checked){
   setAudienceColor(ci, di, decodeURIComponent(String(procKeyEncoded)), checked);
+}
+
+function applyAudienceColorValue(ci, di, procKey, color){
+  const client = AppState.clients?.[ci];
+  if(!canEditData() || !canEditClient(client)) return false;
+  const dossier = AppState.clients?.[ci]?.dossiers?.[di];
+  if(!dossier) return false;
+  const p = getAudienceProcedure(ci, di, procKey);
+  const nextColor = String(color || '').trim();
+  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  if(nextColor && !allowed.has(nextColor)) return false;
+  const prevColor = String(p.color || '').trim();
+  const prevStatut = String(dossier.statut || 'En cours').trim();
+  p.color = nextColor;
+  if(nextColor === 'purple-dark'){
+    dossier.statut = 'Soldé';
+  }else if(nextColor === 'purple-light'){
+    dossier.statut = 'Arrêt définitif';
+  }else if(prevStatut === 'Soldé' || prevStatut === 'Arrêt définitif'){
+    dossier.statut = 'En cours';
+  }
+  return prevColor !== nextColor || prevStatut !== String(dossier.statut || 'En cours').trim();
+}
+
+function applyAudienceColorToSelectedRows(color){
+  const nextColor = String(color || '').trim();
+  if(!nextColor || nextColor === 'all') return;
+  const rows = getSelectedAudienceRowsForExport();
+  if(!rows.length){
+    alert('Cochez d’abord les dossiers à modifier.');
+    renderAudience();
+    return;
+  }
+  let changed = false;
+  rows.forEach(row=>{
+    if(applyAudienceColorValue(row.ci, row.di, row.procKey, nextColor)){
+      changed = true;
+    }
+  });
+  if(!changed){
+    renderAudience();
+    return;
+  }
+  markAudienceColorCachesDirty();
+  queueAudienceColorBatchUpdate({ persist: true, dashboard: true, suivi: true });
 }
 
 function getAudienceProcedure(ci, di, procKey){

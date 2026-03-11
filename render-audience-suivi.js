@@ -120,7 +120,7 @@ function renderSuiviRowHtml(row){
       <td data-label="Débiteur">${escapeHtml(row.d.debiteur || '-')}</td>
       <td data-label="Montant">${escapeHtml(row.d.montant || '-')}</td>
       <td data-label="Ville">${escapeHtml(row.d.ville || '-')}</td>
-      <td data-label="Statut">${renderStatusBadge(row.d.statut || 'En cours')}</td>
+      <td data-label="Statut">${renderStatusContent(row.d.statut || 'En cours', row.d.statutDetails || '')}</td>
       <td data-label="Actions">
         <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}">
           <i class="fa-solid fa-eye"></i>
