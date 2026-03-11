@@ -8,10 +8,11 @@ const { buildPayload } = require('./benchmark_large_state');
 const dossierArg = process.argv.find((arg) => arg.startsWith('--dossiers='));
 const audienceArg = process.argv.find((arg) => arg.startsWith('--audiences='));
 const clientArg = process.argv.find((arg) => arg.startsWith('--clients='));
+const userArg = process.argv.find((arg) => arg.startsWith('--users='));
 const DOSSIER_COUNT = Math.max(1, Number(process.env.BENCH_DOSSIERS || (dossierArg ? dossierArg.slice('--dossiers='.length) : 90000)) || 90000);
 const AUDIENCE_COUNT = Math.max(0, Number(process.env.BENCH_AUDIENCES || (audienceArg ? audienceArg.slice('--audiences='.length) : 13000)) || 13000);
 const CLIENT_COUNT = Math.max(1, Number(process.env.BENCH_CLIENTS || (clientArg ? clientArg.slice('--clients='.length) : 300)) || 300);
-const USER_COUNT = 10;
+const USER_COUNT = Math.max(1, Number(process.env.BENCH_USERS || (userArg ? userArg.slice('--users='.length) : 10)) || 10);
 const SESSION_TIMEOUT_MS = 90000;
 
 const SOURCE_ROOT = path.join(__dirname, '..');

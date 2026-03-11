@@ -29,6 +29,8 @@ let cachedState = null;
 let lastBackupSignature = '';
 let lastBackupAt = 0;
 const sseClients = new Set();
+let stateMutationQueue = Promise.resolve();
+let stateWriteSequence = 0;
 
 app.use(express.json({ limit: '120mb' }));
 app.use(express.static(WEB_DIR, {
@@ -138,12 +140,22 @@ async function writeState(nextState, options = {}) {
     version: nextVersion,
     updatedAt: new Date().toISOString()
   };
-  const tmpFile = `${STATE_FILE}.tmp`;
+  const tmpFile = `${STATE_FILE}.${process.pid}.${Date.now()}.${++stateWriteSequence}.tmp`;
   await fsp.writeFile(tmpFile, JSON.stringify(safe), 'utf8');
   await fsp.rename(tmpFile, STATE_FILE);
   cachedState = safe;
   await maybeWriteBackupSnapshot(safe);
   return safe;
+}
+
+function queueStateMutation(task) {
+  const runTask = async () => {
+    const currentState = await readState();
+    return task(currentState);
+  };
+  const nextOperation = stateMutationQueue.then(runTask, runTask);
+  stateMutationQueue = nextOperation.catch(() => {});
+  return nextOperation;
 }
 
 function broadcastStateUpdated(payload) {
@@ -273,16 +285,28 @@ app.post('/api/state', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const sourceId = String(body?._sourceId || '').trim();
   const baseVersion = extractBaseVersion(body);
-  const currentState = await readState();
-  if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
-    return res.status(409).json(buildConflictResponse(currentState));
+  try {
+    const result = await queueStateMutation(async (currentState) => {
+      if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
+        return {
+          status: 409,
+          body: buildConflictResponse(currentState)
+        };
+      }
+      const statePayload = { ...body };
+      delete statePayload._sourceId;
+      delete statePayload._baseVersion;
+      const saved = await writeState(statePayload, { previousState: currentState });
+      broadcastStateUpdated({ ...saved, sourceId });
+      return {
+        status: 200,
+        body: { ok: true, version: saved.version, updatedAt: saved.updatedAt }
+      };
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'STATE_SAVE_FAILED', message: err?.message || 'State save failed.' });
   }
-  const statePayload = { ...body };
-  delete statePayload._sourceId;
-  delete statePayload._baseVersion;
-  const saved = await writeState(statePayload, { previousState: currentState });
-  broadcastStateUpdated({ ...saved, sourceId });
-  res.json({ ok: true, version: saved.version, updatedAt: saved.updatedAt });
 });
 
 app.post('/api/state/users', async (req, res) => {
@@ -290,22 +314,34 @@ app.post('/api/state/users', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const sourceId = String(body?._sourceId || '').trim();
   const baseVersion = extractBaseVersion(body);
-  const currentState = await readState();
-  if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
-    return res.status(409).json(buildConflictResponse(currentState));
+  try {
+    const result = await queueStateMutation(async (currentState) => {
+      if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
+        return {
+          status: 409,
+          body: buildConflictResponse(currentState)
+        };
+      }
+      const nextUsers = sanitizePatchArray(body?.users);
+      const saved = await writeState({
+        ...currentState,
+        users: nextUsers
+      }, { previousState: currentState });
+      broadcastStateUpdated({
+        ...saved,
+        sourceId,
+        patchKind: 'users',
+        patch: { users: nextUsers }
+      });
+      return {
+        status: 200,
+        body: { ok: true, version: saved.version, updatedAt: saved.updatedAt }
+      };
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'USERS_SAVE_FAILED', message: err?.message || 'Users save failed.' });
   }
-  const nextUsers = sanitizePatchArray(body?.users);
-  const saved = await writeState({
-    ...currentState,
-    users: nextUsers
-  }, { previousState: currentState });
-  broadcastStateUpdated({
-    ...saved,
-    sourceId,
-    patchKind: 'users',
-    patch: { users: nextUsers }
-  });
-  res.json({ ok: true, version: saved.version, updatedAt: saved.updatedAt });
 });
 
 app.post('/api/state/salle-assignments', async (req, res) => {
@@ -313,22 +349,34 @@ app.post('/api/state/salle-assignments', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const sourceId = String(body?._sourceId || '').trim();
   const baseVersion = extractBaseVersion(body);
-  const currentState = await readState();
-  if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
-    return res.status(409).json(buildConflictResponse(currentState));
+  try {
+    const result = await queueStateMutation(async (currentState) => {
+      if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
+        return {
+          status: 409,
+          body: buildConflictResponse(currentState)
+        };
+      }
+      const nextSalleAssignments = sanitizePatchArray(body?.salleAssignments);
+      const saved = await writeState({
+        ...currentState,
+        salleAssignments: nextSalleAssignments
+      }, { previousState: currentState });
+      broadcastStateUpdated({
+        ...saved,
+        sourceId,
+        patchKind: 'salle-assignments',
+        patch: { salleAssignments: nextSalleAssignments }
+      });
+      return {
+        status: 200,
+        body: { ok: true, version: saved.version, updatedAt: saved.updatedAt }
+      };
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'SALLE_SAVE_FAILED', message: err?.message || 'Salle save failed.' });
   }
-  const nextSalleAssignments = sanitizePatchArray(body?.salleAssignments);
-  const saved = await writeState({
-    ...currentState,
-    salleAssignments: nextSalleAssignments
-  }, { previousState: currentState });
-  broadcastStateUpdated({
-    ...saved,
-    sourceId,
-    patchKind: 'salle-assignments',
-    patch: { salleAssignments: nextSalleAssignments }
-  });
-  res.json({ ok: true, version: saved.version, updatedAt: saved.updatedAt });
 });
 
 app.post('/api/state/audience-draft', async (req, res) => {
@@ -336,24 +384,36 @@ app.post('/api/state/audience-draft', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const sourceId = String(body?._sourceId || '').trim();
   const baseVersion = extractBaseVersion(body);
-  const currentState = await readState();
-  if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
-    return res.status(409).json(buildConflictResponse(currentState));
+  try {
+    const result = await queueStateMutation(async (currentState) => {
+      if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
+        return {
+          status: 409,
+          body: buildConflictResponse(currentState)
+        };
+      }
+      const nextAudienceDraft = body?.audienceDraft && typeof body.audienceDraft === 'object'
+        ? body.audienceDraft
+        : {};
+      const saved = await writeState({
+        ...currentState,
+        audienceDraft: nextAudienceDraft
+      }, { previousState: currentState });
+      broadcastStateUpdated({
+        ...saved,
+        sourceId,
+        patchKind: 'audience-draft',
+        patch: { audienceDraft: nextAudienceDraft }
+      });
+      return {
+        status: 200,
+        body: { ok: true, version: saved.version, updatedAt: saved.updatedAt }
+      };
+    });
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'AUDIENCE_DRAFT_SAVE_FAILED', message: err?.message || 'Audience draft save failed.' });
   }
-  const nextAudienceDraft = body?.audienceDraft && typeof body.audienceDraft === 'object'
-    ? body.audienceDraft
-    : {};
-  const saved = await writeState({
-    ...currentState,
-    audienceDraft: nextAudienceDraft
-  }, { previousState: currentState });
-  broadcastStateUpdated({
-    ...saved,
-    sourceId,
-    patchKind: 'audience-draft',
-    patch: { audienceDraft: nextAudienceDraft }
-  });
-  res.json({ ok: true, version: saved.version, updatedAt: saved.updatedAt });
 });
 
 app.post('/api/state/dossiers', async (req, res) => {
@@ -361,28 +421,36 @@ app.post('/api/state/dossiers', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const sourceId = String(body?._sourceId || '').trim();
   const baseVersion = extractBaseVersion(body);
-  const currentState = await readState();
-  if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
-    return res.status(409).json(buildConflictResponse(currentState));
-  }
   try {
-    const nextClients = applyDossierPatch(currentState, body);
-    const saved = await writeState({
-      ...currentState,
-      clients: nextClients
-    }, { previousState: currentState });
-    broadcastStateUpdated({
-      ...saved,
-      sourceId,
-      patchKind: 'dossier',
-      patch: body
+    const result = await queueStateMutation(async (currentState) => {
+      if (baseVersion !== null && Number(currentState?.version || 0) !== baseVersion) {
+        return {
+          status: 409,
+          body: buildConflictResponse(currentState)
+        };
+      }
+      const nextClients = applyDossierPatch(currentState, body);
+      const saved = await writeState({
+        ...currentState,
+        clients: nextClients
+      }, { previousState: currentState });
+      broadcastStateUpdated({
+        ...saved,
+        sourceId,
+        patchKind: 'dossier',
+        patch: body
+      });
+      return {
+        status: 200,
+        body: { ok: true, version: saved.version, updatedAt: saved.updatedAt }
+      };
     });
-    res.json({ ok: true, version: saved.version, updatedAt: saved.updatedAt });
+    res.status(result.status).json(result.body);
   } catch (err) {
-    res.status(400).json({
+    res.status(String(err?.message || '').includes('patch') || String(err?.message || '').includes('Client') || String(err?.message || '').includes('dossier') ? 400 : 500).json({
       ok: false,
-      code: 'INVALID_DOSSIER_PATCH',
-      message: err?.message || 'Invalid dossier patch request.'
+      code: 'DOSSIER_PATCH_FAILED',
+      message: err?.message || 'Dossier patch request failed.'
     });
   }
 });

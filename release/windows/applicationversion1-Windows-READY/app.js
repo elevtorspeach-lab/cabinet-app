@@ -127,6 +127,7 @@ let lastPersistedStateSignature = '';
 let lastLocalSnapshotSignature = '';
 let lastRemoteStateLoadVersion = 0;
 let lastRemoteStateLoadUpdatedAt = '';
+let lastRemoteStatePayload = null;
 let remoteStateVersion = 0;
 let remoteStateUpdatedAt = '';
 let remoteRefreshPending = false;
@@ -4242,6 +4243,95 @@ function buildAppStatePayload(){
   };
 }
 
+function cloneAppStatePayload(payload){
+  if(!payload || typeof payload !== 'object') return null;
+  try{
+    return JSON.parse(JSON.stringify({
+      clients: Array.isArray(payload.clients) ? payload.clients : [],
+      salleAssignments: Array.isArray(payload.salleAssignments) ? payload.salleAssignments : [],
+      users: Array.isArray(payload.users) ? payload.users : [],
+      audienceDraft: payload.audienceDraft && typeof payload.audienceDraft === 'object' ? payload.audienceDraft : {},
+      recycleBin: Array.isArray(payload.recycleBin) ? payload.recycleBin : [],
+      recycleArchive: Array.isArray(payload.recycleArchive) ? payload.recycleArchive : []
+    }));
+  }catch(err){
+    return null;
+  }
+}
+
+function updateLastRemoteStatePayload(payload){
+  lastRemoteStatePayload = cloneAppStatePayload(payload);
+}
+
+function stableJson(value){
+  try{
+    return JSON.stringify(value ?? null);
+  }catch(err){
+    return '';
+  }
+}
+
+function mergeRemoteStateForRetry(basePayload, localPayload, remotePayload){
+  const safeRemote = cloneAppStatePayload(remotePayload) || buildAppStatePayload();
+  const safeBase = cloneAppStatePayload(basePayload) || {
+    clients: [],
+    salleAssignments: [],
+    users: [],
+    audienceDraft: {},
+    recycleBin: [],
+    recycleArchive: []
+  };
+  const safeLocal = cloneAppStatePayload(localPayload) || safeRemote;
+
+  const merged = cloneAppStatePayload(safeRemote) || safeRemote;
+  const mergedClients = Array.isArray(merged.clients) ? merged.clients.slice() : [];
+  const baseClients = Array.isArray(safeBase.clients) ? safeBase.clients : [];
+  const localClients = Array.isArray(safeLocal.clients) ? safeLocal.clients : [];
+  const baseClientById = new Map(baseClients.map(client=>[Number(client?.id), client]));
+  const mergedClientIndexById = new Map(mergedClients.map((client, index)=>[Number(client?.id), index]));
+
+  localClients.forEach((localClient)=>{
+    const clientId = Number(localClient?.id);
+    const baseClient = baseClientById.get(clientId);
+    if(stableJson(localClient) === stableJson(baseClient)) return;
+    if(mergedClientIndexById.has(clientId)){
+      mergedClients[mergedClientIndexById.get(clientId)] = localClient;
+      return;
+    }
+    mergedClients.push(localClient);
+    mergedClientIndexById.set(clientId, mergedClients.length - 1);
+  });
+
+  baseClients.forEach((baseClient)=>{
+    const clientId = Number(baseClient?.id);
+    const localClient = localClients.find(client=>Number(client?.id) === clientId);
+    if(localClient || !mergedClientIndexById.has(clientId)) return;
+    mergedClientIndexById.delete(clientId);
+    for(let i = mergedClients.length - 1; i >= 0; i -= 1){
+      if(Number(mergedClients[i]?.id) === clientId){
+        mergedClients.splice(i, 1);
+      }
+    }
+  });
+  merged.clients = mergedClients.filter(Boolean);
+
+  ['salleAssignments', 'users', 'recycleBin', 'recycleArchive'].forEach((sliceKey)=>{
+    if(stableJson(safeLocal[sliceKey]) !== stableJson(safeBase[sliceKey])){
+      merged[sliceKey] = safeLocal[sliceKey];
+    }
+  });
+  if(stableJson(safeLocal.audienceDraft) !== stableJson(safeBase.audienceDraft)){
+    merged.audienceDraft = safeLocal.audienceDraft;
+  }
+  return merged;
+}
+
+async function fetchLatestRemoteStateSnapshot(){
+  const res = await fetchWithTimeout(`${API_BASE}/state`, { cache: 'no-store' }, API_STATE_LOAD_TIMEOUT_MS);
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
 function updateRemoteStateMetadata(source){
   const versionNum = Number(source?.version);
   remoteStateVersion = Number.isFinite(versionNum) && versionNum >= 0 ? versionNum : 0;
@@ -4969,11 +5059,12 @@ function queueDeferredLocalStateSnapshot(payload = buildAppStatePayload(), optio
   return payload;
 }
 
-async function persistRemoteRequestNow(pathname, body){
+async function persistRemoteRequestNow(pathname, body, options = {}){
   if(LOCAL_ONLY_MODE){
     setSyncStatus('error', 'Mode local (offline)');
     return true;
   }
+  const allowConflictRetry = options?.allowConflictRetry !== false;
   setSyncStatus('syncing');
   try{
     const res = await fetchWithTimeout(`${API_BASE}${pathname}`, {
@@ -4988,6 +5079,19 @@ async function persistRemoteRequestNow(pathname, body){
     if(res.status === 409){
       const conflictPayload = await res.json().catch(()=>({}));
       updateRemoteStateMetadata(conflictPayload);
+      if(pathname === '/state' && allowConflictRetry){
+        try{
+          const remoteState = await fetchLatestRemoteStateSnapshot();
+          updateRemoteStateMetadata(remoteState);
+          const mergedPayload = mergeRemoteStateForRetry(lastRemoteStatePayload, body, remoteState);
+          if(mergedPayload){
+            updateLastRemoteStatePayload(remoteState);
+            return await persistRemoteRequestNow(pathname, mergedPayload, { allowConflictRetry: false });
+          }
+        }catch(err){
+          console.warn('Impossible de fusionner après conflit serveur', err);
+        }
+      }
       remoteRefreshPending = true;
       setSyncStatus('conflict', 'Conflit: serveur plus recent, rechargement...');
       queueRemoteStateRefresh(0);
@@ -4996,6 +5100,9 @@ async function persistRemoteRequestNow(pathname, body){
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const saveResult = await res.json().catch(()=>({}));
     updateRemoteStateMetadata(saveResult);
+    if(pathname === '/state'){
+      updateLastRemoteStatePayload(body);
+    }
     setSyncStatus('ok');
     return true;
   }catch(err){
@@ -5135,6 +5242,7 @@ async function loadPersistedState(){
         await applyPersistedStateSource(normalizedState, {
           writeIndexedDb: true,
           writeLocalStorage: true,
+          fromRemote: true,
           syncStatusMessage: 'Etat charge depuis serveur'
         });
         lastRemoteStateLoadVersion = remoteStateVersion;
@@ -5398,15 +5506,15 @@ function parseExcelData(rows){
   };
 
   const audienceHeaderKeys = {
-    refClient: ['ref client', 'refclient', 'reference client', 'réference client', 'référence client'],
+    refClient: ['ref client', 'refclient', 'ref. client', 'réf client', 'réf. client', 'reference client', 'réference client', 'référence client'],
     debiteur: ['debiteur', 'débiteur'],
-    refDossier: ['ref dossier', 'reference dossier', 'référence dossier'],
-    procedure: ['procedure', 'procédure'],
-    audience: ['audience'],
+    refDossier: ['ref dossier', 'réf dossier', 'réf. dossier', 'reference dossier', 'réference dossier', 'référence dossier'],
+    procedure: ['procedure', 'procédure', 'type procedure', 'type procédure'],
+    audience: ['audience', 'date audience', 'date d audience', 'date d\'audience'],
     juge: ['juge'],
     sort: ['sort'],
-    tribunal: ['tribunal'],
-    dateDepot: ['date depot', 'date depôt', 'date depot ']
+    tribunal: ['tribunal', 'trib', 'tr'],
+    dateDepot: ['date depot', 'date depôt', 'date depot ', 'depot le', 'dépôt le']
   };
   const referenceHints = {};
   const registerReferenceHint = (rawRef, procName, extras = {})=>{
@@ -5610,10 +5718,13 @@ function parseExcelData(rows){
   const audiences = [];
   for(let i=0;i<rows.length;i++){
     const map = buildHeaderMap(rows[i] || []);
-    const isAudienceHeader =
-      getColIndex(map, audienceHeaderKeys.refClient) !== -1 &&
-      getColIndex(map, audienceHeaderKeys.refDossier) !== -1 &&
-      getColIndex(map, audienceHeaderKeys.audience) !== -1;
+    const hasAudienceRefDossier = getColIndex(map, audienceHeaderKeys.refDossier) !== -1;
+    const hasAudienceDate = getColIndex(map, audienceHeaderKeys.audience) !== -1;
+    const hasAudienceIdentifier =
+      getColIndex(map, audienceHeaderKeys.refClient) !== -1
+      || getColIndex(map, audienceHeaderKeys.debiteur) !== -1
+      || hasAudienceRefDossier;
+    const isAudienceHeader = hasAudienceRefDossier && hasAudienceDate && hasAudienceIdentifier;
     if(!isAudienceHeader) continue;
 
     const idx = {
@@ -5879,6 +5990,12 @@ function showExcelImportResult(summary, issuesText){
   modal.style.display = 'flex';
 }
 
+function showExcelImportFailure(message, details = ''){
+  const summary = 'Import interrompu.';
+  const errorText = [String(message || '').trim(), String(details || '').trim()].filter(Boolean).join('\n');
+  showExcelImportResult(summary, errorText || 'Erreur d\'import non précisée.');
+}
+
 function resetAudienceFiltersUi(){
   filterAudienceColor = 'all';
   filterAudienceProcedure = 'all';
@@ -5960,11 +6077,19 @@ async function applyExcelImport(payload, options = {}){
   }
 
   if(importDossiers && !dossiers.length){
-    alert('Aucune ligne de dossier trouvée. Vérifiez les colonnes Excel (ex: Client/Ref client, Débiteur, Procédure/Type).');
+    showExcelImportFailure(
+      'Aucune ligne de dossier trouvée.',
+      'Vérifiez les colonnes Excel (ex: Client/Ref client, Débiteur, Procédure/Type).'
+    );
+    setSyncStatus('error', 'Import Excel: aucun dossier détecté');
     return;
   }
   if(!importDossiers && !audiences.length){
-    alert('Aucune ligne audience trouvée. Vérifiez les colonnes Excel (ex: Réf dossier, Audience, Juge, Sort, Tribunal).');
+    showExcelImportFailure(
+      'Aucune ligne audience trouvée.',
+      'Vérifiez les colonnes Excel (ex: Réf dossier, Audience, Juge, Sort, Tribunal).'
+    );
+    setSyncStatus('error', 'Import Excel: aucune audience détectée');
     return;
   }
 
@@ -6615,7 +6740,11 @@ async function applyExcelImport(payload, options = {}){
   }
   const summary = summaryLines.join('\n');
   closeImportProgressModal(true);
-  showExcelImportResult(summary, issuesText);
+  if(importDisplayErrors.length){
+    showExcelImportResult(summary, issuesText);
+  }else{
+    setSyncStatus('ok', 'Import Excel terminé');
+  }
   }finally{
     // Keep current sync status (persist call already set the right state).
   }
@@ -6661,8 +6790,11 @@ async function handleExcelImportFile(file, options = {}){
   }catch(err){
     console.error(err);
     const details = String(err?.message || '').trim();
-    const extra = details ? `\nDétail: ${details}` : '';
-    alert(`Erreur import Excel. Vérifiez le format (xlsx/xls) et les en-têtes.${extra}`);
+    showExcelImportFailure(
+      'Erreur import Excel. Vérifiez le format (xlsx/xls) et les en-têtes.',
+      details ? `Détail: ${details}` : ''
+    );
+    setSyncStatus('error', 'Import Excel échoué');
   }finally{
     closeImportProgressModal(false);
     importInProgress = false;

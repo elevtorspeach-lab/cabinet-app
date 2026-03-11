@@ -67,6 +67,9 @@ async function applyPersistedStateSource(normalizedState, options = {}){
   if(options.writeLocalStorage){
     writeStateToLocalStorage(buildAppStatePayload());
   }
+  if(options.fromRemote && typeof updateLastRemoteStatePayload === 'function'){
+    updateLastRemoteStatePayload(buildAppStatePayload());
+  }
   if(options.syncStatusMessage){
     setSyncStatus('ok', options.syncStatusMessage);
   }
