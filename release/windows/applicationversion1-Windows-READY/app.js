@@ -7525,7 +7525,11 @@ async function login(){
   const usernameInput = String($('username').value || '').trim().toLowerCase();
   const passwordInput = normalizeLoginPassword($('password').value);
   USERS = ensureManagerUser(Array.isArray(USERS) ? USERS : []);
-  await hardenUsersSecurity({ persist: true });
+  try{
+    await hardenUsersSecurity({ persist: true });
+  }catch(err){
+    console.warn('Sécurisation des comptes ignorée pendant la connexion', err);
+  }
   let u = null;
   for(const candidate of USERS){
     if(String(candidate?.username || '').trim().toLowerCase() !== usernameInput) continue;
