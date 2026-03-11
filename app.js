@@ -2266,6 +2266,31 @@ function normalizeLooseText(value){
     .trim();
 }
 
+function normalizeImportedDossierStatus(value){
+  const raw = String(value || '').trim();
+  const loose = normalizeLooseText(raw).toLowerCase();
+  if(!loose) return { statut: 'En cours', detail: '' };
+  const knownStatuses = [
+    { label: 'Arrêt définitif', key: 'arrêt définitif' },
+    { label: 'Arrêt définitif', key: 'arret definitif' },
+    { label: 'Suspension', key: 'suspension' },
+    { label: 'Clôture', key: 'clôture' },
+    { label: 'Clôture', key: 'cloture' },
+    { label: 'Soldé', key: 'soldé' },
+    { label: 'Soldé', key: 'solde' },
+    { label: 'En cours', key: 'en cours' }
+  ];
+  for(const item of knownStatuses){
+    if(!loose.startsWith(item.key)) continue;
+    const detail = raw
+      .slice(item.key.length)
+      .replace(/^[\s\-–—/:;,.|]+/g, '')
+      .trim();
+    return { statut: item.label, detail };
+  }
+  return { statut: 'En cours', detail: raw };
+}
+
 function makeTribunalFilterKey(value){
   const base = normalizeLooseText(value)
     .toLowerCase()
@@ -4374,7 +4399,7 @@ async function importAppsavocatPayload(rawPayload){
     let addedDossiers = 0;
     let skippedDossiers = 0;
 
-    const reportClientsProgress = makeProgressReporter('Import applicationversion1 - clients');
+    const reportClientsProgress = makeProgressReporter('Import Cabinet ARAQI HOUSSAINI - clients');
     await runChunked(importedClients, async (importedClient)=>{
     const key = makeClientMatchKey(importedClient.name || '');
     if(!key) return;
@@ -4422,7 +4447,7 @@ async function importAppsavocatPayload(rawPayload){
       USERS.map(user=>[String(user?.username || '').trim().toLowerCase(), user])
     );
     let addedUsers = 0;
-    const reportUsersProgress = makeProgressReporter('Import applicationversion1 - utilisateurs');
+    const reportUsersProgress = makeProgressReporter('Import Cabinet ARAQI HOUSSAINI - utilisateurs');
     await runChunked(importedUsers, async (user)=>{
     const usernameKey = String(user?.username || '').trim().toLowerCase();
     if(!usernameKey) return;
@@ -4465,7 +4490,7 @@ async function importAppsavocatPayload(rawPayload){
 
     alert(
       [
-        'Import applicationversion1 terminé.',
+        'Import Cabinet ARAQI HOUSSAINI terminé.',
         `Clients ajoutés: ${addedClients}`,
         `Dossiers ajoutés: ${addedDossiers}`,
         `Dossiers ignorés (doublons): ${skippedDossiers}`,
@@ -4488,9 +4513,9 @@ async function handleAppsavocatImportFile(file){
   }
   importInProgress = true;
   try{
-    openImportProgressModal('Import applicationversion1');
+    openImportProgressModal('Import Cabinet ARAQI HOUSSAINI');
     updateImportProgress('Lecture du fichier...', 0, 1);
-    setSyncStatus('syncing', 'Import applicationversion1 en cours...');
+    setSyncStatus('syncing', 'Import Cabinet ARAQI HOUSSAINI en cours...');
     const text = await file.text();
     updateImportProgress('Analyse du fichier...', 1, 3);
     const parsed = JSON.parse(text);
@@ -4500,7 +4525,7 @@ async function handleAppsavocatImportFile(file){
   }catch(err){
     console.error(err);
     const details = String(err?.message || '').trim();
-    alert(`Import applicationversion1 impossible.${details ? `\nDétail: ${details}` : ''}`);
+    alert(`Import Cabinet ARAQI HOUSSAINI impossible.${details ? `\nDétail: ${details}` : ''}`);
   }finally{
     closeImportProgressModal(false);
     importInProgress = false;
@@ -4718,14 +4743,14 @@ async function openDesktopStateFile(){
       if(result?.ok) return;
       const fallbackPath = String(result?.filePath || '').trim();
       if(fallbackPath){
-        alert(`Fichier applicationversion1 créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
+        alert(`Fichier Cabinet ARAQI HOUSSAINI créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
         return;
       }
-      alert('Impossible d’ouvrir applicationversion1.json.');
+      alert('Impossible d’ouvrir le fichier Cabinet ARAQI HOUSSAINI.');
       return;
     }catch(err){
-      console.warn('Ouverture applicationversion1.json impossible', err);
-      alert('Impossible d’ouvrir applicationversion1.json.');
+      console.warn('Ouverture Cabinet ARAQI HOUSSAINI impossible', err);
+      alert('Impossible d’ouvrir le fichier Cabinet ARAQI HOUSSAINI.');
       return;
     }
   }
@@ -4991,7 +5016,7 @@ async function loadPersistedState(){
         await applyPersistedStateSource(normalizedState, {
           writeIndexedDb: true,
           writeLocalStorage: true,
-          syncStatusMessage: 'Etat charge depuis applicationversion1.json'
+          syncStatusMessage: 'Etat charge depuis Cabinet ARAQI HOUSSAINI'
         });
         return true;
       }
@@ -5221,7 +5246,8 @@ function parseExcelData(rows){
     notificationNo: ['notification', 'notification n', 'notification n°', 'notificat', 'notification no', 'notification numero', 'num notification', 'numéro notification'],
     executionNo: ['execution n', 'execution no', 'execution n°', 'execution numero', 'num execution', 'numero execution', 'numéro execution'],
     sort: ['sort'],
-    tribunal: ['tribunal', 'trib', 'tr']
+    tribunal: ['tribunal', 'trib', 'tr'],
+    statut: ['statut', 'status', 'etat', 'état']
   };
 
   const audienceHeaderKeys = {
@@ -5319,7 +5345,8 @@ function parseExcelData(rows){
       notificationNo: getColIndex(dossierColMap, dossierHeaderKeys.notificationNo),
       executionNo: getColIndex(dossierColMap, dossierHeaderKeys.executionNo),
       sort: getColIndex(dossierColMap, dossierHeaderKeys.sort),
-      tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal)
+      tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal),
+      statut: getColIndex(dossierColMap, dossierHeaderKeys.statut)
     };
 
     let carriedAffectationDate = '';
@@ -5373,6 +5400,7 @@ function parseExcelData(rows){
       const dateAffectationExtra = String(affectationValues[1] || '').trim();
       const executionNo = idx.executionNo !== -1 ? String(row[idx.executionNo] || '').trim() : '';
       const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
+      const statutRaw = idx.statut !== -1 ? String(row[idx.statut] || '').trim() : '';
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
       const hasExplicitReferences = !!(refAssignation || refRestitution || refSfdc || refInjonction);
@@ -5424,7 +5452,8 @@ function parseExcelData(rows){
         notificationNo,
         executionNo,
         sort,
-        tribunal
+        tribunal,
+        statutRaw
       });
       carriedAffectationDate = '';
       carriedMontant = '';
@@ -6044,6 +6073,7 @@ async function applyExcelImport(payload, options = {}){
     const primaryDateCandidate = carriedAffectationDate || rowDateAffectation;
     const secondaryDateCandidate = carriedAffectationDate ? rowDateAffectation : rowDateAffectationExtra;
     const principalMontant = primaryMontant;
+    const importedStatus = normalizeImportedDossierStatus(row.statutRaw || '');
 
     const dossier = {
       debiteur: row.debiteur,
@@ -6067,7 +6097,8 @@ async function applyExcelImport(payload, options = {}){
       type: row.type,
       note: '',
       avancement: '',
-      statut: 'En cours',
+      statut: importedStatus.statut || 'En cours',
+      statutDetails: importedStatus.detail || '',
       files: []
     };
 
@@ -6877,8 +6908,7 @@ function setupEvents(){
     if(!file) return;
     handleExcelImportFile(file, {
       importDossiers: true,
-      importAudiences: false,
-      clearAudienceOnDossierOnly: true
+      importAudiences: false
     }).catch(err=>console.error(err));
     e.target.value = '';
   });
@@ -7115,13 +7145,8 @@ function setupEvents(){
       filterAudienceColor = 'all';
       const colorSel = $('filterAudienceColor');
       if(colorSel) colorSel.value = 'all';
-      if(color === 'all'){
-        audiencePrintSelection = new Set();
-      }else{
-        const rows = getAudienceRows().filter(r=>String(r?.p?.color || '') === color);
-        audiencePrintSelection = new Set(
-          rows.map(r=>makeAudiencePrintKey(r.ci, r.di, r.procKey))
-        );
+      if(color !== 'all'){
+        applyColorToSelectedAudienceRows(color);
       }
       renderAudience();
     });
@@ -7955,6 +7980,12 @@ function renderStatusBadge(status){
   return `<span class="status-badge ${cls}">${escapeHtml(value)}</span>`;
 }
 
+function renderStatusDisplay(status, detail = ''){
+  const safeDetail = String(detail || '').trim();
+  if(!safeDetail) return renderStatusBadge(status);
+  return `<div class="status-display">${renderStatusBadge(status)}<div class="status-detail">${escapeHtml(safeDetail)}</div></div>`;
+}
+
 function buildSuiviSearchHaystack(clientName, dossier, procedures, tribunaux){
   const fileNames = Array.isArray(dossier?.files)
     ? dossier.files.map(f=>String(f?.name || '').trim()).filter(Boolean)
@@ -8271,7 +8302,7 @@ function openDossierDetails(clientId, index){
   const detailsHtml = detailsRows.map(([label, value])=>`
     <div class="details-row">
       <div class="details-label">${escapeHtml(label)}</div>
-      <div class="details-value">${label === 'Statut' ? renderStatusBadge(value) : escapeHtml(value)}</div>
+      <div class="details-value">${label === 'Statut' ? renderStatusDisplay(value, dossier.statutDetails || '') : escapeHtml(value)}</div>
     </div>
   `).join('');
 
@@ -9561,7 +9592,7 @@ function queueAudienceCheckedCountRender(){
 }
 
 function pruneAudiencePrintSelection(rows = null){
-  const sourceRows = Array.isArray(rows) ? rows : getAudienceRows({ ignoreSearch: true, ignoreColor: true });
+  const sourceRows = getAudienceRows({ ignoreSearch: true, ignoreColor: true });
   const validKeys = new Set(sourceRows.map(row=>makeAudiencePrintKey(row.ci, row.di, row.procKey)));
   let changed = false;
   audiencePrintSelection.forEach(key=>{
@@ -9758,6 +9789,41 @@ function getFilteredAudienceRows(allRows = null){
   audienceFilteredRowsCacheKey = filterKey;
   audienceFilteredRowsCacheOutput = out;
   return out;
+}
+
+function applyColorToSelectedAudienceRows(color){
+  const targetColor = String(color || '').trim();
+  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  if(!allowed.has(targetColor) || !audiencePrintSelection.size) return false;
+  const rows = getAudienceRows({ ignoreSearch: true, ignoreColor: true });
+  let changed = false;
+  let lastClientId = null;
+  let lastDossier = null;
+  rows.forEach(row=>{
+    const key = makeAudiencePrintKey(row.ci, row.di, row.procKey);
+    if(!audiencePrintSelection.has(key)) return;
+    const dossier = AppState.clients?.[row.ci]?.dossiers?.[row.di];
+    const client = AppState.clients?.[row.ci];
+    if(!dossier || !client) return;
+    const p = getAudienceProcedure(row.ci, row.di, row.procKey);
+    if(String(p?.color || '').trim() === targetColor) return;
+    p.color = targetColor;
+    if(targetColor === 'purple-dark') dossier.statut = 'Soldé';
+    if(targetColor === 'purple-light') dossier.statut = 'Arrêt définitif';
+    changed = true;
+    lastClientId = client.id;
+    lastDossier = dossier;
+  });
+  if(!changed) return false;
+  markAudienceColorCachesDirty();
+  queueAudienceColorBatchUpdate({
+    persist: true,
+    persistClientId: lastClientId,
+    persistDossier: lastDossier,
+    dashboard: true,
+    suivi: true
+  });
+  return true;
 }
 
 function setAllVisibleAudienceRowsForPrint(checked){

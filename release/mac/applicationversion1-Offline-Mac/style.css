@@ -2245,6 +2245,21 @@ tr.color-purple-light{border-left:6px solid #f97316;background:#fff7ed}
   word-break:break-word;
 }
 
+.status-display{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:6px;
+}
+
+.status-detail{
+  font-size:12px;
+  line-height:1.25;
+  color:#475569;
+  font-weight:600;
+  white-space:normal;
+}
+
 .details-files h3{
   margin:0 0 8px;
   color:#1e3a8a;
