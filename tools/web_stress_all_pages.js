@@ -14,7 +14,7 @@ const AUDIENCE_COUNT = Math.max(0, Number(process.env.BENCH_AUDIENCES || (audien
 const CLIENT_COUNT = Math.max(1, Number(process.env.BENCH_CLIENTS || (clientArg ? clientArg.slice('--clients='.length) : 300)) || 300);
 
 const SOURCE_ROOT = path.join(__dirname, '..');
-const TEMP_ROOT = path.join(os.tmpdir(), `cabinet-avocat-stress-${Date.now()}`);
+const TEMP_ROOT = path.join(os.tmpdir(), `applicationversion1-stress-${Date.now()}`);
 const PORT = 3300;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;

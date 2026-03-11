@@ -1,4 +1,4 @@
-# Guide d'utilisation - Cabinet ARAQI HOUSSAINI
+# Guide d'utilisation - applicationversion1
 
 ## 1. Objectif de l'application
 
@@ -37,8 +37,8 @@ Le menu contient:
 - `Corbeille`
 
 Il contient aussi:
-- `Fichier appsavocat`
-- `Importer appsavocat`
+- `Fichier applicationversion1`
+- `Importer applicationversion1`
 - `Deconnecter`
 
 ## 4. Dashboard
@@ -364,16 +364,16 @@ Utiliser cette section avec prudence avant de vider la corbeille.
 
 ## 17. Import / Export
 
-### Import appsavocat
+### Import applicationversion1
 
 Permet de recharger un fichier de donnees de l'application.
 
 Utilisation:
-1. cliquer sur `Importer appsavocat`
-2. choisir le fichier `.json` ou `.appsavocat`
+1. cliquer sur `Importer applicationversion1`
+2. choisir le fichier `.json`, `.appsavocat` ou `.applicationversion1`
 3. attendre la fin du chargement
 
-### Fichier appsavocat
+### Fichier applicationversion1
 
 Permet d'ouvrir ou de travailler avec le fichier de donnees local.
 

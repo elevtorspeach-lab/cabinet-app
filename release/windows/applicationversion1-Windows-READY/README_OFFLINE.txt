@@ -1,4 +1,4 @@
-Cabinet Avocat - Mode Offline (sans serveur)
+applicationversion1 - Mode Offline (sans serveur)
 
 Utilisation:
 1) Ouvrir le dossier.

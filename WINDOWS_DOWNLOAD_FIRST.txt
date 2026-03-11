@@ -1,5 +1,5 @@
 Windows: download this file only
-release/windows/cabinet-avocat-windows.zip
+release/windows/applicationversion1-windows.zip
 
 After download:
 1) Extract All

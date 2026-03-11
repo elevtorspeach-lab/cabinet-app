@@ -1,7 +1,7 @@
-Cabinet Avocat - Windows READY (sans installation)
+applicationversion1 - Windows READY (sans installation)
 
 Ce dossier est pret a utiliser sur Windows et ne necessite AUCUN installateur.
-Donc, le probleme "Cabinet Avocat ne peut pas etre ferme" ne peut pas se produire ici.
+Donc, le probleme "applicationversion1 ne peut pas etre ferme" ne peut pas se produire ici.
 
 Utilisation:
 1) Extraire le ZIP dans un dossier normal (pas dans WinRAR).

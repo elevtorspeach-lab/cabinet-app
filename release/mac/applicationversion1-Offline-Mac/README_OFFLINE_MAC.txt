@@ -1,4 +1,4 @@
-Cabinet Avocat - Version Mac Offline
+applicationversion1 - Version Mac Offline
 
 Utilisation:
 1) Dézipper le dossier.

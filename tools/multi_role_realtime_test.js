@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
 const { buildPayload } = require('./benchmark_large_state');
 
 const SOURCE_ROOT = path.join(__dirname, '..');
-const TEMP_ROOT = path.join(os.tmpdir(), `cabinet-avocat-realtime-${Date.now()}`);
+const TEMP_ROOT = path.join(os.tmpdir(), `applicationversion1-realtime-${Date.now()}`);
 const PORT = 3500;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;

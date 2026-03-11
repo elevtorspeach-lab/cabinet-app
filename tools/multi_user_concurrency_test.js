@@ -15,7 +15,7 @@ const USER_COUNT = 10;
 const SESSION_TIMEOUT_MS = 90000;
 
 const SOURCE_ROOT = path.join(__dirname, '..');
-const TEMP_ROOT = path.join(os.tmpdir(), `cabinet-avocat-multiuser-${Date.now()}`);
+const TEMP_ROOT = path.join(os.tmpdir(), `applicationversion1-multiuser-${Date.now()}`);
 const PORT = 3400;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;

@@ -44,7 +44,7 @@ const INDEXED_DB_VERSION = 2;
 const INDEXED_DB_STORE = 'state_store';
 const INDEXED_DB_BACKUP_STORE = 'backup_store';
 const INDEXED_DB_STATE_KEY = 'app_state';
-const API_BASE_STORAGE_KEY = 'cabinet-avocat-api-base-v1';
+const API_BASE_STORAGE_KEY = 'applicationversion1-api-base-v1';
 const AUTO_BACKUP_STORAGE_KEY = 'cabinet-avocat-auto-backups-v1';
 let API_BASE = 'http://127.0.0.1:3000/api';
 let API_BASE_RESOLVED = false;
@@ -3812,7 +3812,7 @@ async function importAppsavocatPayload(rawPayload){
     let addedDossiers = 0;
     let skippedDossiers = 0;
 
-    const reportClientsProgress = makeProgressReporter('Import appsavocat - clients');
+    const reportClientsProgress = makeProgressReporter('Import applicationversion1 - clients');
     await runChunked(importedClients, async (importedClient)=>{
     const key = makeClientMatchKey(importedClient.name || '');
     if(!key) return;
@@ -3860,7 +3860,7 @@ async function importAppsavocatPayload(rawPayload){
       USERS.map(user=>[String(user?.username || '').trim().toLowerCase(), user])
     );
     let addedUsers = 0;
-    const reportUsersProgress = makeProgressReporter('Import appsavocat - utilisateurs');
+    const reportUsersProgress = makeProgressReporter('Import applicationversion1 - utilisateurs');
     await runChunked(importedUsers, async (user)=>{
     const usernameKey = String(user?.username || '').trim().toLowerCase();
     if(!usernameKey) return;
@@ -3906,7 +3906,7 @@ async function importAppsavocatPayload(rawPayload){
 
     alert(
       [
-        'Import appsavocat terminé.',
+        'Import applicationversion1 terminé.',
         `Clients ajoutés: ${addedClients}`,
         `Dossiers ajoutés: ${addedDossiers}`,
         `Dossiers ignorés (doublons): ${skippedDossiers}`,
@@ -3929,9 +3929,9 @@ async function handleAppsavocatImportFile(file){
   }
   importInProgress = true;
   try{
-    openImportProgressModal('Import appsavocat');
+    openImportProgressModal('Import applicationversion1');
     updateImportProgress('Lecture du fichier...', 0, 1);
-    setSyncStatus('syncing', 'Import appsavocat en cours...');
+    setSyncStatus('syncing', 'Import applicationversion1 en cours...');
     const text = await file.text();
     updateImportProgress('Analyse du fichier...', 1, 3);
     const parsed = JSON.parse(text);
@@ -3941,7 +3941,7 @@ async function handleAppsavocatImportFile(file){
   }catch(err){
     console.error(err);
     const details = String(err?.message || '').trim();
-    alert(`Import appsavocat impossible.${details ? `\nDétail: ${details}` : ''}`);
+    alert(`Import applicationversion1 impossible.${details ? `\nDétail: ${details}` : ''}`);
   }finally{
     closeImportProgressModal(false);
     importInProgress = false;
@@ -4164,14 +4164,14 @@ async function openDesktopStateFile(){
       if(result?.ok) return;
       const fallbackPath = String(result?.filePath || '').trim();
       if(fallbackPath){
-        alert(`Fichier appsavocat créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
+        alert(`Fichier applicationversion1 créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
         return;
       }
-      alert('Impossible d’ouvrir appsavocat.json.');
+      alert('Impossible d’ouvrir applicationversion1.json.');
       return;
     }catch(err){
-      console.warn('Ouverture appsavocat.json impossible', err);
-      alert('Impossible d’ouvrir appsavocat.json.');
+      console.warn('Ouverture applicationversion1.json impossible', err);
+      alert('Impossible d’ouvrir applicationversion1.json.');
       return;
     }
   }
@@ -4183,7 +4183,7 @@ async function persistDesktopStateFileNow(payload = buildAppStatePayload()){
   try{
     await window.cabinetDesktopState.writeState(payload);
   }catch(err){
-    console.warn('Impossible de sauvegarder appsavocat.json', err);
+    console.warn('Impossible de sauvegarder applicationversion1.json', err);
   }
 }
 
@@ -4371,11 +4371,11 @@ async function loadPersistedState(){
         const snapshot = buildAppStatePayload();
         await writeStateToIndexedDb(snapshot);
         writeStateToLocalStorage(snapshot);
-        setSyncStatus('ok', 'Etat charge depuis appsavocat.json');
+        setSyncStatus('ok', 'Etat charge depuis applicationversion1.json');
         return true;
       }
   }catch(err){
-    console.warn('Impossible de charger appsavocat.json', err);
+    console.warn('Impossible de charger applicationversion1.json', err);
   }
   }
 

@@ -13,7 +13,7 @@ function readCountArg(flag, fallback) {
 }
 
 const SOURCE_ROOT = path.join(__dirname, '..');
-const TEMP_ROOT = path.join(os.tmpdir(), `cabinet-avocat-full-validation-${Date.now()}`);
+const TEMP_ROOT = path.join(os.tmpdir(), `applicationversion1-full-validation-${Date.now()}`);
 const PORT = 3700;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
@@ -52,7 +52,7 @@ async function writeImportFixture() {
     dossiers: DOSSIER_COUNT,
     audiences: AUDIENCE_COUNT
   });
-  const fixturePath = path.join(TEMP_ROOT, 'fixture.appsavocat.json');
+  const fixturePath = path.join(TEMP_ROOT, 'fixture.applicationversion1.json');
   await fs.writeFile(fixturePath, JSON.stringify(payload), 'utf8');
   return fixturePath;
 }

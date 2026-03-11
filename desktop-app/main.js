@@ -3,7 +3,7 @@ const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 
-const STATE_FILE_NAME = 'appsavocat.json';
+const STATE_FILE_NAME = 'applicationversion1.json';
 
 function getDesktopStateFilePath() {
   return path.join(app.getPath('downloads'), STATE_FILE_NAME);
@@ -79,7 +79,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   ensureDesktopStateFileExists().catch((err) => {
-    console.warn('Unable to initialize appsavocat.json', err);
+    console.warn('Unable to initialize applicationversion1.json', err);
   });
 
   ipcMain.handle('desktop-state:get-path', async () => {

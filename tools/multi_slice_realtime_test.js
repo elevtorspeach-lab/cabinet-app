@@ -13,7 +13,7 @@ function readCountArg(flag, fallback) {
 }
 
 const SOURCE_ROOT = path.join(__dirname, '..');
-const TEMP_ROOT = path.join(os.tmpdir(), `cabinet-avocat-slices-${Date.now()}`);
+const TEMP_ROOT = path.join(os.tmpdir(), `applicationversion1-slices-${Date.now()}`);
 const PORT = 3600;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;

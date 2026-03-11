@@ -9,7 +9,7 @@ const clientArg = process.argv.find((arg) => arg.startsWith('--clients='));
 const DOSSIER_COUNT = Math.max(1, Number(process.env.BENCH_DOSSIERS || (dossierArg ? dossierArg.slice('--dossiers='.length) : 60000)) || 60000);
 const AUDIENCE_COUNT = Math.max(0, Number(process.env.BENCH_AUDIENCES || (audienceArg ? audienceArg.slice('--audiences='.length) : 80000)) || 80000);
 const CLIENT_COUNT = Math.max(1, Number(process.env.BENCH_CLIENTS || (clientArg ? clientArg.slice('--clients='.length) : 300)) || 300);
-const OUTPUT_DIR = path.join(os.tmpdir(), 'cabinet-avocat-benchmark');
+const OUTPUT_DIR = path.join(os.tmpdir(), 'applicationversion1-benchmark');
 const postUrlArg = process.argv.find((arg) => arg.startsWith('--post-url='));
 const POST_URL = postUrlArg ? postUrlArg.slice('--post-url='.length) : '';
 

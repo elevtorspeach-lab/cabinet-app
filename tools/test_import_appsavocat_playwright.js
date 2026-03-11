@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
 const { buildPayload, DOSSIER_COUNT, AUDIENCE_COUNT } = require('./benchmark_large_state');
 
 const SOURCE_ROOT = path.join(__dirname, '..');
-const TEMP_ROOT = path.join(os.tmpdir(), `cabinet-avocat-import-test-${Date.now()}`);
+const TEMP_ROOT = path.join(os.tmpdir(), `applicationversion1-import-test-${Date.now()}`);
 const PORT = 3200;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
@@ -38,7 +38,7 @@ async function writeEmptyServerState() {
 
 async function writeImportFixture() {
   const payload = buildPayload();
-  const fixturePath = path.join(TEMP_ROOT, 'fixture.appsavocat.json');
+  const fixturePath = path.join(TEMP_ROOT, 'fixture.applicationversion1.json');
   await fs.writeFile(fixturePath, JSON.stringify(payload), 'utf8');
   return { payload, fixturePath };
 }

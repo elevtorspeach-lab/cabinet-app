@@ -1,9 +1,9 @@
 {
-  "name": "cabinet-avocat-desktop",
+  "name": "applicationversion1",
   "version": "1.0.0",
-  "description": "Cabinet Avocat offline desktop app",
+  "description": "applicationversion1 offline desktop app",
   "main": "main.js",
-  "author": "Cabinet Araqi Houssaini",
+  "author": "applicationversion1",
   "private": true,
   "scripts": {
     "start": "electron .",
@@ -16,8 +16,8 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.cabinetavocat.offline",
-    "productName": "Cabinet Avocat",
+    "appId": "com.applicationversion1.offline",
+    "productName": "applicationversion1",
     "icon": "build/icon.png",
     "files": [
       "main.js",
@@ -38,7 +38,7 @@
           ]
         }
       ],
-      "artifactName": "Cabinet-Avocat-Portable-${version}.${ext}"
+      "artifactName": "applicationversion1-${version}.${ext}"
     }
   }
 }
