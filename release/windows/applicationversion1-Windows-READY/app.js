@@ -2078,6 +2078,7 @@ function getPasswordPolicyMessage(){
 function passwordNeedsReset(user, rawPassword = ''){
   const candidate = String(rawPassword || user?.password || '').trim();
   if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && isDefaultPasswordValue(candidate)) return false;
+  if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD) return false;
   if(user?.mustChangePassword) return true;
   return !isPasswordStrong(candidate, user?.username || '');
 }
@@ -2139,6 +2140,23 @@ async function hardenUsersSecurity(options = {}){
   let changed = false;
   for(const user of users){
     if(!user || typeof user !== 'object') continue;
+    if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD){
+      if(isDefaultManagerUser(user)){
+        const defaultHash = await hashPassword(DEFAULT_MANAGER_PASSWORD);
+        if(user.passwordHash !== defaultHash || user.password){
+          user.passwordHash = defaultHash;
+          user.passwordVersion = PASSWORD_HASH_VERSION;
+          user.passwordUpdatedAt = new Date().toISOString();
+          user.password = '';
+          changed = true;
+        }
+      }
+      if(user.mustChangePassword){
+        user.mustChangePassword = false;
+        changed = true;
+      }
+      continue;
+    }
     const legacyPassword = String(user.password || '');
     if(!hasProtectedPassword(user) && legacyPassword){
       const mustReset = passwordNeedsReset(user, legacyPassword);
@@ -7280,6 +7298,9 @@ function setupEvents(){
       filterAudienceColor = 'all';
       const colorSel = $('filterAudienceColor');
       if(colorSel) colorSel.value = 'all';
+      if(color !== 'all' && applyAudienceColorSelectionToCheckedRows(color)){
+        return;
+      }
       if(color === 'all'){
         audiencePrintSelection = new Set();
       }else{
@@ -7366,7 +7387,7 @@ async function login(){
     }
   }
   if(!u){ $('errorMsg').style.display='block'; return; }
-  if(passwordNeedsReset(u, passwordInput)){
+  if(!ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && passwordNeedsReset(u, passwordInput)){
     const changed = await promptPasswordResetForUser(u);
     if(!changed){
       $('errorMsg').style.display='block';
@@ -9794,6 +9815,45 @@ function toggleAudienceSelectionAndColorEncoded(ci, di, procKeyEncoded, checked)
   setAudienceColor(ci, di, procKey, checked);
 }
 
+function getAudienceSortValueForColor(color){
+  const normalized = String(color || '').trim();
+  if(normalized === 'blue') return 'att sort';
+  if(normalized === 'green') return 'att jugement';
+  return '';
+}
+
+function applyAudienceColorSelectionToCheckedRows(color){
+  const normalizedColor = String(color || '').trim();
+  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  if(!allowed.has(normalizedColor)) return false;
+  if(!audiencePrintSelection.size) return false;
+  let changed = false;
+  const mappedSort = getAudienceSortValueForColor(normalizedColor);
+  audiencePrintSelection.forEach(key=>{
+    const [ciRaw, diRaw, procKey = ''] = String(key || '').split('::');
+    const ci = Number(ciRaw);
+    const di = Number(diRaw);
+    if(!Number.isFinite(ci) || !Number.isFinite(di) || !procKey) return;
+    const p = getAudienceProcedure(ci, di, procKey);
+    if(mappedSort && String(p.sort || '').trim().toLowerCase() !== mappedSort){
+      p.sort = mappedSort;
+      const draftKey = makeAudienceDraftKey(ci, di, procKey);
+      if(!audienceDraft[draftKey]) audienceDraft[draftKey] = {};
+      audienceDraft[draftKey].sort = mappedSort;
+      changed = true;
+    }
+    const beforeColor = String(p.color || '').trim();
+    setAudienceColor(ci, di, procKey, true);
+    if(String(p.color || '').trim() !== beforeColor) changed = true;
+  });
+  if(changed){
+    markAudienceRowsCacheDirty();
+    queueAudienceAutoSave();
+    renderAudienceKeepingPosition();
+  }
+  return changed;
+}
+
 function getActiveAudiencePriorityColor(){
   const activeBtn = document.querySelector('.color-btn[data-color].active');
   const color = String(activeBtn?.dataset?.color || '').trim();
@@ -10549,6 +10609,8 @@ function setAudienceColor(ci, di, procKey, checked){
   if(!dossier) return;
   const p = getAudienceProcedure(ci, di, procKey);
   const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  const sortValue = String(audienceDraft[makeAudienceDraftKey(ci, di, procKey)]?.sort || p?.sort || '').trim();
+  const inferredColor = inferAudienceColorFromSortValue(sortValue);
   if(!checked){
     p.color = '';
     if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif'){
@@ -10559,14 +10621,28 @@ function setAudienceColor(ci, di, procKey, checked){
     return;
   }
   if(selectedAudienceColor === 'all' || !allowed.has(selectedAudienceColor)){
-    queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
-    return;
+    if(!inferredColor){
+      queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
+      return;
+    }
   }
-  p.color = selectedAudienceColor;
-  if(selectedAudienceColor === 'purple-dark') dossier.statut = 'Soldé';
-  if(selectedAudienceColor === 'purple-light') dossier.statut = 'Arrêt définitif';
+  p.color = inferredColor || selectedAudienceColor;
+  if(p.color === 'purple-dark') dossier.statut = 'Soldé';
+  else if(p.color === 'purple-light') dossier.statut = 'Arrêt définitif';
+  else if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif') dossier.statut = 'En cours';
   markAudienceColorCachesDirty();
   queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: true });
+}
+
+function inferAudienceColorFromSortValue(value){
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  if(!normalized) return '';
+  if(normalized.includes('att jugement')) return 'green';
+  if(normalized.includes('att sort')) return 'blue';
+  return '';
 }
 
 function setAudienceColorEncoded(ci, di, procKeyEncoded, checked){
@@ -10708,6 +10784,9 @@ function updateAudienceDraft(key, field, value){
       before,
       after
     });
+  }
+  if(field === 'sort' && isAudienceSelectedForPrint(ci, di, procKey)){
+    setAudienceColor(ci, di, procKey, true);
   }
   // Avoid full-state persist and linked heavy renders on every keystroke.
   // We keep in-memory update immediate and persist through debounced autosave.

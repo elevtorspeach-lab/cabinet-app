@@ -240,6 +240,7 @@ let salleAudienceMapCache = null;
 let salleAudienceMapCacheVersion = -1;
 let salleAudienceMapAssignmentsVersion = -1;
 let salleAudienceMapCacheUserKey = '';
+let suiviStatusObserver = null;
 let loginPostBootTimer = null;
 const dashboardMetricState = new Map();
 const DEFERRED_RENDER_SECTION_IDS = {
@@ -2078,6 +2079,7 @@ function getPasswordPolicyMessage(){
 function passwordNeedsReset(user, rawPassword = ''){
   const candidate = String(rawPassword || user?.password || '').trim();
   if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && isDefaultPasswordValue(candidate)) return false;
+  if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD) return false;
   if(user?.mustChangePassword) return true;
   return !isPasswordStrong(candidate, user?.username || '');
 }
@@ -2139,6 +2141,23 @@ async function hardenUsersSecurity(options = {}){
   let changed = false;
   for(const user of users){
     if(!user || typeof user !== 'object') continue;
+    if(ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD){
+      if(isDefaultManagerUser(user)){
+        const defaultHash = await hashPassword(DEFAULT_MANAGER_PASSWORD);
+        if(user.passwordHash !== defaultHash || user.password){
+          user.passwordHash = defaultHash;
+          user.passwordVersion = PASSWORD_HASH_VERSION;
+          user.passwordUpdatedAt = new Date().toISOString();
+          user.password = '';
+          changed = true;
+        }
+      }
+      if(user.mustChangePassword){
+        user.mustChangePassword = false;
+        changed = true;
+      }
+      continue;
+    }
     const legacyPassword = String(user.password || '');
     if(!hasProtectedPassword(user) && legacyPassword){
       const mustReset = passwordNeedsReset(user, legacyPassword);
@@ -5385,7 +5404,8 @@ function parseExcelData(rows){
     notificationNo: ['notification', 'notification n', 'notification n°', 'notificat', 'notification no', 'notification numero', 'num notification', 'numéro notification'],
     executionNo: ['execution n', 'execution no', 'execution n°', 'execution numero', 'num execution', 'numero execution', 'numéro execution'],
     sort: ['sort'],
-    tribunal: ['tribunal', 'trib', 'tr']
+    tribunal: ['tribunal', 'trib', 'tr'],
+    statut: ['statut', 'status', 'etat', 'état']
   };
 
   const audienceHeaderKeys = {
@@ -5483,7 +5503,8 @@ function parseExcelData(rows){
       notificationNo: getColIndex(dossierColMap, dossierHeaderKeys.notificationNo),
       executionNo: getColIndex(dossierColMap, dossierHeaderKeys.executionNo),
       sort: getColIndex(dossierColMap, dossierHeaderKeys.sort),
-      tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal)
+      tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal),
+      statut: getColIndex(dossierColMap, dossierHeaderKeys.statut)
     };
 
     let carriedAffectationDate = '';
@@ -5537,6 +5558,7 @@ function parseExcelData(rows){
       const dateAffectationExtra = String(affectationValues[1] || '').trim();
       const executionNo = idx.executionNo !== -1 ? String(row[idx.executionNo] || '').trim() : '';
       const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
+      const statutRaw = idx.statut !== -1 ? String(row[idx.statut] || '').trim() : '';
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
       const hasExplicitReferences = !!(refAssignation || refRestitution || refSfdc || refInjonction);
@@ -5588,7 +5610,8 @@ function parseExcelData(rows){
         notificationNo,
         executionNo,
         sort,
-        tribunal
+        tribunal,
+        statutRaw
       });
       carriedAffectationDate = '';
       carriedMontant = '';
@@ -5638,6 +5661,37 @@ function parseExcelData(rows){
   }
 
   return { dossiers, audiences, referenceHints };
+}
+
+function normalizeImportedDossierStatus(value){
+  const raw = normalizeLooseText(value);
+  if(!raw) return { statut: 'En cours', detail: '' };
+  const asciiRaw = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const lowerAsciiRaw = asciiRaw.toLowerCase();
+  const knownStatuses = [
+    { label: 'Arrêt définitif', key: 'arret definitif' },
+    { label: 'Suspension', key: 'suspension' },
+    { label: 'Clôture', key: 'cloture' },
+    { label: 'Soldé', key: 'solde' },
+    { label: 'En cours', key: 'en cours' }
+  ];
+  for(const item of knownStatuses){
+    if(!lowerAsciiRaw.startsWith(item.key)) continue;
+    const detail = raw
+      .slice(item.key.length)
+      .replace(/^[\s\-–—/:;,.|]+/g, '')
+      .trim();
+    return {
+      statut: item.label,
+      detail
+    };
+  }
+  return {
+    statut: 'En cours',
+    detail: raw
+  };
 }
 
 function buildExcelImportIssueMessage(issues){
@@ -6208,6 +6262,7 @@ async function applyExcelImport(payload, options = {}){
     const primaryDateCandidate = carriedAffectationDate || rowDateAffectation;
     const secondaryDateCandidate = carriedAffectationDate ? rowDateAffectation : rowDateAffectationExtra;
     const principalMontant = primaryMontant;
+    const importedStatus = normalizeImportedDossierStatus(row.statutRaw || '');
 
     const dossier = {
       debiteur: row.debiteur,
@@ -6231,7 +6286,8 @@ async function applyExcelImport(payload, options = {}){
       type: row.type,
       note: '',
       avancement: '',
-      statut: 'En cours',
+      statut: importedStatus.statut || 'En cours',
+      statutDetails: importedStatus.detail || '',
       files: []
     };
 
@@ -6958,6 +7014,7 @@ async function initApplication(){
   await persistDesktopStateFileNow();
   hasLoadedState = true;
   setupEvents();
+  installSuiviStatusObserver();
   restoreSidebarState();
   renderProcedureMontantGroups();
   markDeferredRenderDirty(
@@ -7280,14 +7337,10 @@ function setupEvents(){
       filterAudienceColor = 'all';
       const colorSel = $('filterAudienceColor');
       if(colorSel) colorSel.value = 'all';
-      if(color === 'all'){
-        audiencePrintSelection = new Set();
-      }else{
-        const rows = getAudienceRows().filter(r=>String(r?.p?.color || '') === color);
-        audiencePrintSelection = new Set(
-          rows.map(r=>makeAudiencePrintKey(r.ci, r.di, r.procKey))
-        );
+      if(color !== 'all'){
+        applyAudienceColorSelectionToCheckedRows(color);
       }
+      queueAudienceCheckedCountRender();
       renderAudience();
     });
   });
@@ -7366,7 +7419,7 @@ async function login(){
     }
   }
   if(!u){ $('errorMsg').style.display='block'; return; }
-  if(passwordNeedsReset(u, passwordInput)){
+  if(!ALLOW_WEAK_LOCAL_DEFAULT_PASSWORD && passwordNeedsReset(u, passwordInput)){
     const changed = await promptPasswordResetForUser(u);
     if(!changed){
       $('errorMsg').style.display='block';
@@ -7753,6 +7806,13 @@ async function addDossier(){
     const montantInputValue = String($('montantInput')?.value || '').trim();
     const montantFallbackRaw = montantInputValue || montantGroups.map(g=>String(g.montant || '').trim()).filter(Boolean).join(' | ');
     const montantFallback = getLowerMontantValue(montantFallbackRaw);
+    const previousImportedStatusDetail = editingDossier
+      ? String(
+        AppState.clients.find(c=>c.id == editingDossier.clientId)
+          ?.dossiers?.[editingDossier.index]
+          ?.statutDetails || ''
+      ).trim()
+      : '';
 
     const dossier = {
       debiteur: $('debiteurInput').value.trim(),
@@ -7777,6 +7837,7 @@ async function addDossier(){
       note: $('noteInput')?.value.trim() || '',
       avancement: $('avancementInput')?.value.trim() || '',
       statut: $('statutInput')?.value || 'En cours',
+      statutDetails: previousImportedStatusDetail,
       files: await serializeUploadedFiles(uploadedFiles)
     };
     dossier.history = [];
@@ -8134,6 +8195,48 @@ function renderStatusBadge(status){
   return `<span class="status-badge ${cls}">${escapeHtml(value)}</span>`;
 }
 
+function renderStatusContent(status, detail = ''){
+  const detailText = String(detail || '').trim();
+  return `
+    <div class="status-stack">
+      ${renderStatusBadge(status)}
+      ${detailText ? `<div class="status-detail">${escapeHtml(detailText)}</div>` : ''}
+    </div>
+  `;
+}
+
+function enhanceSuiviStatusCells(){
+  const body = $('suiviBody');
+  if(!body) return;
+  body.querySelectorAll('tr').forEach(row=>{
+    const actionBtn = row.querySelector('button[data-action][data-client-id][data-dossier-index]');
+    if(!actionBtn) return;
+    const clientId = Number(actionBtn.dataset.clientId);
+    const dossierIndex = Number(actionBtn.dataset.dossierIndex);
+    if(!Number.isFinite(clientId) || !Number.isFinite(dossierIndex)) return;
+    const data = getDossierByIds(clientId, dossierIndex);
+    if(!data?.dossier) return;
+    const statusCell = row.querySelector('td[data-label="Statut"]') || row.children?.[8] || null;
+    if(!statusCell) return;
+    const status = String(data.dossier.statut || 'En cours').trim() || 'En cours';
+    const detail = String(data.dossier.statutDetails || '').trim();
+    const signature = `${status}||${detail}`;
+    if(statusCell.dataset.statusSignature === signature) return;
+    statusCell.dataset.statusSignature = signature;
+    statusCell.innerHTML = renderStatusContent(status, detail);
+  });
+}
+
+function installSuiviStatusObserver(){
+  const body = $('suiviBody');
+  if(!body || suiviStatusObserver) return;
+  suiviStatusObserver = new MutationObserver(()=>{
+    enhanceSuiviStatusCells();
+  });
+  suiviStatusObserver.observe(body, { childList: true, subtree: true });
+  enhanceSuiviStatusCells();
+}
+
 function buildSuiviSearchHaystack(clientName, dossier, procedures, tribunaux){
   const fileNames = Array.isArray(dossier?.files)
     ? dossier.files.map(f=>String(f?.name || '').trim()).filter(Boolean)
@@ -8450,7 +8553,7 @@ function openDossierDetails(clientId, index){
   const detailsHtml = detailsRows.map(([label, value])=>`
     <div class="details-row">
       <div class="details-label">${escapeHtml(label)}</div>
-      <div class="details-value">${label === 'Statut' ? renderStatusBadge(value) : escapeHtml(value)}</div>
+      <div class="details-value">${label === 'Statut' ? renderStatusContent(value, dossier.statutDetails || '') : escapeHtml(value)}</div>
     </div>
   `).join('');
 
@@ -8572,7 +8675,7 @@ function downloadDossierSummary(clientId, index){
     `Ville de caution: ${dossier.cautionVille || '-'}`,
     `CIN de caution: ${dossier.cautionCin || '-'}`,
     `RC: ${dossier.cautionRc || '-'}`,
-    `Statut: ${dossier.statut || 'En cours'}`,
+    `Statut: ${dossier.statut || 'En cours'}${dossier.statutDetails ? ` / ${dossier.statutDetails}` : ''}`,
     `Avancement: ${dossier.avancement || '-'}`,
     `Note: ${dossier.note || '-'}`,
     '',
@@ -9767,6 +9870,44 @@ function updateAudienceCheckedCount(){
   node.innerHTML = `<span class="label">Cochés</span><span class="value">${count}</span>`;
 }
 
+function getAudienceSelectionResolvedColor(){
+  if(!audiencePrintSelection.size) return 'all';
+  const allowed = new Set(['blue', 'green', 'yellow', 'purple-dark', 'purple-light', 'red']);
+  let resolvedColor = '';
+  audiencePrintSelection.forEach(key=>{
+    if(resolvedColor === 'mixed') return;
+    const [ciRaw, diRaw, procKey = ''] = String(key || '').split('::');
+    const ci = Number(ciRaw);
+    const di = Number(diRaw);
+    if(!Number.isFinite(ci) || !Number.isFinite(di) || !procKey){
+      resolvedColor = 'mixed';
+      return;
+    }
+    const p = getAudienceProcedure(ci, di, procKey);
+    const draftKey = makeAudienceDraftKey(ci, di, procKey);
+    const sortValue = String(audienceDraft[draftKey]?.sort || p?.sort || '').trim();
+    const inferredColor = inferAudienceColorFromSortValue(sortValue);
+    const explicitColor = String(p?.color || '').trim();
+    const rowColor = inferredColor || (allowed.has(explicitColor) ? explicitColor : '');
+    if(!rowColor){
+      resolvedColor = 'mixed';
+      return;
+    }
+    if(!resolvedColor){
+      resolvedColor = rowColor;
+      return;
+    }
+    if(resolvedColor !== rowColor){
+      resolvedColor = 'mixed';
+    }
+  });
+  return resolvedColor && resolvedColor !== 'mixed' ? resolvedColor : 'all';
+}
+
+function syncAudienceSelectionColorState(){
+  setSelectedAudienceColor(getAudienceSelectionResolvedColor(), false);
+}
+
 function toggleAudiencePrintSelection(ci, di, procKey, checked){
   const key = makeAudiencePrintKey(ci, di, procKey);
   if(checked){
@@ -9776,12 +9917,14 @@ function toggleAudiencePrintSelection(ci, di, procKey, checked){
       audiencePrintSelectionVersion += 1;
       queueAudienceCheckedCountRender();
     }
+    syncAudienceSelectionColorState();
     return;
   }
   if(audiencePrintSelection.delete(key)){
     audiencePrintSelectionVersion += 1;
     queueAudienceCheckedCountRender();
   }
+  syncAudienceSelectionColorState();
 }
 
 function toggleAudiencePrintSelectionEncoded(ci, di, procKeyEncoded, checked){
@@ -9792,6 +9935,46 @@ function toggleAudienceSelectionAndColorEncoded(ci, di, procKeyEncoded, checked)
   const procKey = decodeURIComponent(String(procKeyEncoded));
   toggleAudiencePrintSelection(ci, di, procKey, checked);
   setAudienceColor(ci, di, procKey, checked);
+}
+
+function getAudienceSortValueForColor(color){
+  const normalized = String(color || '').trim();
+  if(normalized === 'blue') return 'att sort';
+  if(normalized === 'green') return 'att jugement';
+  return '';
+}
+
+function applyAudienceColorSelectionToCheckedRows(color){
+  const normalizedColor = String(color || '').trim();
+  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  if(!allowed.has(normalizedColor)) return false;
+  if(!audiencePrintSelection.size) return false;
+  let changed = false;
+  const mappedSort = getAudienceSortValueForColor(normalizedColor);
+  audiencePrintSelection.forEach(key=>{
+    const [ciRaw, diRaw, procKey = ''] = String(key || '').split('::');
+    const ci = Number(ciRaw);
+    const di = Number(diRaw);
+    if(!Number.isFinite(ci) || !Number.isFinite(di) || !procKey) return;
+    const p = getAudienceProcedure(ci, di, procKey);
+    if(mappedSort && String(p.sort || '').trim().toLowerCase() !== mappedSort){
+      p.sort = mappedSort;
+      const draftKey = makeAudienceDraftKey(ci, di, procKey);
+      if(!audienceDraft[draftKey]) audienceDraft[draftKey] = {};
+      audienceDraft[draftKey].sort = mappedSort;
+      changed = true;
+    }
+    const beforeColor = String(p.color || '').trim();
+    setAudienceColor(ci, di, procKey, true);
+    if(String(p.color || '').trim() !== beforeColor) changed = true;
+  });
+  if(changed){
+    markAudienceRowsCacheDirty();
+    queueAudienceAutoSave();
+    renderAudienceKeepingPosition();
+  }
+  syncAudienceSelectionColorState();
+  return changed;
 }
 
 function getActiveAudiencePriorityColor(){
@@ -9969,6 +10152,7 @@ function setAllVisibleAudienceRowsForPrint(checked){
   }
   if(changed) audiencePrintSelectionVersion += 1;
   queueAudienceCheckedCountRender();
+  syncAudienceSelectionColorState();
   renderAudience();
 }
 
@@ -10549,6 +10733,8 @@ function setAudienceColor(ci, di, procKey, checked){
   if(!dossier) return;
   const p = getAudienceProcedure(ci, di, procKey);
   const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  const sortValue = String(audienceDraft[makeAudienceDraftKey(ci, di, procKey)]?.sort || p?.sort || '').trim();
+  const inferredColor = inferAudienceColorFromSortValue(sortValue);
   if(!checked){
     p.color = '';
     if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif'){
@@ -10559,14 +10745,28 @@ function setAudienceColor(ci, di, procKey, checked){
     return;
   }
   if(selectedAudienceColor === 'all' || !allowed.has(selectedAudienceColor)){
-    queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
-    return;
+    if(!inferredColor){
+      queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
+      return;
+    }
   }
-  p.color = selectedAudienceColor;
-  if(selectedAudienceColor === 'purple-dark') dossier.statut = 'Soldé';
-  if(selectedAudienceColor === 'purple-light') dossier.statut = 'Arrêt définitif';
+  p.color = inferredColor || selectedAudienceColor;
+  if(p.color === 'purple-dark') dossier.statut = 'Soldé';
+  else if(p.color === 'purple-light') dossier.statut = 'Arrêt définitif';
+  else if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif') dossier.statut = 'En cours';
   markAudienceColorCachesDirty();
   queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: true });
+}
+
+function inferAudienceColorFromSortValue(value){
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  if(!normalized) return '';
+  if(normalized.includes('att jugement')) return 'green';
+  if(normalized.includes('att sort')) return 'blue';
+  return '';
 }
 
 function setAudienceColorEncoded(ci, di, procKeyEncoded, checked){
@@ -10708,6 +10908,10 @@ function updateAudienceDraft(key, field, value){
       before,
       after
     });
+  }
+  if(field === 'sort' && isAudienceSelectedForPrint(ci, di, procKey)){
+    setAudienceColor(ci, di, procKey, true);
+    syncAudienceSelectionColorState();
   }
   // Avoid full-state persist and linked heavy renders on every keystroke.
   // We keep in-memory update immediate and persist through debounced autosave.
