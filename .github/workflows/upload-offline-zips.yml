@@ -1,0 +1,24 @@
+name: Upload Offline ZIPs
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "github-audience-status-selection"
+
+jobs:
+  upload-offline-zips:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Upload offline ZIP artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cabinet-offline-zips
+          path: |
+            offline-mac-2026-03-11.zip
+            offline-windows-2026-03-11.zip
+            offline-windows-ready-2026-03-11.zip
