@@ -8064,6 +8064,20 @@ function renderStatusDisplay(status, detail = ''){
   return `<div class="status-display">${renderStatusBadge(status)}<div class="status-detail">${escapeHtml(safeDetail)}</div></div>`;
 }
 
+function getAudienceStatusDerivedColor(status){
+  const value = String(status || '').trim();
+  if(value === 'Soldé') return 'purple-dark';
+  if(value === 'Arrêt définitif') return 'purple-light';
+  return '';
+}
+
+function getAudienceRowEffectiveColor(row){
+  const explicitColor = String(row?.p?.color || '').trim();
+  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+  if(allowed.has(explicitColor)) return explicitColor;
+  return getAudienceStatusDerivedColor(row?.d?.statut || '');
+}
+
 function buildSuiviSearchHaystack(clientName, dossier, procedures, tribunaux){
   const fileNames = Array.isArray(dossier?.files)
     ? dossier.files.map(f=>String(f?.name || '').trim()).filter(Boolean)
@@ -9933,7 +9947,7 @@ function getFilteredAudienceRows(allRows = null){
     const matched = [];
     const others = [];
     rows.forEach(row=>{
-      if(String(row?.p?.color || '').trim() === priorityColor){
+      if(getAudienceRowEffectiveColor(row) === priorityColor){
         matched.push(row);
       }else{
         others.push(row);
@@ -9961,7 +9975,7 @@ function getFilteredAudienceRows(allRows = null){
   const decorated = filtered.map(row=>{
     const bucket = getAudiencePriorityBucket(row, duplicateKeySet, mismatchRefClientSet);
     const colorMatch = (!filterAudienceErrorsOnly && priorityColor && priorityColor !== 'all')
-      ? (String(row?.p?.color || '').trim() === priorityColor ? 1 : 0)
+      ? (getAudienceRowEffectiveColor(row) === priorityColor ? 1 : 0)
       : 0;
     const sortMeta = buildAudienceSortMeta(row);
     return { row, bucket, colorMatch, sortMeta };
@@ -10483,7 +10497,7 @@ function getAudienceRows(options = {}){
     return baseRows;
   }
   const out = baseRows.filter(row=>{
-    if(!ignoreColor && filterAudienceColor !== 'all' && String(row?.p?.color || '').trim() !== filterAudienceColor) return false;
+    if(!ignoreColor && filterAudienceColor !== 'all' && getAudienceRowEffectiveColor(row) !== filterAudienceColor) return false;
     if(!ignoreSearch && q){
       const haystack = row.__haystack || (row.__haystack = buildAudienceSearchHaystack(row.c?.name, row.d, row.procKey, row.p, row.draft));
       if(!haystack.includes(q)) return false;

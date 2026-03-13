@@ -14,8 +14,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
   const { c, d, procKey, p, key, draft } = row;
   const canEdit = canEditClient(c) && canEditData();
   const canView = Number.isFinite(Number(row?.c?.id)) && Number.isFinite(Number(row?.di));
-  const liveColor = String(p?.color || '').trim();
-  const safeColor = ['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light'].includes(liveColor) ? liveColor : '';
+  const safeColor = getAudienceRowEffectiveColor(row);
   const duplicateKey = buildAudienceDuplicateKey(row);
   const isDuplicate = !!(duplicateKey && duplicateKeySet.has(duplicateKey));
   const hasError = isAudienceRowInvalid(row, duplicateKeySet);
