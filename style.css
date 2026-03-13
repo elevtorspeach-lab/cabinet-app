@@ -1611,6 +1611,8 @@ tr:hover{background:#f1f5f9}
 
 .import-history-panel{
   margin:14px 0 18px;
+  position:relative;
+  z-index:30;
 }
 
 .import-history-card{
@@ -1730,21 +1732,28 @@ tr:hover{background:#f1f5f9}
   border:1px solid #d9e4f4;
   border-radius:16px;
   background:#fff;
-  cursor:default;
+  cursor:pointer;
   transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;
 }
 
 .import-history-caret{
   flex:0 0 auto;
-  width:36px;
-  height:36px;
+  min-height:40px;
   display:inline-flex;
   align-items:center;
   justify-content:center;
+  gap:8px;
+  padding:0 14px;
   border-radius:12px;
   color:#1d4ed8;
   background:#eff6ff;
   transition:transform .18s ease;
+  font-weight:800;
+  font-size:14px;
+}
+
+.import-history-caret-label{
+  line-height:1;
 }
 
 .import-history-hover-menu{
@@ -1765,23 +1774,20 @@ tr:hover{background:#f1f5f9}
   transition:opacity .18s ease, transform .18s ease, visibility .18s ease;
 }
 
-.import-history-hoverbox:hover .import-history-hover-trigger,
-.import-history-hoverbox:focus-within .import-history-hover-trigger{
+.import-history-hoverbox.is-open .import-history-hover-trigger{
   border-color:#93c5fd;
   box-shadow:0 10px 22px rgba(37,99,235,.12);
   transform:translateY(-1px);
 }
 
-.import-history-hoverbox:hover .import-history-hover-menu,
-.import-history-hoverbox:focus-within .import-history-hover-menu{
+.import-history-hoverbox.is-open .import-history-hover-menu{
   opacity:1;
   visibility:visible;
   transform:translateY(0);
   pointer-events:auto;
 }
 
-.import-history-hoverbox:hover .import-history-caret,
-.import-history-hoverbox:focus-within .import-history-caret{
+.import-history-hoverbox.is-open .import-history-caret{
   transform:rotate(180deg);
 }
 
@@ -2763,6 +2769,11 @@ tr.color-purple-light{border-left:6px solid #c2410c;background:#ffcda8}
 /* ================== UI POLISH OVERRIDES ================== */
 .section{
   overflow:hidden;
+}
+
+#clientSection,
+#audienceSection{
+  overflow:visible;
 }
 
 .section h1{

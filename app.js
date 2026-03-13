@@ -202,6 +202,8 @@ let dashboardCalendarEventsCacheVersion = -1;
 let dashboardCalendarEventsCacheUserKey = '';
 let importHistoryPanelMarkupCache = new Map();
 let importHistoryMenuMarkupCache = new Map();
+let importHistoryOpenPanels = new Set();
+let importHistoryOutsideClickBound = false;
 let dashboardCalendarRenderTimer = null;
 let dashboardHeavyRenderTimer = null;
 let audienceErrorCountCacheVersion = -1;
@@ -3810,6 +3812,48 @@ function ensureImportHistoryHoverMenu(containerId, type){
   menu.dataset.renderKey = renderKey;
 }
 
+function ensureImportHistoryOutsideClickHandler(){
+  if(importHistoryOutsideClickBound || typeof document === 'undefined') return;
+  document.addEventListener('click', (event)=>{
+    const target = event?.target;
+    if(target && typeof target.closest === 'function' && target.closest('.import-history-hoverbox')) return;
+    importHistoryOpenPanels.forEach(containerId=>{
+      const container = $(containerId);
+      const hoverBox = container?.querySelector('.import-history-hoverbox');
+      if(hoverBox) hoverBox.classList.remove('is-open');
+    });
+    importHistoryOpenPanels = new Set();
+  });
+  importHistoryOutsideClickBound = true;
+}
+
+function toggleImportHistoryMenu(containerId, type){
+  const container = $(containerId);
+  if(!container) return;
+  const normalizedType = String(type || '').trim() === 'audience' ? 'audience' : 'global';
+  const hoverBox = container.querySelector('.import-history-hoverbox');
+  if(!hoverBox) return;
+  const shouldOpen = !hoverBox.classList.contains('is-open');
+  importHistoryOpenPanels.forEach(openContainerId=>{
+    const openContainer = $(openContainerId);
+    const openBox = openContainer?.querySelector('.import-history-hoverbox');
+    if(openBox) openBox.classList.remove('is-open');
+  });
+  importHistoryOpenPanels = new Set();
+  if(!shouldOpen) return;
+  ensureImportHistoryHoverMenu(containerId, normalizedType);
+  hoverBox.classList.add('is-open');
+  importHistoryOpenPanels.add(containerId);
+  ensureImportHistoryOutsideClickHandler();
+}
+
+function handleImportHistoryToggleKey(event, containerId, type){
+  if(!event) return;
+  if(event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  toggleImportHistoryMenu(containerId, type);
+}
+
 function renderImportHistoryPanel(containerId, type){
   const container = $(containerId);
   if(!container) return;
@@ -3819,6 +3863,7 @@ function renderImportHistoryPanel(containerId, type){
     container.innerHTML = '';
     container.style.display = 'none';
     container.dataset.renderKey = '';
+    importHistoryOpenPanels.delete(containerId);
     return;
   }
 
@@ -3834,13 +3879,17 @@ function renderImportHistoryPanel(containerId, type){
     : 'deleteGlobalImportBatch';
   const compactMode = true;
   const compactSummaryLabel = normalizedType === 'audience'
-    ? 'Survolez pour voir la liste complete'
-    : 'Survolez pour voir tous les fichiers importes';
+    ? 'Cliquez pour voir la liste complete'
+    : 'Cliquez pour voir tous les fichiers importes';
   const renderKey = buildImportHistoryPanelKey(entries, normalizedType, canDelete);
 
   if(container.dataset.renderKey === renderKey){
     container.style.display = '';
-    if(isMobileViewport()){
+    const hoverBox = container.querySelector('.import-history-hoverbox');
+    if(hoverBox){
+      hoverBox.classList.toggle('is-open', importHistoryOpenPanels.has(containerId));
+    }
+    if(isMobileViewport() || importHistoryOpenPanels.has(containerId)){
       ensureImportHistoryHoverMenu(containerId, normalizedType);
     }
     return;
@@ -3854,7 +3903,7 @@ function renderImportHistoryPanel(containerId, type){
       <div class="import-history-header">
         <div>
           <h3 class="import-history-title">${escapeHtml(title)}</h3>
-          <p class="import-history-subtitle">${escapeHtml(compactMode ? 'Survolez la case pour afficher tous les fichiers Excel importes.' : subtitle)}</p>
+          <p class="import-history-subtitle">${escapeHtml(compactMode ? 'Cliquez sur la case pour afficher tous les fichiers Excel importes.' : subtitle)}</p>
         </div>
       </div>
       ${
@@ -3863,10 +3912,14 @@ function renderImportHistoryPanel(containerId, type){
             <div
               class="import-history-hoverbox"
               tabindex="0"
-              onmouseenter="ensureImportHistoryHoverMenu(${JSON.stringify(containerId)}, ${JSON.stringify(normalizedType)})"
-              onfocusin="ensureImportHistoryHoverMenu(${JSON.stringify(containerId)}, ${JSON.stringify(normalizedType)})"
             >
-              <div class="import-history-hover-trigger">
+              <div
+                class="import-history-hover-trigger"
+                role="button"
+                tabindex="0"
+                onclick='toggleImportHistoryMenu(${JSON.stringify(containerId)}, ${JSON.stringify(normalizedType)})'
+                onkeydown='handleImportHistoryToggleKey(event, ${JSON.stringify(containerId)}, ${JSON.stringify(normalizedType)})'
+              >
                 <div class="import-history-main">
                   <span class="import-history-icon"><i class="fa-solid fa-file-excel"></i></span>
                   <div class="import-history-content">
@@ -3877,7 +3930,10 @@ function renderImportHistoryPanel(containerId, type){
                     </div>
                   </div>
                 </div>
-                <span class="import-history-caret"><i class="fa-solid fa-chevron-down"></i></span>
+                <span class="import-history-caret">
+                  <span class="import-history-caret-label">Afficher</span>
+                  <i class="fa-solid fa-chevron-down"></i>
+                </span>
               </div>
               <div class="import-history-hover-menu"></div>
             </div>
@@ -3890,7 +3946,11 @@ function renderImportHistoryPanel(containerId, type){
     importHistoryPanelMarkupCache.set(panelCacheKey, container.innerHTML);
   }
   container.dataset.renderKey = renderKey;
-  if(isMobileViewport()){
+  const hoverBox = container.querySelector('.import-history-hoverbox');
+  if(hoverBox){
+    hoverBox.classList.toggle('is-open', importHistoryOpenPanels.has(containerId));
+  }
+  if(isMobileViewport() || importHistoryOpenPanels.has(containerId)){
     ensureImportHistoryHoverMenu(containerId, normalizedType);
   }
 }
