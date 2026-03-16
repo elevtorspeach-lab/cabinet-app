@@ -3190,7 +3190,8 @@ function normalizeHeader(value){
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[’']/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function buildHeaderMap(row){
