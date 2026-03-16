@@ -287,6 +287,7 @@ async function importWholeStateAction(shared) {
         index,
         total,
         chunk,
+        mode: 'merge',
         _sourceId: `stress-import-${uploadId}`
       })
     });
@@ -302,33 +303,21 @@ async function importWholeStateAction(shared) {
 }
 
 async function createClientViaStateAction(shared) {
-  const currentState = await getState();
   const nextClientId = shared.currentMaxClientId + 1;
   const clientLabel = `Stress Manual Client ${nextClientId}`;
-  const nextState = {
-    ...currentState,
-    clients: [
-      ...(Array.isArray(currentState.clients) ? currentState.clients : []),
-      {
+  const response = await requestJson(`${BASE_URL}/api/state/clients`, {
+    method: 'POST',
+    body: JSON.stringify({
+      action: 'create',
+      client: {
         id: nextClientId,
         name: clientLabel,
         dossiers: [buildStressDossier(`STRESS-MAN-${nextClientId}`, `manual-${nextClientId}`)]
-      }
-    ],
-    updatedAt: nowIso(),
-    _baseVersion: Number(currentState.version) || 0,
-    _sourceId: `stress-manual-client-${nextClientId}`
-  };
-  const response = await requestJson(`${BASE_URL}/api/state`, {
-    method: 'POST',
-    body: JSON.stringify(nextState)
+      },
+      _sourceId: `stress-manual-client-${nextClientId}`
+    })
   });
-  if (response.status === 409) {
-    const error = new Error('STATE_CONFLICT');
-    error.code = 'STATE_CONFLICT';
-    throw error;
-  }
-  if (!response.ok) throw new Error(`POST /api/state failed with ${response.status}`);
+  if (!response.ok) throw new Error(`POST /api/state/clients failed with ${response.status}`);
   shared.currentMaxClientId = nextClientId;
   shared.expectedClientNames.add(clientLabel);
   return { nextClientId, clientLabel };

@@ -93,6 +93,7 @@ async function prepareRunWorkspace() {
     'render-dashboard.js',
     'render-audience-suivi.js',
     'render-diligence.js',
+    'audience-ui-helpers.js',
     'vendor',
     'workers'
   ]) {
