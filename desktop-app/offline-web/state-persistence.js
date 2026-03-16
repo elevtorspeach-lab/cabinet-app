@@ -13,15 +13,19 @@ function normalizePersistedStateSource(rawState){
   const loadedRecycleArchive = normalizeRecycleArchiveEntries(rawState?.recycleArchive);
   const loadedImportHistory = normalizeImportHistoryEntries(rawState?.importHistory);
   const nextUsers = ensureManagerUser(loadedUsers);
-  const nextSignature = buildStateSignature(
-    loadedClients,
-    loadedSalleAssignments,
-    nextUsers,
-    loadedDraft,
-    loadedRecycleBin,
-    loadedRecycleArchive,
-    loadedImportHistory
-  );
+  const rawVersion = Number(rawState?.version);
+  const rawUpdatedAt = String(rawState?.updatedAt || '').trim();
+  const nextSignature = Number.isFinite(rawVersion) && rawVersion >= 0 && rawUpdatedAt
+    ? `remote:${rawVersion}:${rawUpdatedAt}`
+    : buildStateSignature(
+      loadedClients,
+      loadedSalleAssignments,
+      nextUsers,
+      loadedDraft,
+      loadedRecycleBin,
+      loadedRecycleArchive,
+      loadedImportHistory
+    );
   return {
     clients: loadedClients,
     salleAssignments: loadedSalleAssignments,
@@ -66,11 +70,22 @@ async function applyPersistedStateSource(normalizedState, options = {}){
   );
   syncCurrentUserFromUsers();
 
+  const cachePayload = (options.writeIndexedDb || options.writeLocalStorage)
+    ? buildAppStatePayload()
+    : null;
   if(options.writeIndexedDb){
-    await writeStateToIndexedDb(buildAppStatePayload());
+    if(options.deferWriteIndexedDb){
+      queueDeferredStateCacheWrite(cachePayload, { indexedDb: true, localStorage: false });
+    }else{
+      await writeStateToIndexedDb(cachePayload);
+    }
   }
   if(options.writeLocalStorage){
-    writeStateToLocalStorage(buildAppStatePayload());
+    if(options.deferWriteLocalStorage){
+      queueDeferredStateCacheWrite(cachePayload, { indexedDb: false, localStorage: true });
+    }else{
+      writeStateToLocalStorage(cachePayload);
+    }
   }
   if(options.syncStatusMessage){
     setSyncStatus('ok', options.syncStatusMessage);

@@ -18,7 +18,7 @@ self.addEventListener('message', (event)=>{
     filteredIndexes = items
       .filter(item=>{
         const values = Array.isArray(item?.values) ? item.values : [];
-        return values.some(value=>String(value || '').toLowerCase() === query);
+        return values.some(value=>String(value || '').toLowerCase().includes(query));
       })
       .map(item=>Number(item?.idx))
       .filter(Number.isFinite);

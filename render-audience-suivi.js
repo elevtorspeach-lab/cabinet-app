@@ -379,14 +379,22 @@ function renderAudience(options = {}){
   const colorFilteredRows = filterAudienceColor === 'all'
     ? baseRows
     : baseRows.filter(row=>String(row?.p?.color || '').trim() === filterAudienceColor);
+  const exactMatchedRows = audienceQuery
+    ? getAudienceRowsByExactQuery(colorFilteredRows, audienceQuery)
+    : null;
   const canUseWorker = (
     !!audienceQuery
+    && !exactMatchedRows
     && audienceQuery.length >= 2
     && colorFilteredRows.length >= 1500
     && !!getAudienceFilterWorker()
   );
   if(!canUseWorker){
-    finalizeAudienceRender(getAudienceRows());
+    if(exactMatchedRows){
+      finalizeAudienceRender(exactMatchedRows);
+    }else{
+      finalizeAudienceRender(getAudienceRows());
+    }
     return;
   }
 

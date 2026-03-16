@@ -2,25 +2,29 @@
 const AppState = { clients: [], salleAssignments: [], recycleBin: [], recycleArchive: [], importHistory: [] };
 const DEFAULT_MANAGER_USERNAME = 'walid';
 const DEFAULT_MANAGER_PASSWORD = '1234';
-const DEFAULT_SEEDED_PASSWORD = '1234';
 const IMPORT_HISTORY_MAX_ENTRIES = 80;
+const PASSWORD_HASH_VERSION = 1;
+const PASSWORD_HASH_ITERATIONS = 120000;
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_MIN_LENGTH = 10;
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 2 * 60 * 1000;
 
 function buildSeedUsers(){
-  const users = [
-    { id: 1, username: DEFAULT_MANAGER_USERNAME, password: DEFAULT_MANAGER_PASSWORD, role: 'manager', clientIds: [] }
-  ];
-
-  for(let i = 1; i <= 5; i += 1){
-    users.push({
-      id: 100 + i,
-      username: `admin${i}`,
-      password: DEFAULT_SEEDED_PASSWORD,
-      role: 'admin',
+  return [
+    {
+      id: 1,
+      username: DEFAULT_MANAGER_USERNAME,
+      password: DEFAULT_MANAGER_PASSWORD,
+      passwordHash: '',
+      passwordSalt: '',
+      passwordVersion: 0,
+      passwordUpdatedAt: '',
+      requirePasswordChange: true,
+      role: 'manager',
       clientIds: []
-    });
-  }
-
-  return users;
+    }
+  ];
 }
 
 let USERS = buildSeedUsers();
@@ -76,6 +80,7 @@ const APP_INSTANCE_ID = `cabinet-${Date.now().toString(36)}-${Math.random().toSt
 const AUTO_BACKUP_STORAGE_KEY = 'cabinet-avocat-auto-backups-v1';
 let API_BASE = 'http://127.0.0.1:3000/api';
 let API_BASE_RESOLVED = false;
+let remoteAuthToken = '';
 let persistTimer = null;
 let queuedPersistPayload = null;
 let dossierPatchPersistTimer = null;
@@ -106,12 +111,16 @@ let deferredLocalSnapshotTimer = null;
 let deferredLocalSnapshotPayload = null;
 let deferredLocalSnapshotSource = 'persist';
 let deferredLocalSnapshotSignature = '';
+let pendingLoginRetryAfterInit = false;
 let audienceLinkedRenderTimer = null;
 let dossierLinkedRenderTimer = null;
 let remoteRefreshTimer = null;
 let lastPingMs = null;
 let lastLiveDelayMs = null;
 let syncMetricsRenderQueued = false;
+let loginAttemptCount = 0;
+let loginLockedUntil = 0;
+let loginInFlight = false;
 let lastAutoBackupAt = 0;
 let lastAutoBackupSignature = '';
 let lastAudienceRenderedRows = [];
@@ -191,6 +200,9 @@ let editableClientsCacheUserKey = '';
 let clientListSummaryCache = null;
 let clientListSummaryCacheVersion = -1;
 let clientListSummaryCacheUserKey = '';
+let largeDatasetModeCacheValue = false;
+let largeDatasetModeCacheVersion = -1;
+let largeDatasetModeCacheUserKey = '';
 let dashboardSnapshotCache = null;
 let dashboardSnapshotCacheVersion = -1;
 let dashboardSnapshotCacheUserKey = '';
@@ -321,6 +333,9 @@ const SUIVI_DEFAULT_SORT_MAX_ROWS = 60000;
 const DILIGENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_COLOR_BATCH_MS = 80;
 const SEARCH_CACHE_WARMUP_CHUNK_SIZE = 240;
+const LOCAL_STORAGE_CACHE_MAX_CLIENTS = 120;
+const LOCAL_STORAGE_CACHE_MAX_DOSSIERS = 12000;
+const LOCAL_STORAGE_CACHE_MAX_AUDIENCE_DRAFTS = 12000;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
 const LOCAL_ONLY_MODE = (() => {
   if(typeof window === 'undefined') return false;
@@ -685,22 +700,31 @@ function getAudienceViewerCacheKey(){
 
 function invalidateDerivedCaches(options = {}){
   const audience = options.audience !== false;
+  const preserveClientAccessCaches = options.preserveClientAccessCaches === true;
+  const preserveClientListSummary = options.preserveClientListSummary === true;
+  const preserveDashboardSnapshot = options.preserveDashboardSnapshot === true;
   if(audience){
     audienceRowsRawDataVersion += 1;
   }
   backgroundDataWarmupVersion = -1;
-  visibleClientsCache = null;
-  visibleClientsCacheVersion = -1;
-  visibleClientsCacheUserKey = '';
-  editableClientsCache = null;
-  editableClientsCacheVersion = -1;
-  editableClientsCacheUserKey = '';
-  clientListSummaryCache = null;
-  clientListSummaryCacheVersion = -1;
-  clientListSummaryCacheUserKey = '';
-  dashboardSnapshotCache = null;
-  dashboardSnapshotCacheVersion = -1;
-  dashboardSnapshotCacheUserKey = '';
+  if(!preserveClientAccessCaches){
+    visibleClientsCache = null;
+    visibleClientsCacheVersion = -1;
+    visibleClientsCacheUserKey = '';
+    editableClientsCache = null;
+    editableClientsCacheVersion = -1;
+    editableClientsCacheUserKey = '';
+  }
+  if(!preserveClientListSummary){
+    clientListSummaryCache = null;
+    clientListSummaryCacheVersion = -1;
+    clientListSummaryCacheUserKey = '';
+  }
+  if(!preserveDashboardSnapshot){
+    dashboardSnapshotCache = null;
+    dashboardSnapshotCacheVersion = -1;
+    dashboardSnapshotCacheUserKey = '';
+  }
   suiviBaseRowsCache = null;
   suiviFilterOptionsRowsMetaRef = null;
   suiviFilteredRowsCacheSource = null;
@@ -791,7 +815,15 @@ function handleDossierDataChange(options = {}){
   if(hasAudienceImpact){
     markAudienceRowsCacheDirty();
   }else{
-    markNonAudienceDossierCachesDirty();
+    invalidateDerivedCaches({
+      audience: false,
+      preserveClientAccessCaches: options.preserveClientAccessCaches === true,
+      preserveClientListSummary: options.preserveClientListSummary === true,
+      preserveDashboardSnapshot: options.preserveDashboardSnapshot === true
+    });
+    diligenceSelectedExportRowsCacheInput = null;
+    diligenceSelectedExportRowsCacheVersion = -1;
+    diligenceSelectedExportRowsCacheOutput = [];
   }
   if(rerenderLinked){
     queueDossierLinkedRenders();
@@ -940,6 +972,74 @@ function refreshVisibleSectionsAfterRemoteSync(){
   if(visibleKeys.has('creation')) updateClientDropdown();
 }
 
+function getDossierClotureContribution(dossier){
+  return String(dossier?.statut || '').trim() === 'Clôture' ? 1 : 0;
+}
+
+function applyIncrementalRemoteDossierCaches(meta){
+  if(!meta || meta.audienceImpact) return;
+  const userKey = getCurrentClientAccessCacheKey();
+
+  if(
+    clientListSummaryCache
+    && clientListSummaryCacheVersion === audienceRowsRawDataVersion
+    && clientListSummaryCacheUserKey === userKey
+  ){
+    const adjustSummary = (clientId, delta)=>{
+      if(!delta) return;
+      const entry = clientListSummaryCache.find(item=>Number(item?.id) === Number(clientId));
+      if(!entry) return;
+      entry.dossierCount = Math.max(0, Number(entry.dossierCount || 0) + delta);
+    };
+    if(meta.action === 'create'){
+      if(meta.targetVisible) adjustSummary(meta.targetClientId, 1);
+    }else if(meta.action === 'delete'){
+      if(meta.sourceVisible) adjustSummary(meta.sourceClientId, -1);
+    }else if(meta.action === 'update' && meta.sourceClientId !== meta.targetClientId){
+      if(meta.sourceVisible) adjustSummary(meta.sourceClientId, -1);
+      if(meta.targetVisible) adjustSummary(meta.targetClientId, 1);
+    }
+  }
+
+  if(
+    dashboardSnapshotCache
+    && dashboardSnapshotCacheVersion === audienceRowsRawDataVersion
+    && dashboardSnapshotCacheUserKey === userKey
+  ){
+    let enCoursDelta = 0;
+    let clotureDelta = 0;
+    if(meta.action === 'create'){
+      if(meta.targetVisible){
+        enCoursDelta += 1;
+        clotureDelta += getDossierClotureContribution(meta.nextDossier);
+      }
+    }else if(meta.action === 'delete'){
+      if(meta.sourceVisible){
+        enCoursDelta -= 1;
+        clotureDelta -= getDossierClotureContribution(meta.previousDossier);
+      }
+    }else if(meta.action === 'update'){
+      if(meta.sourceClientId !== meta.targetClientId){
+        if(meta.sourceVisible){
+          enCoursDelta -= 1;
+          clotureDelta -= getDossierClotureContribution(meta.previousDossier);
+        }
+        if(meta.targetVisible){
+          enCoursDelta += 1;
+          clotureDelta += getDossierClotureContribution(meta.nextDossier);
+        }
+      }else if(meta.targetVisible){
+        clotureDelta += getDossierClotureContribution(meta.nextDossier) - getDossierClotureContribution(meta.previousDossier);
+      }
+    }
+    dashboardSnapshotCache = {
+      ...dashboardSnapshotCache,
+      enCours: Math.max(0, Number(dashboardSnapshotCache.enCours || 0) + enCoursDelta),
+      clotureCount: Math.max(0, Number(dashboardSnapshotCache.clotureCount || 0) + clotureDelta)
+    };
+  }
+}
+
 function applyRemoteDossierPatchLocally(patch){
   if(!patch || typeof patch !== 'object') return false;
   const action = String(patch.action || '').trim().toLowerCase();
@@ -956,7 +1056,17 @@ function applyRemoteDossierPatchLocally(patch){
     if(clientIdx === -1 || !dossier) return false;
     if(!Array.isArray(AppState.clients[clientIdx].dossiers)) AppState.clients[clientIdx].dossiers = [];
     AppState.clients[clientIdx].dossiers.push(dossier);
-    return true;
+    const targetClient = AppState.clients[clientIdx];
+    return {
+      action,
+      sourceClientId: clientId,
+      targetClientId: clientId,
+      previousDossier: null,
+      nextDossier: dossier,
+      sourceVisible: canViewClient(targetClient),
+      targetVisible: canViewClient(targetClient),
+      audienceImpact: dossierHasAudienceImpact(dossier)
+    };
   }
 
   if(action === 'delete'){
@@ -964,8 +1074,19 @@ function applyRemoteDossierPatchLocally(patch){
     if(clientIdx === -1 || !Number.isFinite(dossierIndex)) return false;
     if(!Array.isArray(AppState.clients[clientIdx].dossiers)) AppState.clients[clientIdx].dossiers = [];
     if(dossierIndex < 0 || dossierIndex >= AppState.clients[clientIdx].dossiers.length) return false;
+    const previousDossier = AppState.clients[clientIdx].dossiers[dossierIndex];
+    const sourceClient = AppState.clients[clientIdx];
     AppState.clients[clientIdx].dossiers.splice(dossierIndex, 1);
-    return true;
+    return {
+      action,
+      sourceClientId: clientId,
+      targetClientId: clientId,
+      previousDossier,
+      nextDossier: null,
+      sourceVisible: canViewClient(sourceClient),
+      targetVisible: canViewClient(sourceClient),
+      audienceImpact: dossierHasAudienceImpact(previousDossier)
+    };
   }
 
   if(action === 'update'){
@@ -973,17 +1094,38 @@ function applyRemoteDossierPatchLocally(patch){
     if(sourceClientIdx === -1 || !Number.isFinite(dossierIndex) || !dossier) return false;
     if(!Array.isArray(AppState.clients[sourceClientIdx].dossiers)) AppState.clients[sourceClientIdx].dossiers = [];
     if(dossierIndex < 0 || dossierIndex >= AppState.clients[sourceClientIdx].dossiers.length) return false;
+    const previousDossier = AppState.clients[sourceClientIdx].dossiers[dossierIndex];
     const nextTargetClientId = Number.isFinite(targetClientId) ? targetClientId : clientId;
     const targetClientIdx = findClientIndex(nextTargetClientId);
     if(targetClientIdx === -1) return false;
     if(!Array.isArray(AppState.clients[targetClientIdx].dossiers)) AppState.clients[targetClientIdx].dossiers = [];
+    const sourceClient = AppState.clients[sourceClientIdx];
+    const targetClient = AppState.clients[targetClientIdx];
     if(targetClientIdx === sourceClientIdx){
       AppState.clients[sourceClientIdx].dossiers[dossierIndex] = dossier;
-      return true;
+      return {
+        action,
+        sourceClientId: clientId,
+        targetClientId: nextTargetClientId,
+        previousDossier,
+        nextDossier: dossier,
+        sourceVisible: canViewClient(sourceClient),
+        targetVisible: canViewClient(targetClient),
+        audienceImpact: dossierHasAudienceImpact(previousDossier) || dossierHasAudienceImpact(dossier)
+      };
     }
     AppState.clients[sourceClientIdx].dossiers.splice(dossierIndex, 1);
     AppState.clients[targetClientIdx].dossiers.push(dossier);
-    return true;
+    return {
+      action,
+      sourceClientId: clientId,
+      targetClientId: nextTargetClientId,
+      previousDossier,
+      nextDossier: dossier,
+      sourceVisible: canViewClient(sourceClient),
+      targetVisible: canViewClient(targetClient),
+      audienceImpact: dossierHasAudienceImpact(previousDossier) || dossierHasAudienceImpact(dossier)
+    };
   }
 
   return false;
@@ -991,6 +1133,52 @@ function applyRemoteDossierPatchLocally(patch){
 
 function applyRemoteSlicePatchLocally(patchKind, patch){
   if(!patch || typeof patch !== 'object') return false;
+  if(patchKind === 'clients'){
+    const action = String(patch.action || '').trim().toLowerCase();
+    if(action === 'create'){
+      const incomingClient = normalizeClient(patch.client);
+      if(!incomingClient) return false;
+      const existingIdx = AppState.clients.findIndex(client=>Number(client?.id) === Number(incomingClient.id));
+      if(existingIdx !== -1){
+        AppState.clients[existingIdx] = incomingClient;
+      }else{
+        AppState.clients.push(incomingClient);
+      }
+      if(Array.isArray(patch.users)){
+        USERS = ensureManagerUser(
+          patch.users.map(normalizeUser).filter(Boolean)
+        );
+      }
+      return true;
+    }
+    if(action === 'delete'){
+      const removedClientId = Number(patch.clientId);
+      if(Number.isFinite(removedClientId)){
+        AppState.clients = AppState.clients.filter(client=>Number(client?.id) !== removedClientId);
+      }
+      if(Array.isArray(patch.users)){
+        USERS = ensureManagerUser(
+          patch.users.map(normalizeUser).filter(Boolean)
+        );
+      }
+      syncImportHistoryWithCurrentState();
+      return true;
+    }
+    if(action === 'delete-all'){
+      AppState.clients = [];
+      AppState.importHistory = [];
+      audienceDraft = {};
+      audiencePrintSelection = new Set();
+      diligencePrintSelection = new Set();
+      if(Array.isArray(patch.users)){
+        USERS = ensureManagerUser(
+          patch.users.map(normalizeUser).filter(Boolean)
+        );
+      }
+      return true;
+    }
+    return false;
+  }
   if(patchKind === 'users'){
     const nextUsers = Array.isArray(patch.users)
       ? patch.users.map(normalizeUser).filter(Boolean)
@@ -1014,7 +1202,19 @@ function applyRemoteSlicePatchLocally(patchKind, patch){
 }
 
 function finalizeRemoteStateUpdateLocally(options = {}){
-  handleDossierDataChange({ audience: options.audience !== false });
+  const incrementalPatch = options.incrementalPatch && typeof options.incrementalPatch === 'object'
+    ? options.incrementalPatch
+    : null;
+  const useIncrementalCaches = !!incrementalPatch && incrementalPatch.audienceImpact !== true;
+  handleDossierDataChange({
+    audience: options.audience !== false,
+    preserveClientAccessCaches: useIncrementalCaches,
+    preserveClientListSummary: useIncrementalCaches,
+    preserveDashboardSnapshot: useIncrementalCaches
+  });
+  if(useIncrementalCaches){
+    applyIncrementalRemoteDossierCaches(incrementalPatch);
+  }
   // Avoid expensive full-state signature recomputation on every live patch.
   // A later full reload can rebuild the signature if needed.
   lastPersistedStateSignature = '';
@@ -1841,7 +2041,7 @@ function scheduleChunkedSearchWarmup(kind, rows, stepFn){
 }
 
 function scheduleBackgroundDataWarmup(delayMs = 1500){
-  if(typeof window === 'undefined' || !currentUser) return;
+  if(typeof window === 'undefined' || !currentUser || isLargeDatasetMode()) return;
   const targetVersion = audienceRowsRawDataVersion;
   if(backgroundDataWarmupVersion === targetVersion) return;
   if(backgroundDataWarmupTimer){
@@ -1910,6 +2110,24 @@ function scheduleBackgroundDataWarmup(delayMs = 1500){
   }, Math.max(0, Number(delayMs) || 0));
 }
 
+function queueLargeDatasetDashboardWarmup(delayMs = 120){
+  if(typeof window === 'undefined' || !currentUser || !isLargeDatasetMode()) return;
+  setTimeout(()=>{
+    const run = ()=>{
+      try{
+        getDashboardSnapshot();
+      }catch(err){
+        console.warn('Préchargement dashboard impossible', err);
+      }
+    };
+    if(typeof window.requestIdleCallback === 'function'){
+      window.requestIdleCallback(run, { timeout: 1200 });
+      return;
+    }
+    run();
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
 function getCurrentSyncStatus(){
   const badge = $('syncStatusBadge');
   if(!badge) return 'pending';
@@ -1930,6 +2148,59 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 6000){
   }finally{
     clearTimeout(timer);
   }
+}
+
+function hasRemoteAuthSession(){
+  return !!String(remoteAuthToken || '').trim();
+}
+
+function clearRemoteAuthSession(){
+  remoteAuthToken = '';
+}
+
+function buildRemoteAuthHeaders(headers = {}){
+  const nextHeaders = { ...headers };
+  if(hasRemoteAuthSession()){
+    nextHeaders.Authorization = `Bearer ${remoteAuthToken}`;
+  }
+  return nextHeaders;
+}
+
+async function loginRemoteSession(username, password){
+  if(LOCAL_ONLY_MODE) return { ok: false, reason: 'offline' };
+  await resolveApiBase();
+  try{
+    const res = await fetchWithTimeout(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    }, API_STATE_LOAD_TIMEOUT_MS);
+    if(res.status === 401){
+      clearRemoteAuthSession();
+      return { ok: false, reason: 'invalid' };
+    }
+    if(!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const payload = await res.json().catch(()=>({}));
+    remoteAuthToken = String(payload?.token || '').trim();
+    if(!remoteAuthToken){
+      return { ok: false, reason: 'invalid' };
+    }
+    return { ok: true };
+  }catch(err){
+    clearRemoteAuthSession();
+    console.warn('Connexion serveur impossible pendant la connexion', err);
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
+function handleUnauthorizedRemoteSession(){
+  clearRemoteAuthSession();
+  stopRemoteSync();
+  remoteRefreshPending = false;
+  remoteRefreshInFlight = false;
+  setSyncStatus('error', 'Session serveur expirée');
 }
 
 async function pingApiBase(base, timeoutMs = 3500){
@@ -2200,6 +2471,32 @@ function getVisibleClients(){
   visibleClientsCacheVersion = audienceRowsRawDataVersion;
   visibleClientsCacheUserKey = userKey;
   return next;
+}
+
+function isLargeDatasetMode(){
+  const userKey = getCurrentClientAccessCacheKey();
+  if(
+    largeDatasetModeCacheVersion === audienceRowsRawDataVersion
+    && largeDatasetModeCacheUserKey === userKey
+  ){
+    return largeDatasetModeCacheValue;
+  }
+  const visibleClients = getVisibleClients();
+  let large = visibleClients.length >= 300;
+  if(!large){
+    let dossierCount = 0;
+    for(const client of visibleClients){
+      dossierCount += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+      if(dossierCount >= 30000){
+        large = true;
+        break;
+      }
+    }
+  }
+  largeDatasetModeCacheValue = large;
+  largeDatasetModeCacheVersion = audienceRowsRawDataVersion;
+  largeDatasetModeCacheUserKey = userKey;
+  return large;
 }
 
 function getEditableClients(){
@@ -3455,17 +3752,323 @@ function downloadStoredFile(file){
   }
 }
 
+function hasStoredPasswordHash(user){
+  return !!String(user?.passwordHash || '').trim() && !!String(user?.passwordSalt || '').trim();
+}
+
+function hasAnyStoredPassword(user){
+  return hasStoredPasswordHash(user) || !!normalizeLoginPassword(user?.password || '');
+}
+
+function getSeedBootstrapPasswordForUser(user){
+  const username = String(user?.username || '').trim().toLowerCase();
+  if(!username) return '';
+  if(username === DEFAULT_MANAGER_USERNAME) return DEFAULT_MANAGER_PASSWORD;
+  return '';
+}
+
+function isBootstrapPasswordForUser(user, password){
+  const normalizedPassword = normalizeLoginPassword(password);
+  const expected = normalizeLoginPassword(getSeedBootstrapPasswordForUser(user));
+  return !!expected && normalizedPassword === expected;
+}
+
+function canUseSecurePasswordHashing(){
+  return typeof crypto !== 'undefined'
+    && !!crypto?.subtle
+    && typeof crypto.getRandomValues === 'function'
+    && typeof TextEncoder !== 'undefined';
+}
+
+function bytesToHex(bytes){
+  return Array.from(bytes || [])
+    .map(byte=>byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function hexToBytes(hex){
+  const value = String(hex || '').trim();
+  if(!value || value.length % 2 !== 0) return new Uint8Array();
+  const bytes = new Uint8Array(value.length / 2);
+  for(let i = 0; i < value.length; i += 2){
+    bytes[i / 2] = parseInt(value.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+function createPasswordSaltHex(){
+  const salt = new Uint8Array(PASSWORD_SALT_BYTES);
+  crypto.getRandomValues(salt);
+  return bytesToHex(salt);
+}
+
+async function derivePasswordHash(password, saltHex){
+  if(!canUseSecurePasswordHashing()) return '';
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(String(password || '')),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const derived = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt: hexToBytes(saltHex),
+      iterations: PASSWORD_HASH_ITERATIONS,
+      hash: 'SHA-256'
+    },
+    key,
+    256
+  );
+  return bytesToHex(new Uint8Array(derived));
+}
+
+async function secureUserPassword(user, rawPassword, options = {}){
+  const normalizedPassword = normalizeLoginPassword(rawPassword);
+  const requirePasswordChange = options.requirePasswordChange === true;
+  const baseUser = user && typeof user === 'object' ? { ...user } : {};
+  if(!normalizedPassword){
+    return {
+      ...baseUser,
+      requirePasswordChange
+    };
+  }
+  if(canUseSecurePasswordHashing()){
+    const passwordSalt = createPasswordSaltHex();
+    const passwordHash = await derivePasswordHash(normalizedPassword, passwordSalt);
+    return {
+      ...baseUser,
+      password: '',
+      passwordHash,
+      passwordSalt,
+      passwordVersion: PASSWORD_HASH_VERSION,
+      passwordUpdatedAt: new Date().toISOString(),
+      requirePasswordChange
+    };
+  }
+  return {
+    ...baseUser,
+    password: normalizedPassword,
+    passwordHash: '',
+    passwordSalt: '',
+    passwordVersion: 0,
+    passwordUpdatedAt: new Date().toISOString(),
+    requirePasswordChange
+  };
+}
+
+async function verifyUserPassword(user, rawPassword){
+  const normalizedPassword = normalizeLoginPassword(rawPassword);
+  if(!normalizedPassword || !user) return false;
+  if(hasStoredPasswordHash(user) && canUseSecurePasswordHashing()){
+    const computedHash = await derivePasswordHash(normalizedPassword, user.passwordSalt);
+    return computedHash === String(user.passwordHash || '');
+  }
+  return normalizeLoginPassword(user.password || '') === normalizedPassword;
+}
+
+function getPasswordPolicyError(password){
+  const value = normalizeLoginPassword(password);
+  if(!value) return 'Mot de passe obligatoire.';
+  if(value.length < PASSWORD_MIN_LENGTH){
+    return `Mot de passe trop court. Minimum ${PASSWORD_MIN_LENGTH} caractères.`;
+  }
+  if(!/[a-z]/i.test(value) || !/\d/.test(value)){
+    return 'Le mot de passe doit contenir au moins une lettre et un chiffre.';
+  }
+  return '';
+}
+
+async function migrateUsersToSecureStorage(users){
+  const safeUsers = Array.isArray(users) ? users.map(normalizeUser).filter(Boolean) : [];
+  const nextUsers = [];
+  let changed = false;
+
+  for(const user of safeUsers){
+    const legacyPassword = normalizeLoginPassword(user.password || '');
+    const shouldRotatePassword = user.requirePasswordChange === true || isBootstrapPasswordForUser(user, legacyPassword);
+    let nextUser = { ...user };
+
+    if(hasStoredPasswordHash(nextUser)){
+      if(legacyPassword){
+        nextUser.password = '';
+        changed = true;
+      }
+      if(nextUser.requirePasswordChange !== shouldRotatePassword){
+        nextUser.requirePasswordChange = shouldRotatePassword;
+        changed = true;
+      }
+    }else if(legacyPassword){
+      nextUser = await secureUserPassword(nextUser, legacyPassword, {
+        requirePasswordChange: shouldRotatePassword
+      });
+      changed = true;
+    }else if(nextUser.requirePasswordChange !== shouldRotatePassword){
+      nextUser.requirePasswordChange = shouldRotatePassword;
+      changed = true;
+    }
+
+    nextUsers.push(nextUser);
+  }
+
+  return { users: nextUsers, changed };
+}
+
+async function hardenUsersOnBoot(){
+  const migration = await migrateUsersToSecureStorage(ensureManagerUser(Array.isArray(USERS) ? USERS : []));
+  USERS = ensureManagerUser(migration.users);
+  if(!migration.changed) return false;
+  try{
+    await persistStateSliceNow('users', USERS, { source: 'user-security-migration' });
+  }catch(err){
+    console.warn('Impossible de renforcer la sécurité des mots de passe', err);
+  }
+  syncCurrentUserFromUsers();
+  return true;
+}
+
+function getLoginLockoutRemainingMs(){
+  return Math.max(0, Number(loginLockedUntil || 0) - Date.now());
+}
+
+function getLoginLockoutMessage(){
+  const remainingMs = getLoginLockoutRemainingMs();
+  if(remainingMs <= 0) return '';
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  return `Trop de tentatives. Réessayez dans ${remainingSeconds}s.`;
+}
+
+function showLoginError(message){
+  const errorMsg = $('errorMsg');
+  if(!errorMsg) return;
+  errorMsg.textContent = String(message || "Nom d'utilisateur ou mot de passe incorrect");
+  errorMsg.style.display = 'block';
+}
+
+function clearLoginError(){
+  const errorMsg = $('errorMsg');
+  if(!errorMsg) return;
+  errorMsg.textContent = "Nom d'utilisateur ou mot de passe incorrect";
+  errorMsg.style.display = 'none';
+}
+
+function registerFailedLoginAttempt(){
+  loginAttemptCount += 1;
+  if(loginAttemptCount >= LOGIN_MAX_ATTEMPTS){
+    loginAttemptCount = 0;
+    loginLockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+    return getLoginLockoutMessage();
+  }
+  const attemptsLeft = Math.max(0, LOGIN_MAX_ATTEMPTS - loginAttemptCount);
+  return `Nom d'utilisateur ou mot de passe incorrect (${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''}).`;
+}
+
+function resetLoginAttempts(){
+  loginAttemptCount = 0;
+  loginLockedUntil = 0;
+}
+
+function showPasswordSetupError(message){
+  const errorMsg = $('passwordSetupError');
+  if(!errorMsg) return;
+  errorMsg.textContent = String(message || 'Veuillez définir un mot de passe valide.');
+  errorMsg.style.display = 'block';
+}
+
+function clearPasswordSetupError(){
+  const errorMsg = $('passwordSetupError');
+  if(!errorMsg) return;
+  errorMsg.textContent = 'Veuillez définir un mot de passe valide.';
+  errorMsg.style.display = 'none';
+}
+
+function openPasswordSetupModal(){
+  const modal = $('passwordSetupModal');
+  if(!modal) return;
+  if($('passwordSetupInput')) $('passwordSetupInput').value = '';
+  if($('passwordSetupConfirmInput')) $('passwordSetupConfirmInput').value = '';
+  clearPasswordSetupError();
+  modal.style.display = 'flex';
+  setTimeout(()=>{
+    $('passwordSetupInput')?.focus();
+  }, 0);
+}
+
+function closePasswordSetupModal(){
+  const modal = $('passwordSetupModal');
+  if(!modal) return;
+  modal.style.display = 'none';
+  if($('passwordSetupInput')) $('passwordSetupInput').value = '';
+  if($('passwordSetupConfirmInput')) $('passwordSetupConfirmInput').value = '';
+  clearPasswordSetupError();
+}
+
+async function submitForcedPasswordChange(){
+  if(!currentUser) return;
+  const password = normalizeLoginPassword($('passwordSetupInput')?.value || '');
+  const confirmPassword = normalizeLoginPassword($('passwordSetupConfirmInput')?.value || '');
+  const passwordPolicyError = getPasswordPolicyError(password);
+  if(passwordPolicyError){
+    showPasswordSetupError(passwordPolicyError);
+    return;
+  }
+  if(password !== confirmPassword){
+    showPasswordSetupError('La confirmation du mot de passe ne correspond pas.');
+    return;
+  }
+  const userIndex = USERS.findIndex(u=>u.id === currentUser.id);
+  if(userIndex === -1){
+    showPasswordSetupError('Compte introuvable. Reconnectez-vous.');
+    return;
+  }
+  const currentSaveBtn = $('passwordSetupSaveBtn');
+  if(currentSaveBtn) currentSaveBtn.disabled = true;
+  try{
+    const updatedUser = await secureUserPassword(USERS[userIndex], password, { requirePasswordChange: false });
+    USERS[userIndex] = updatedUser;
+    USERS = ensureManagerUser(USERS);
+    await persistStateSliceNow('users', USERS, { source: 'password-setup' });
+    syncCurrentUserFromUsers();
+    currentUser = USERS.find(u=>u.id === updatedUser.id) || updatedUser;
+    closePasswordSetupModal();
+    if(isManager()) renderEquipe();
+  }catch(err){
+    console.warn('Impossible de mettre à jour le mot de passe', err);
+    showPasswordSetupError('Impossible de sauvegarder le nouveau mot de passe.');
+  }finally{
+    if(currentSaveBtn) currentSaveBtn.disabled = false;
+  }
+}
+
 function normalizeUser(rawUser){
   if(!rawUser || typeof rawUser !== 'object') return null;
   const id = Number(rawUser.id);
   const username = String(rawUser.username || '').trim();
-  const password = String(rawUser.password || '');
+  const password = normalizeLoginPassword(rawUser.password || '');
+  const passwordHash = String(rawUser.passwordHash || '').trim();
+  const passwordSalt = String(rawUser.passwordSalt || '').trim();
+  const passwordVersion = Number(rawUser.passwordVersion);
+  const passwordUpdatedAt = String(rawUser.passwordUpdatedAt || '').trim();
+  const requirePasswordChange = rawUser.requirePasswordChange === true;
   const role = normalizeUserRole(rawUser.role);
   const clientIds = Array.isArray(rawUser.clientIds)
     ? [...new Set(rawUser.clientIds.map(v=>Number(v)).filter(v=>Number.isFinite(v)))]
     : [];
   if(!Number.isFinite(id) || !username) return null;
-  return { id, username, password, role, clientIds };
+  return {
+    id,
+    username,
+    password,
+    passwordHash,
+    passwordSalt,
+    passwordVersion: Number.isFinite(passwordVersion) ? passwordVersion : 0,
+    passwordUpdatedAt,
+    requirePasswordChange,
+    role,
+    clientIds
+  };
 }
 
 function normalizeClient(rawClient, options = {}){
@@ -3579,6 +4182,105 @@ function removeImportHistoryEntry(batchId){
   const targetId = String(batchId || '').trim();
   if(!targetId || !Array.isArray(AppState.importHistory)) return;
   AppState.importHistory = AppState.importHistory.filter(entry=>String(entry?.id || '').trim() !== targetId);
+}
+
+function collectRelevantImportHistoryEntries({ clientId = null, dossiers = [] } = {}){
+  const safeClientId = Number(clientId);
+  const globalBatchIds = new Set();
+  const audienceBatchIds = new Set();
+  (Array.isArray(dossiers) ? dossiers : []).forEach(dossier=>{
+    const globalBatchId = String(dossier?.importGlobalBatchId || '').trim();
+    if(globalBatchId) globalBatchIds.add(globalBatchId);
+    const orphanAudienceBatchId = String(dossier?.importAudienceBatchId || '').trim();
+    if(orphanAudienceBatchId) audienceBatchIds.add(orphanAudienceBatchId);
+    const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+      ? dossier.procedureDetails
+      : {};
+    Object.values(details).forEach(procDetails=>{
+      const audienceBatchId = String(procDetails?._audienceImportBatchId || '').trim();
+      if(audienceBatchId) audienceBatchIds.add(audienceBatchId);
+    });
+  });
+  return normalizeImportHistoryEntries(AppState.importHistory).filter(entry=>{
+    if(String(entry?.type || '').trim() === 'audience'){
+      if(audienceBatchIds.has(entry.id)) return true;
+      return Number.isFinite(safeClientId) && entry.createdOrphanClientIds.includes(safeClientId);
+    }
+    if(globalBatchIds.has(entry.id)) return true;
+    return Number.isFinite(safeClientId) && entry.createdClientIds.includes(safeClientId);
+  });
+}
+
+function syncImportHistoryWithCurrentState(){
+  const normalizedEntries = normalizeImportHistoryEntries(AppState.importHistory);
+  if(!normalizedEntries.length){
+    AppState.importHistory = [];
+    return;
+  }
+
+  const existingClientIds = new Set();
+  const globalDossierUidsByBatch = new Map();
+  const audienceOrphanDossierUidsByBatch = new Map();
+  const audienceOperationKeysByBatch = new Map();
+  const pushBatchValue = (map, batchId, value)=>{
+    if(!batchId || !value) return;
+    if(!map.has(batchId)) map.set(batchId, new Set());
+    map.get(batchId).add(value);
+  };
+
+  (Array.isArray(AppState.clients) ? AppState.clients : []).forEach(client=>{
+    const clientId = Number(client?.id);
+    if(Number.isFinite(clientId)) existingClientIds.add(clientId);
+    (Array.isArray(client?.dossiers) ? client.dossiers : []).forEach(dossier=>{
+      const dossierUid = String(dossier?.importUid || '').trim();
+      const globalBatchId = String(dossier?.importGlobalBatchId || '').trim();
+      pushBatchValue(globalDossierUidsByBatch, globalBatchId, dossierUid);
+
+      const orphanAudienceBatchId = String(dossier?.importAudienceBatchId || '').trim();
+      pushBatchValue(audienceOrphanDossierUidsByBatch, orphanAudienceBatchId, dossierUid);
+
+      const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+        ? dossier.procedureDetails
+        : {};
+      Object.entries(details).forEach(([procKey, procDetails])=>{
+        const audienceBatchId = String(procDetails?._audienceImportBatchId || '').trim();
+        pushBatchValue(audienceOperationKeysByBatch, audienceBatchId, `${dossierUid}::${String(procKey || '').trim()}`);
+      });
+    });
+  });
+
+  AppState.importHistory = normalizeImportHistoryEntries(normalizedEntries.map(entry=>{
+    if(entry.type === 'audience'){
+      const orphanClientIds = entry.createdOrphanClientIds.filter(id=>existingClientIds.has(id));
+      const orphanDossierUids = [...(audienceOrphanDossierUidsByBatch.get(entry.id) || new Set())];
+      const liveOperationKeys = audienceOperationKeysByBatch.get(entry.id) || new Set();
+      const operations = entry.operations.filter(op=>liveOperationKeys.has(`${op.dossierUid}::${op.procKey}`));
+      if(!operations.length && !orphanDossierUids.length) return null;
+      return {
+        ...entry,
+        createdOrphanClientIds: orphanClientIds,
+        createdOrphanDossierUids: orphanDossierUids,
+        operations,
+        stats: {
+          ...entry.stats,
+          audiences: operations.length
+        }
+      };
+    }
+
+    const createdClientIds = entry.createdClientIds.filter(id=>existingClientIds.has(id));
+    const createdDossierUids = [...(globalDossierUidsByBatch.get(entry.id) || new Set())];
+    if(!createdDossierUids.length) return null;
+    return {
+      ...entry,
+      createdClientIds,
+      createdDossierUids,
+      stats: {
+        ...entry.stats,
+        dossiers: createdDossierUids.length
+      }
+    };
+  }).filter(Boolean));
 }
 
 function findDossierByImportUid(importUid){
@@ -4153,6 +4855,7 @@ function restoreRecycleEntryAt(index, options = {}){
   const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
   const type = String(entry.type || '').trim();
   let restored = false;
+  const importHistoryEntries = normalizeImportHistoryEntries(payload.importHistoryEntries);
 
   if(type === 'client_delete'){
     const rawClient = payload.client && typeof payload.client === 'object' ? payload.client : null;
@@ -4210,6 +4913,13 @@ function restoreRecycleEntryAt(index, options = {}){
   }
 
   if(!restored) return false;
+  if(importHistoryEntries.length){
+    AppState.importHistory = normalizeImportHistoryEntries([
+      ...importHistoryEntries,
+      ...normalizeImportHistoryEntries(AppState.importHistory)
+    ]);
+  }
+  syncImportHistoryWithCurrentState();
   AppState.recycleBin.splice(idx, 1);
   if(!options.skipRefresh) refreshAfterRecycleRestore();
   return true;
@@ -4583,10 +5293,11 @@ function ensureManagerUser(users){
   if(defaultManagerIdx >= 0){
     // Keep the default manager account always available.
     validUsers[defaultManagerIdx].username = DEFAULT_MANAGER_USERNAME;
-    validUsers[defaultManagerIdx].password = DEFAULT_MANAGER_PASSWORD;
     validUsers[defaultManagerIdx].role = 'manager';
-    if(!Array.isArray(validUsers[defaultManagerIdx].clientIds)){
-      validUsers[defaultManagerIdx].clientIds = [];
+    validUsers[defaultManagerIdx].clientIds = [];
+    if(!hasAnyStoredPassword(validUsers[defaultManagerIdx])){
+      validUsers[defaultManagerIdx].password = DEFAULT_MANAGER_PASSWORD;
+      validUsers[defaultManagerIdx].requirePasswordChange = true;
     }
     return validUsers;
   }
@@ -4596,6 +5307,11 @@ function ensureManagerUser(users){
     id: Math.max(1, maxId + 1),
     username: DEFAULT_MANAGER_USERNAME,
     password: DEFAULT_MANAGER_PASSWORD,
+    passwordHash: '',
+    passwordSalt: '',
+    passwordVersion: 0,
+    passwordUpdatedAt: '',
+    requirePasswordChange: true,
     role: 'manager',
     clientIds: []
   });
@@ -5293,9 +6009,11 @@ async function createAutoBackupSnapshot(payload, options = {}){
   };
 
   await writeAutoBackupToIndexedDb(entry);
-  const localEntries = readAutoBackupsFromLocalStorage();
-  localEntries.unshift(entry);
-  writeAutoBackupsToLocalStorage(localEntries);
+  if(!shouldSkipFullLocalStorageCache(safePayload)){
+    const localEntries = readAutoBackupsFromLocalStorage();
+    localEntries.unshift(entry);
+    writeAutoBackupsToLocalStorage(localEntries);
+  }
   pruneIndexedDbAutoBackups().catch(()=>{});
   lastAutoBackupAt = now;
   lastAutoBackupSignature = signature;
@@ -5305,12 +6023,49 @@ async function createAutoBackupSnapshot(payload, options = {}){
 function writeStateToLocalStorage(payload){
   if(typeof localStorage === 'undefined') return false;
   try{
+    if(shouldSkipFullLocalStorageCache(payload)){
+      localStorage.removeItem(STORAGE_KEY);
+      return true;
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     return true;
   }catch(err){
     console.warn('Echec localStorage (quota/accès)', err);
     return false;
   }
+}
+
+function queueDeferredStateCacheWrite(payload, options = {}){
+  const safePayload = payload && typeof payload === 'object'
+    ? payload
+    : buildAppStatePayload();
+  const shouldWriteIndexedDb = options.indexedDb === true;
+  const shouldWriteLocalStorage = options.localStorage === true;
+  if(!shouldWriteIndexedDb && !shouldWriteLocalStorage) return;
+
+  const run = async ()=>{
+    if(shouldWriteIndexedDb){
+      await writeStateToIndexedDb(safePayload);
+    }
+    if(shouldWriteLocalStorage){
+      writeStateToLocalStorage(safePayload);
+    }
+  };
+
+  if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
+    window.requestIdleCallback(()=>{
+      run().catch((err)=>{
+        console.warn('Impossible de mettre en cache l’état applicatif', err);
+      });
+    }, { timeout: 2000 });
+    return;
+  }
+
+  setTimeout(()=>{
+    run().catch((err)=>{
+      console.warn('Impossible de mettre en cache l’état applicatif', err);
+    });
+  }, 0);
 }
 
 async function openDesktopStateFile(){
@@ -5361,6 +6116,29 @@ function queueDesktopStateFilePersist(payload = null){
   }, DESKTOP_STATE_SAVE_DEBOUNCE_MS);
 }
 
+function scheduleInitialDesktopStatePersist(delayMs = 1200){
+  if(!hasDesktopStateBridge()) return;
+  setTimeout(()=>{
+    queueDesktopStateFilePersist();
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function shouldSkipFullLocalStorageCache(payload){
+  const safePayload = payload && typeof payload === 'object' ? payload : null;
+  if(!safePayload) return false;
+  const clients = Array.isArray(safePayload.clients) ? safePayload.clients : [];
+  if(clients.length >= LOCAL_STORAGE_CACHE_MAX_CLIENTS) return true;
+  let dossierCount = 0;
+  for(const client of clients){
+    dossierCount += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+    if(dossierCount >= LOCAL_STORAGE_CACHE_MAX_DOSSIERS) return true;
+  }
+  const audienceDraftCount = safePayload.audienceDraft && typeof safePayload.audienceDraft === 'object'
+    ? Object.keys(safePayload.audienceDraft).length
+    : 0;
+  return audienceDraftCount >= LOCAL_STORAGE_CACHE_MAX_AUDIENCE_DRAFTS;
+}
+
 async function persistLocalStateSnapshot(payload = buildAppStatePayload(), options = {}){
   const source = String(options?.source || 'persist');
   const nextSignature = typeof options.signature === 'string'
@@ -5370,8 +6148,10 @@ async function persistLocalStateSnapshot(payload = buildAppStatePayload(), optio
     queueDesktopStateFilePersist(payload);
     return payload;
   }
-  lastPersistedStateSignature = nextSignature;
-  lastLocalSnapshotSignature = nextSignature;
+  if(nextSignature){
+    lastPersistedStateSignature = nextSignature;
+    lastLocalSnapshotSignature = nextSignature;
+  }
   await writeStateToIndexedDb(payload);
   writeStateToLocalStorage(payload);
   await createAutoBackupSnapshot(payload, { source, signature: nextSignature });
@@ -5384,7 +6164,9 @@ function queueDeferredLocalStateSnapshot(payload = buildAppStatePayload(), optio
   const nextSignature = typeof options.signature === 'string'
     ? options.signature
     : getStateSignatureFromPayload(payload);
-  lastPersistedStateSignature = nextSignature;
+  if(nextSignature){
+    lastPersistedStateSignature = nextSignature;
+  }
   deferredLocalSnapshotPayload = payload;
   deferredLocalSnapshotSource = source;
   deferredLocalSnapshotSignature = nextSignature;
@@ -5410,17 +6192,25 @@ async function persistRemoteRequestNow(pathname, body){
     setSyncStatus('error', 'Mode local (offline)');
     return true;
   }
+  if(!hasRemoteAuthSession()){
+    setSyncStatus('error', 'Session serveur absente');
+    return false;
+  }
   setSyncStatus('syncing');
   try{
     const res = await fetchWithTimeout(`${API_BASE}${pathname}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildRemoteAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         ...body,
         _sourceId: APP_INSTANCE_ID,
         _baseVersion: remoteStateVersion
       })
     }, API_STATE_SAVE_TIMEOUT_MS);
+    if(res.status === 401){
+      handleUnauthorizedRemoteSession();
+      return false;
+    }
     if(res.status === 409){
       const conflictPayload = await res.json().catch(()=>({}));
       updateRemoteStateMetadata(conflictPayload);
@@ -5443,8 +6233,7 @@ async function persistRemoteRequestNow(pathname, body){
 
 async function persistStateSliceNow(sliceKey, sliceValue, options = {}){
   const payload = buildAppStatePayload();
-  const signature = getStateSignatureFromPayload(payload);
-  await persistLocalStateSnapshot(payload, { source: options.source || sliceKey, signature });
+  await persistLocalStateSnapshot(payload, { source: options.source || sliceKey, signature: '' });
   const routeBySlice = {
     audienceDraft: '/state/audience-draft',
     users: '/state/users',
@@ -5455,6 +6244,12 @@ async function persistStateSliceNow(sliceKey, sliceValue, options = {}){
     return persistRemoteRequestNow('/state', payload);
   }
   return persistRemoteRequestNow(pathname, { [sliceKey]: sliceValue });
+}
+
+async function persistClientPatchNow(patch, options = {}){
+  const payload = buildAppStatePayload();
+  queueDeferredLocalStateSnapshot(payload, { source: options.source || 'clients', signature: '' });
+  return persistRemoteRequestNow('/state/clients', patch);
 }
 
 function getDossierPatchQueueKey(patch){
@@ -5496,8 +6291,7 @@ async function flushQueuedDossierPatchesNow(){
 
 async function persistDossierPatchNow(patch, options = {}){
   const payload = buildAppStatePayload();
-  const signature = getStateSignatureFromPayload(payload);
-  queueDeferredLocalStateSnapshot(payload, { source: options.source || 'dossier', signature });
+  queueDeferredLocalStateSnapshot(payload, { source: options.source || 'dossier', signature: '' });
   const queueKey = getDossierPatchQueueKey(patch);
   if(!queueKey){
     await flushQueuedDossierPatchesNow();
@@ -5531,21 +6325,19 @@ async function persistAppStateNow(payload = null){
   const nextPayload = payload && typeof payload === 'object'
     ? payload
     : buildAppStatePayload();
-  const signature = getStateSignatureFromPayload(nextPayload);
   queuedPersistPayload = null;
-  await persistLocalStateSnapshot(nextPayload, { source: 'persist', signature });
+  await persistLocalStateSnapshot(nextPayload, { source: 'persist', signature: '' });
   return persistRemoteRequestNow('/state', nextPayload);
 }
 
 function queuePersistAppState(){
   markAudienceRowsCacheDirty();
   queuedPersistPayload = buildAppStatePayload();
-  const signature = getStateSignatureFromPayload(queuedPersistPayload);
   setSyncStatus('syncing');
   if(persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(()=>{
     persistTimer = null;
-    persistLocalStateSnapshot(queuedPersistPayload, { source: 'persist', signature })
+    persistLocalStateSnapshot(queuedPersistPayload, { source: 'persist', signature: '' })
       .then(()=>persistRemoteRequestNow('/state', queuedPersistPayload))
       .catch((err)=>{
       console.warn('Impossible de sauvegarder l’état applicatif', err);
@@ -5556,10 +6348,15 @@ function queuePersistAppState(){
 async function loadPersistedState(){
   let loaded = false;
   let changed = false;
-  if(!LOCAL_ONLY_MODE){
+  if(!LOCAL_ONLY_MODE && hasRemoteAuthSession()){
     try{
-      const res = await fetchWithTimeout(`${API_BASE}/state`, { cache: 'no-store' }, API_STATE_LOAD_TIMEOUT_MS);
-      if(res.ok){
+      const res = await fetchWithTimeout(`${API_BASE}/state`, {
+        cache: 'no-store',
+        headers: buildRemoteAuthHeaders()
+      }, API_STATE_LOAD_TIMEOUT_MS);
+      if(res.status === 401){
+        handleUnauthorizedRemoteSession();
+      }else if(res.ok){
         const parsed = await res.json();
         updateRemoteStateMetadata(parsed);
         const normalizedState = normalizePersistedStateSource(parsed);
@@ -5573,6 +6370,8 @@ async function loadPersistedState(){
         await applyPersistedStateSource(normalizedState, {
           writeIndexedDb: true,
           writeLocalStorage: true,
+          deferWriteIndexedDb: true,
+          deferWriteLocalStorage: true,
           syncStatusMessage: 'Etat charge depuis serveur'
         });
         lastRemoteStateLoadVersion = remoteStateVersion;
@@ -5601,6 +6400,8 @@ async function loadPersistedState(){
         await applyPersistedStateSource(normalizedState, {
           writeIndexedDb: true,
           writeLocalStorage: true,
+          deferWriteIndexedDb: true,
+          deferWriteLocalStorage: true,
           syncStatusMessage: 'Etat charge depuis Cabinet ARAQI HOUSSAINI'
         });
         return true;
@@ -5616,6 +6417,7 @@ async function loadPersistedState(){
     if(normalizedState.signature && normalizedState.signature !== lastPersistedStateSignature){
       await applyPersistedStateSource(normalizedState, {
         writeLocalStorage: true,
+        deferWriteLocalStorage: true,
         syncStatusMessage: 'Etat charge depuis IndexedDB'
       });
       return true;
@@ -5701,6 +6503,10 @@ function startRemoteSync(){
     setSyncStatus('error', 'Mode local (offline)');
     return;
   }
+  if(!hasRemoteAuthSession()){
+    setSyncStatus('pending', 'Connexion serveur en attente');
+    return;
+  }
   if(remoteSyncTimer) return;
   startRemoteSyncStream();
   refreshServerConnectionStatus().catch(()=>{});
@@ -5750,9 +6556,11 @@ function scheduleRemoteSyncStreamRetry(){
 function startRemoteSyncStream(){
   if(LOCAL_ONLY_MODE) return;
   if(typeof EventSource === 'undefined') return;
+  if(!hasRemoteAuthSession()) return;
   if(remoteSyncStream) return;
   try{
-    const stream = new EventSource(`${API_BASE}/state/stream`);
+    const token = encodeURIComponent(remoteAuthToken);
+    const stream = new EventSource(`${API_BASE}/state/stream?token=${token}`);
     remoteSyncStream = stream;
     stream.onopen = ()=>{
       remoteSyncStreamConnected = true;
@@ -5766,11 +6574,14 @@ function startRemoteSyncStream(){
         updateRemoteStateMetadata(payload);
         if(payload?.updatedAt) setLiveDelayMetricFromIso(payload.updatedAt);
         if(String(payload?.sourceId || '') === APP_INSTANCE_ID) return;
-        if(payload?.patchKind === 'dossier' && applyRemoteDossierPatchLocally(payload.patch)){
-          const patchHasAudienceImpact = String(payload?.patch?.action || '').trim().toLowerCase() === 'create'
-            ? dossierHasAudienceImpact(payload?.patch?.dossier || {})
-            : true;
-          finalizeRemoteStateUpdateLocally({ audience: patchHasAudienceImpact });
+        const appliedDossierPatch = payload?.patchKind === 'dossier'
+          ? applyRemoteDossierPatchLocally(payload.patch)
+          : null;
+        if(appliedDossierPatch){
+          finalizeRemoteStateUpdateLocally({
+            audience: appliedDossierPatch.audienceImpact === true,
+            incrementalPatch: appliedDossierPatch
+          });
           remoteRefreshPending = false;
           return;
         }
@@ -7458,11 +8269,12 @@ async function initApplication(){
     await resolveApiBase();
   }
   await loadPersistedState();
+  await hardenUsersOnBoot();
   const startupAudienceReconciliation = reconcileAudienceOrphanDossiers();
   if(startupAudienceReconciliation.matchedDossiers > 0){
     handleDossierDataChange({ audience: true });
   }
-  await persistDesktopStateFileNow();
+  scheduleInitialDesktopStatePersist();
   hasLoadedState = true;
   if(startupAudienceReconciliation.matchedDossiers > 0){
     queuePersistAppState();
@@ -7483,8 +8295,10 @@ async function initApplication(){
     'clientDropdown'
   );
   warmupExcelLibrariesOnIdle();
-  startRemoteSync();
   showView('dashboard', { warmup: false });
+  if(pendingLoginRetryAfterInit){
+    setTimeout(()=>login(), 0);
+  }
 }
 
 // ================== EVENTS ==================
@@ -7732,6 +8546,20 @@ function setupEvents(){
   $('teamSaveBtn')?.addEventListener('click', saveTeamUser);
   $('teamResetBtn')?.addEventListener('click', resetTeamForm);
   $('teamClientSearchInput')?.addEventListener('input', filterTeamClientListDebounced);
+  $('passwordSetupSaveBtn')?.addEventListener('click', submitForcedPasswordChange);
+  $('passwordSetupLogoutBtn')?.addEventListener('click', logout);
+  $('passwordSetupInput')?.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      submitForcedPasswordChange();
+    }
+  });
+  $('passwordSetupConfirmInput')?.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      submitForcedPasswordChange();
+    }
+  });
   $('restoreAllRecycleBtn')?.addEventListener('click', restoreAllRecycleItems);
   $('clearRecycleBinBtn')?.addEventListener('click', clearRecycleBinToBackup);
   $('recycleBody')?.addEventListener('click', (e)=>{
@@ -7863,30 +8691,160 @@ function showView(v, options = {}){
 }
 
 // ================== LOGIN ==================
-function login(){
-  const usernameInput = String($('username').value || '').trim().toLowerCase();
-  const passwordInput = normalizeLoginPassword($('password').value);
-  USERS = ensureManagerUser(Array.isArray(USERS) ? USERS : []);
-  const u = USERS.find(x=>
-    String(x.username || '').trim().toLowerCase() === usernameInput
-    && normalizeLoginPassword(x.password) === passwordInput
-  );
-  if(!u){ $('errorMsg').style.display='block'; return; }
-  currentUser = u;
-  visibleClientsCache = null;
-  visibleClientsCacheVersion = -1;
-  visibleClientsCacheUserKey = '';
-  editableClientsCache = null;
-  editableClientsCacheVersion = -1;
-  editableClientsCacheUserKey = '';
-  clientListSummaryCache = null;
-  clientListSummaryCacheVersion = -1;
-  clientListSummaryCacheUserKey = '';
-  $('errorMsg').style.display='none';
-  const forceDashboardVisible = ()=>{
-    if($('loginScreen')) $('loginScreen').style.display = 'none';
-    if($('appContent')) $('appContent').style.display = 'flex';
-    const sectionIds = [
+async function login(){
+  if(!hasLoadedState){
+    pendingLoginRetryAfterInit = true;
+    showLoginError('Chargement des donnees en cours...');
+    return;
+  }
+  if(loginInFlight) return;
+  const lockoutMessage = getLoginLockoutMessage();
+  if(lockoutMessage){
+    showLoginError(lockoutMessage);
+    return;
+  }
+
+  loginInFlight = true;
+  try{
+    const usernameInput = String($('username').value || '').trim().toLowerCase();
+    const passwordInput = normalizeLoginPassword($('password').value);
+    let remoteLoginState = 'offline';
+    if(!LOCAL_ONLY_MODE){
+      const remoteAuth = await loginRemoteSession(usernameInput, passwordInput);
+      if(remoteAuth.ok){
+        remoteLoginState = 'ok';
+        await loadPersistedState();
+      }else if(remoteAuth.reason === 'invalid'){
+        showLoginError(registerFailedLoginAttempt());
+        return;
+      }else if(remoteAuth.reason === 'unavailable'){
+        remoteLoginState = 'unavailable';
+      }
+    }
+
+    USERS = ensureManagerUser(Array.isArray(USERS) ? USERS : []);
+    let userIndex = USERS.findIndex(
+      x=>String(x.username || '').trim().toLowerCase() === usernameInput
+    );
+    let user = userIndex >= 0 ? USERS[userIndex] : null;
+    let isValid = await verifyUserPassword(user, passwordInput);
+    if((!user || !isValid) && remoteLoginState === 'ok'){
+      await loadPersistedState();
+      USERS = ensureManagerUser(Array.isArray(USERS) ? USERS : []);
+      userIndex = USERS.findIndex(
+        x=>String(x.username || '').trim().toLowerCase() === usernameInput
+      );
+      user = userIndex >= 0 ? USERS[userIndex] : null;
+      isValid = await verifyUserPassword(user, passwordInput);
+    }
+    if(!user || !isValid){
+      if(remoteLoginState === 'unavailable'){
+        clearRemoteAuthSession();
+      }
+      showLoginError(registerFailedLoginAttempt());
+      return;
+    }
+
+    if((!hasStoredPasswordHash(user) || normalizeLoginPassword(user.password || '')) && passwordInput){
+      const upgradedUser = await secureUserPassword(user, passwordInput, {
+        requirePasswordChange: user.requirePasswordChange === true || isBootstrapPasswordForUser(user, passwordInput)
+      });
+      USERS[userIndex] = upgradedUser;
+      try{
+        await persistStateSliceNow('users', USERS, { source: 'auth-security-upgrade' });
+      }catch(err){
+        console.warn('Impossible de mettre à jour la sécurité du compte', err);
+      }
+    }
+
+    resetLoginAttempts();
+    pendingLoginRetryAfterInit = false;
+    syncCurrentUserFromUsers();
+    currentUser = USERS.find(x=>String(x.username || '').trim().toLowerCase() === usernameInput) || user;
+    visibleClientsCache = null;
+    visibleClientsCacheVersion = -1;
+    visibleClientsCacheUserKey = '';
+    editableClientsCache = null;
+    editableClientsCacheVersion = -1;
+    editableClientsCacheUserKey = '';
+    clientListSummaryCache = null;
+    clientListSummaryCacheVersion = -1;
+    clientListSummaryCacheUserKey = '';
+    clearLoginError();
+    const forceDashboardVisible = ()=>{
+      if($('loginScreen')) $('loginScreen').style.display = 'none';
+      if($('appContent')) $('appContent').style.display = 'flex';
+      const sectionIds = [
+        'dashboardSection',
+        'clientSection',
+        'creationSection',
+        'suiviSection',
+        'audienceSection',
+        'diligenceSection',
+        'salleSection',
+        'equipeSection',
+        'recycleSection'
+      ];
+      sectionIds.forEach(id=>{
+        const el = $(id);
+        if(!el) return;
+        el.style.display = (id === 'dashboardSection') ? 'block' : 'none';
+      });
+      document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
+      const dash = $('dashboardLink');
+      if(dash) dash.classList.add('active');
+      if(isMobileViewport()) setSidebarCollapsed(true);
+    };
+
+    const safeRun = (label, fn)=>{
+      try{
+        fn();
+      }catch(err){
+        console.error(`[login] ${label} failed`, err);
+      }
+    };
+
+    const queueLoginPostBoot = ()=>{
+      if(loginPostBootTimer){
+        clearTimeout(loginPostBootTimer);
+        loginPostBootTimer = null;
+      }
+      loginPostBootTimer = setTimeout(()=>{
+        loginPostBootTimer = null;
+        safeRun('renderDashboard(immediate)', ()=>renderDashboard({ force: true, immediate: true, deferHeavy: true, includeAudienceMetrics: false }));
+        if(isLargeDatasetMode()){
+          safeRun('queueLargeDatasetDashboardWarmup', ()=>queueLargeDatasetDashboardWarmup(120));
+        }else{
+          safeRun('queueSidebarSalleSessionsRender', ()=>queueSidebarSalleSessionsRender(2800));
+          safeRun('scheduleBackgroundDataWarmup', ()=>scheduleBackgroundDataWarmup(2200));
+        }
+      }, 0);
+    };
+
+    forceDashboardVisible();
+    markDeferredRenderDirty(
+      'dashboard',
+      'clients',
+      'creation',
+      'suivi',
+      'audience',
+      'diligence',
+      'salle',
+      'equipe',
+      'recycle',
+      'clientDropdown'
+    );
+    safeRun('applyRoleUI', ()=>applyRoleUI({ skipNavigation: true }));
+    safeRun('primeDashboardTotalClients', ()=>animateDashboardMetric('totalClients', getVisibleClients().length, { immediate: true }));
+    queueLoginPostBoot();
+    if(!LOCAL_ONLY_MODE && hasRemoteAuthSession()){
+      startRemoteSync();
+      refreshServerConnectionStatus().catch(()=>{});
+    }else if(remoteLoginState === 'unavailable'){
+      setSyncStatus('error', 'Mode local (serveur indisponible)');
+    }
+
+    const hasVisibleSection = [
       'dashboardSection',
       'clientSection',
       'creationSection',
@@ -7896,72 +8854,22 @@ function login(){
       'salleSection',
       'equipeSection',
       'recycleSection'
-    ];
-    sectionIds.forEach(id=>{
+    ].some(id=>{
       const el = $(id);
-      if(!el) return;
-      el.style.display = (id === 'dashboardSection') ? 'block' : 'none';
+      return !!el && el.style.display !== 'none';
     });
-    document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
-    const dash = $('dashboardLink');
-    if(dash) dash.classList.add('active');
-    if(isMobileViewport()) setSidebarCollapsed(true);
-  };
-
-  const safeRun = (label, fn)=>{
-    try{
-      fn();
-    }catch(err){
-      console.error(`[login] ${label} failed`, err);
+    if(!hasVisibleSection || $('dashboardSection')?.style.display === 'none'){
+      forceDashboardVisible();
     }
-  };
-
-  const queueLoginPostBoot = ()=>{
-    if(loginPostBootTimer){
-      clearTimeout(loginPostBootTimer);
-      loginPostBootTimer = null;
+    if(currentUser?.requirePasswordChange){
+      setTimeout(()=>{
+        openPasswordSetupModal();
+      }, 120);
+    }else{
+      closePasswordSetupModal();
     }
-    loginPostBootTimer = setTimeout(()=>{
-      loginPostBootTimer = null;
-      safeRun('renderDashboard(immediate)', ()=>renderDashboard({ force: true, immediate: true, deferHeavy: true, includeAudienceMetrics: false }));
-      safeRun('queueSidebarSalleSessionsRender', ()=>queueSidebarSalleSessionsRender(2800));
-      safeRun('scheduleBackgroundDataWarmup', ()=>scheduleBackgroundDataWarmup(2200));
-    }, 0);
-  };
-
-  forceDashboardVisible();
-  markDeferredRenderDirty(
-    'dashboard',
-    'clients',
-    'creation',
-    'suivi',
-    'audience',
-    'diligence',
-    'salle',
-    'equipe',
-    'recycle',
-    'clientDropdown'
-  );
-  safeRun('applyRoleUI', ()=>applyRoleUI({ skipNavigation: true }));
-  safeRun('primeDashboardTotalClients', ()=>animateDashboardMetric('totalClients', getVisibleClients().length, { immediate: true }));
-  queueLoginPostBoot();
-
-  const hasVisibleSection = [
-    'dashboardSection',
-    'clientSection',
-    'creationSection',
-    'suiviSection',
-    'audienceSection',
-    'diligenceSection',
-    'salleSection',
-    'equipeSection',
-    'recycleSection'
-  ].some(id=>{
-    const el = $(id);
-    return !!el && el.style.display !== 'none';
-  });
-  if(!hasVisibleSection || $('dashboardSection')?.style.display === 'none'){
-    forceDashboardVisible();
+  }finally{
+    loginInFlight = false;
   }
 }
 
@@ -7974,8 +8882,11 @@ function normalizeLoginPassword(value){
 
 function logout(){
   stopRemoteSync();
+  clearRemoteAuthSession();
+  closePasswordSetupModal();
   closeDossierModal();
   currentUser = null;
+  resetLoginAttempts();
   visibleClientsCache = null;
   visibleClientsCacheVersion = -1;
   visibleClientsCacheUserKey = '';
@@ -7992,6 +8903,7 @@ function logout(){
   $('loginScreen').style.display='flex';
   $('username').value='';
   $('password').value='';
+  clearLoginError();
   renderSidebarSalleSessions();
   setSyncStatus('pending');
 }
@@ -8024,7 +8936,7 @@ function applyRoleUI(options = {}){
 }
 
 // ================== CLIENTS ==================
-function addClient(name){
+async function addClient(name){
   if(!canEditData()) return alert('Accès refusé');
   name = name.trim();
   if(!name) return alert('Nom obligatoire');
@@ -8036,7 +8948,12 @@ function addClient(name){
   }
   const newClient = { id: Date.now(), name, dossiers: [] };
   AppState.clients.push(newClient);
-  queuePersistAppState();
+  persistClientPatchNow({
+    action: 'create',
+    client: newClient
+  }, { source: 'clients' }).catch((err)=>{
+    console.warn('Impossible de sauvegarder le client', err);
+  });
   $('clientName').value='';
   refreshPrimaryViews();
   goToCreation(newClient.id);
@@ -8140,14 +9057,27 @@ function deleteClient(clientId){
   if(!window.confirm(warning)) return;
 
   pushRecycleBinEntry('client_delete', {
-    client: JSON.parse(JSON.stringify(client || {}))
+    client: JSON.parse(JSON.stringify(client || {})),
+    importHistoryEntries: collectRelevantImportHistoryEntries({
+      clientId: client.id,
+      dossiers: Array.isArray(client?.dossiers) ? client.dossiers : []
+    })
   });
   AppState.clients.splice(idx, 1);
   USERS = USERS.map(user=>{
     if(!Array.isArray(user.clientIds)) return user;
     return { ...user, clientIds: user.clientIds.filter(id => Number(id) !== Number(client.id)) };
   });
-  queuePersistAppState();
+  syncImportHistoryWithCurrentState();
+  handleDossierDataChange({
+    audience: (Array.isArray(client?.dossiers) ? client.dossiers : []).some(dossierHasAudienceImpact)
+  });
+  persistClientPatchNow({
+    action: 'delete',
+    clientId: client.id
+  }, { source: 'clients' }).catch((err)=>{
+    console.warn('Impossible de supprimer le client sur le serveur', err);
+  });
   refreshPrimaryViews({ includeRecycle: true });
 }
 
@@ -8180,7 +9110,11 @@ function deleteAllClients(){
     }))
   );
 
-  queuePersistAppState();
+  persistClientPatchNow({
+    action: 'delete-all'
+  }, { source: 'clients' }).catch((err)=>{
+    console.warn('Impossible de supprimer tous les clients sur le serveur', err);
+  });
   refreshPrimaryViews({ includeSalle: true, includeRecycle: true });
 }
 
@@ -8286,8 +9220,6 @@ async function addDossier(){
       files: await serializeUploadedFiles(uploadedFiles)
     };
     dossier.history = [];
-    console.log('[ADD DOSSIER]', JSON.stringify(dossier, null, 2));
-
     let dossierPatch = null;
     if(editingDossier){
       const prevClient = AppState.clients.find(c=>c.id == editingDossier.clientId);
@@ -8736,6 +9668,43 @@ function buildAudienceSearchHaystack(clientName, dossier, procKey, procedureData
     .join(' ');
 }
 
+function buildAudienceExactSearchTokens(row){
+  if(!row || typeof row !== 'object') return [];
+  const tokens = new Set();
+  const pushRefToken = (value)=>{
+    const key = normalizeReferenceForAudienceLookup(value);
+    if(key) tokens.add(key);
+  };
+  const pushTextToken = (value)=>{
+    const key = String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if(key) tokens.add(key);
+  };
+  pushRefToken(getAudienceRowDraftReferenceValue(row));
+  pushRefToken(row?.d?.referenceClient || '');
+  pushRefToken(row?.p?.referenceClient || '');
+  pushTextToken(row?.d?.debiteur || '');
+  return [...tokens];
+}
+
+function normalizeAudienceExactSearchQuery(value){
+  const raw = String(value || '').trim();
+  if(!raw) return '';
+  const refKey = normalizeReferenceForAudienceLookup(raw);
+  if(refKey && refKey.length >= 5) return refKey;
+  const textKey = raw.toLowerCase().replace(/\s+/g, ' ');
+  if(textKey.length >= 6) return textKey;
+  return '';
+}
+
+function getAudienceRowsByExactQuery(rows, query){
+  const exactQuery = normalizeAudienceExactSearchQuery(query);
+  if(!exactQuery) return null;
+  return (Array.isArray(rows) ? rows : []).filter(row=>{
+    const tokens = row.__exactSearchTokens || (row.__exactSearchTokens = buildAudienceExactSearchTokens(row));
+    return tokens.includes(exactQuery);
+  });
+}
+
 function computeAudienceRowContentScore(row){
   const refDossier = String(row?.draft?.refDossier ?? row?.p?.referenceClient ?? '').trim();
   const dateAudience = String(row?.draft?.dateAudience ?? row?.p?.audience ?? '').trim();
@@ -8758,8 +9727,6 @@ function editDossier(clientId, index){
   if(!canEditClient(client)) return alert('Accès refusé');
   const d = client.dossiers[index];
   if(!d) return;
-  console.log('[EDIT DOSSIER]', JSON.stringify(d, null, 2));
-
   editingDossier = { clientId, index };
   editingOriginalProcedures = normalizeProcedures(d);
   showView('creation');
@@ -8858,15 +9825,21 @@ function deleteDossier(clientId, index){
     clientId: client.id,
     clientName: client.name || '',
     dossierIndex: index,
-    dossier: JSON.parse(JSON.stringify(dossier || {}))
+    dossier: JSON.parse(JSON.stringify(dossier || {})),
+    importHistoryEntries: collectRelevantImportHistoryEntries({
+      clientId: client.id,
+      dossiers: [dossier]
+    })
   });
   client.dossiers.splice(index, 1);
+  syncImportHistoryWithCurrentState();
   handleDossierDataChange({ audience: dossierHasAudienceImpact(dossier) });
   persistDossierPatchNow({
     action: 'delete',
     clientId: Number(client.id),
     dossierIndex: Number(index)
   }, { source: 'dossier-delete' }).catch(()=>{});
+  queuePersistAppState();
   closeDossierModal();
   refreshPrimaryViews({ includeRecycle: true });
 }
@@ -9642,7 +10615,7 @@ function getFilteredDiligenceRows(allRows){
     if(!q) return true;
     if(executionOnlyQuery) return hasDiligenceExecutionNumber(row);
     const searchValues = row.__diligenceSearchValues || (row.__diligenceSearchValues = getDiligenceSearchValues(row));
-    return searchValues.some(value=>value === q);
+    return searchValues.some(value=>value.includes(q));
   });
   diligenceFilteredRowsCacheInput = allRows;
   diligenceFilteredRowsCacheKey = filterKey;
@@ -9839,8 +10812,10 @@ function addClientFromTeam(){
 function resetTeamForm(){
   editingTeamUserId = null;
   if($('teamUsername')) $('teamUsername').value = '';
+  if($('teamUsername')) $('teamUsername').disabled = false;
   if($('teamPassword')) $('teamPassword').value = '';
   if($('teamRole')) $('teamRole').value = 'client';
+  if($('teamRole')) $('teamRole').disabled = false;
   if($('teamClientSearchInput')) $('teamClientSearchInput').value = '';
   renderTeamClientCheckboxes([]);
   updateTeamClientSelectorState();
@@ -9850,10 +10825,14 @@ function resetTeamForm(){
 async function saveTeamUser(){
   if(!canManageTeam()) return alert('Accès refusé');
   const username = $('teamUsername')?.value?.trim() || '';
-  const password = $('teamPassword')?.value?.trim() || '';
+  const password = normalizeLoginPassword($('teamPassword')?.value?.trim() || '');
   const role = normalizeUserRole($('teamRole')?.value || 'client');
   if(!username) return alert('Username obligatoire');
   if(!editingTeamUserId && !password) return alert('Mot de passe obligatoire');
+  if(password){
+    const passwordPolicyError = getPasswordPolicyError(password);
+    if(passwordPolicyError) return alert(passwordPolicyError);
+  }
 
   const selectedClientIds = role === 'manager' ? [] : getSelectedTeamClientIds();
   const finalClientIds = role === 'client' ? selectedClientIds : [];
@@ -9868,29 +10847,42 @@ async function saveTeamUser(){
   if(usernameTaken) return alert('Username déjà utilisé');
 
   if(editingTeamUserId){
-    const user = USERS.find(u=>u.id === editingTeamUserId);
-    if(!user) return;
+    const userIndex = USERS.findIndex(u=>u.id === editingTeamUserId);
+    if(userIndex === -1) return;
+    const user = USERS[userIndex];
+    let nextUser = { ...user };
     if(isDefaultManagerUser(user)){
-      user.username = DEFAULT_MANAGER_USERNAME;
-      user.password = DEFAULT_MANAGER_PASSWORD;
-      user.role = 'manager';
-      user.clientIds = [];
+      nextUser.username = DEFAULT_MANAGER_USERNAME;
+      nextUser.role = 'manager';
+      nextUser.clientIds = [];
     }else{
-      user.username = username;
-      if(password) user.password = password;
-      user.role = role;
-      user.clientIds = finalClientIds;
+      nextUser.username = username;
+      nextUser.role = role;
+      nextUser.clientIds = finalClientIds;
     }
+    if(password){
+      nextUser = await secureUserPassword(nextUser, password, { requirePasswordChange: false });
+    }
+    USERS[userIndex] = nextUser;
   }else{
-    USERS.push({
+    let nextUser = {
       id: Date.now(),
       username,
-      password,
+      password: '',
+      passwordHash: '',
+      passwordSalt: '',
+      passwordVersion: 0,
+      passwordUpdatedAt: '',
+      requirePasswordChange: false,
       role,
       clientIds: finalClientIds
-    });
+    };
+    nextUser = await secureUserPassword(nextUser, password, { requirePasswordChange: false });
+    USERS.push(nextUser);
   }
+  USERS = ensureManagerUser(USERS);
   await persistStateSliceNow('users', USERS, { source: 'team' });
+  syncCurrentUserFromUsers();
   renderEquipe();
   resetTeamForm();
 }
@@ -9901,8 +10893,10 @@ function editTeamUser(userId){
   if(!user) return;
   editingTeamUserId = userId;
   if($('teamUsername')) $('teamUsername').value = user.username;
+  if($('teamUsername')) $('teamUsername').disabled = isDefaultManagerUser(user);
   if($('teamPassword')) $('teamPassword').value = '';
   if($('teamRole')) $('teamRole').value = normalizeUserRole(user.role);
+  if($('teamRole')) $('teamRole').disabled = isDefaultManagerUser(user);
   if($('teamClientSearchInput')) $('teamClientSearchInput').value = '';
   renderTeamClientCheckboxes(Array.isArray(user.clientIds) ? user.clientIds : []);
   updateTeamClientSelectorState();
@@ -9955,11 +10949,15 @@ function renderEquipe(options = {}){
     const clients = (Array.isArray(u.clientIds) ? u.clientIds : [])
       .map(getClientNameById)
       .join(', ') || '-';
+    const securityLabel = u.requirePasswordChange
+      ? 'Mot de passe à changer'
+      : (hasStoredPasswordHash(u) ? 'Protégé' : 'Ancien format');
     return `
       <tr>
         <td>${escapeHtml(u.username)}</td>
         <td>${escapeHtml(roleLabel)}</td>
         <td>${escapeHtml(clients)}</td>
+        <td>${escapeHtml(securityLabel)}</td>
         <td>
           <button class="btn-primary" onclick="editTeamUser(${u.id})"><i class="fa-solid fa-pen"></i></button>
           <button class="btn-danger" onclick="deleteTeamUser(${u.id})"><i class="fa-solid fa-trash"></i></button>
@@ -11050,6 +12048,19 @@ function getAudienceRows(options = {}){
     audienceRowsViewCacheKey = viewKey;
     audienceRowsViewCacheOutput = baseRows;
     return baseRows;
+  }
+  const exactMatchedRows = (!ignoreSearch && q)
+    ? getAudienceRowsByExactQuery(baseRows, q)
+    : null;
+  if(exactMatchedRows){
+    const out = exactMatchedRows.filter(row=>{
+      if(!ignoreColor && filterAudienceColor !== 'all' && getAudienceRowEffectiveColor(row) !== filterAudienceColor) return false;
+      return true;
+    });
+    audienceRowsViewCacheSource = baseRows;
+    audienceRowsViewCacheKey = viewKey;
+    audienceRowsViewCacheOutput = out;
+    return out;
   }
   const out = baseRows.filter(row=>{
     if(!ignoreColor && filterAudienceColor !== 'all' && getAudienceRowEffectiveColor(row) !== filterAudienceColor) return false;

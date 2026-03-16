@@ -18,8 +18,13 @@ Elle peut fonctionner en mode local/offline et conserver les donnees de travail.
 Au lancement, l'utilisateur arrive sur l'ecran de connexion.
 
 Compte par defaut:
-- Username: `manager`
+- Username: `walid`
 - Mot de passe: `1234`
+
+Important:
+- changer ce mot de passe apres la premiere connexion
+- ne pas partager le compte gestionnaire
+- l'application demandera automatiquement un nouveau mot de passe fort si le compte utilise encore un mot de passe de demarrage
 
 Apres connexion, l'utilisateur accede au menu principal a gauche.
 

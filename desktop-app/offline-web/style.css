@@ -2432,6 +2432,35 @@ tr.color-purple-light{border-left:6px solid #c2410c;background:#ffcda8}
   padding:16px 18px 20px;
 }
 
+.password-setup-card{
+  width:min(560px, 100%);
+}
+
+.password-setup-body{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.password-setup-lead{
+  margin:0;
+  color:#334155;
+  line-height:1.55;
+  font-weight:600;
+}
+
+.password-setup-error{
+  margin-top:0;
+  text-align:left;
+}
+
+.password-setup-actions{
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+}
+
 .details-grid{
   display:grid;
   grid-template-columns:repeat(2, minmax(0, 1fr));

@@ -407,6 +407,9 @@
             <div class="form-group">
               <label>Mot de passe</label>
               <input type="password" id="teamPassword" placeholder="mot de passe" />
+              <div class="diligence-empty" style="margin-top:8px;">
+                Minimum 10 caractères avec au moins une lettre et un chiffre. Laisser vide pour garder le mot de passe actuel.
+              </div>
             </div>
             <div class="form-group">
               <label>Rôle</label>
@@ -434,6 +437,7 @@
                 <th>Username</th>
                 <th>Rôle</th>
                 <th>Clients autorisés</th>
+                <th>Sécurité</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -786,6 +790,37 @@
         <div id="importProgressFill" class="import-progress-fill"></div>
       </div>
       <p id="importProgressPercent" class="import-progress-percent">0%</p>
+    </div>
+  </div>
+</div>
+
+<!-- PASSWORD SETUP MODAL -->
+<div id="passwordSetupModal" class="modal-backdrop" style="display:none;">
+  <div class="modal-card password-setup-card">
+    <div class="modal-head">
+      <h2><i class="fa-solid fa-key"></i> Sécuriser ce compte</h2>
+    </div>
+    <div class="modal-body password-setup-body">
+      <p class="password-setup-lead">
+        Ce compte utilise encore un mot de passe de démarrage. Définissez maintenant un mot de passe fort pour continuer.
+      </p>
+      <div class="form-group full">
+        <label for="passwordSetupInput">Nouveau mot de passe</label>
+        <input type="password" id="passwordSetupInput" placeholder="Minimum 10 caractères" />
+      </div>
+      <div class="form-group full">
+        <label for="passwordSetupConfirmInput">Confirmer le mot de passe</label>
+        <input type="password" id="passwordSetupConfirmInput" placeholder="Retaper le mot de passe" />
+      </div>
+      <div id="passwordSetupError" class="error-msg password-setup-error">Veuillez définir un mot de passe valide.</div>
+      <div class="password-setup-actions">
+        <button id="passwordSetupSaveBtn" class="btn-success" type="button">
+          <i class="fa-solid fa-shield-halved"></i> Mettre à jour
+        </button>
+        <button id="passwordSetupLogoutBtn" class="btn-danger" type="button">
+          <i class="fa-solid fa-right-from-bracket"></i> Se déconnecter
+        </button>
+      </div>
     </div>
   </div>
 </div>
