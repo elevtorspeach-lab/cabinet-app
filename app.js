@@ -242,6 +242,12 @@ let clientListSummaryCacheUserKey = '';
 let largeDatasetModeCacheValue = false;
 let largeDatasetModeCacheVersion = -1;
 let largeDatasetModeCacheUserKey = '';
+let ultraLargeDatasetModeCacheValue = false;
+let ultraLargeDatasetModeCacheVersion = -1;
+let ultraLargeDatasetModeCacheUserKey = '';
+let visibleDossierCountCacheValue = 0;
+let visibleDossierCountCacheVersion = -1;
+let visibleDossierCountCacheUserKey = '';
 let dashboardSnapshotCache = null;
 let dashboardSnapshotCacheVersion = -1;
 let dashboardSnapshotCacheUserKey = '';
@@ -339,6 +345,8 @@ const DOSSIER_HISTORY_FIELD_LABELS = {
   'procedureDetails.instruction': 'Instruction',
   'procedureDetails.declarationCreance': 'Declaration',
   'procedureDetails.syndicName': 'Nom du syndic',
+  'procedureDetails.huissier': 'Huissier',
+  'procedureDetails.notificationNo': 'Notification N°',
   'procedureDetails.dateNotification': 'Date notification',
   'procedureDetails.villeProcedure': 'Ville',
   'procedureDetails.certificatNonAppelStatus': 'Statut certificat non appel',
@@ -394,6 +402,10 @@ const AUDIENCE_VIRTUAL_ROW_HEIGHT = 56;
 const AUDIENCE_VIRTUAL_OVERSCAN = 10;
 const AUDIENCE_DEFAULT_SORT_MAX_ROWS = 60000;
 const STYLED_XLSX_MAX_ROWS = 12000;
+const LARGE_DATASET_VISIBLE_CLIENTS_THRESHOLD = 300;
+const LARGE_DATASET_DOSSIERS_THRESHOLD = 30000;
+const ULTRA_LARGE_DATASET_VISIBLE_CLIENTS_THRESHOLD = 450;
+const ULTRA_LARGE_DATASET_DOSSIERS_THRESHOLD = 50000;
 const SUIVI_VIRTUAL_MIN_ROWS = 40;
 const SUIVI_DEFAULT_SORT_MAX_ROWS = 60000;
 const SUIVI_HEAVY_SORT_MAX_CLIENTS = 500;
@@ -404,6 +416,8 @@ const SEARCH_CACHE_WARMUP_CHUNK_SIZE = 240;
 const LOCAL_STORAGE_CACHE_MAX_CLIENTS = 120;
 const LOCAL_STORAGE_CACHE_MAX_DOSSIERS = 12000;
 const LOCAL_STORAGE_CACHE_MAX_AUDIENCE_DRAFTS = 12000;
+const REMOTE_STATE_PAGED_LOAD_MIN_CLIENTS = 250;
+const REMOTE_STATE_PAGED_LOAD_MIN_DOSSIERS = 25000;
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location && window.location.protocol === 'file:';
 const LOCAL_ONLY_MODE = (() => {
   if(typeof window === 'undefined') return false;
@@ -431,6 +445,10 @@ const API_PROBE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 900 : 5000;
 const API_HEALTH_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1500 : 8000;
 const API_STATE_LOAD_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1800 : 25000;
 const API_STATE_SAVE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 30000 : 20000;
+const REMOTE_STATE_PAGED_LOAD_CLIENT_PAGE_SIZE = IS_REMOTE_WEB_HOST ? 25 : 40;
+const REMOTE_STATE_PAGED_LOAD_MAX_PAGES = 2000;
+const REMOTE_STATE_CHUNK_UPLOAD_MIN_LENGTH = IS_REMOTE_WEB_HOST ? 350000 : 1200000;
+const REMOTE_STATE_CHUNK_UPLOAD_SIZE = 250000;
 const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/vendor/libs/xlsx.full.min.js';
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
@@ -749,6 +767,22 @@ function makeDossierHistoryPendingKey(dossier, entry){
   return `${dossierId}::${source}::${field}::${procedure}`;
 }
 
+function findDossierOwnerByReference(dossierRef){
+  const target = dossierRef && typeof dossierRef === 'object' ? dossierRef : null;
+  if(!target) return null;
+  for(const client of (Array.isArray(AppState.clients) ? AppState.clients : [])){
+    const dossiers = Array.isArray(client?.dossiers) ? client.dossiers : [];
+    const dossierIndex = dossiers.indexOf(target);
+    if(dossierIndex === -1) continue;
+    return {
+      clientId: Number(client?.id),
+      dossierIndex,
+      dossier: target
+    };
+  }
+  return null;
+}
+
 function flushDossierHistoryPendingEntryByKey(key, options = {}){
   const pending = dossierHistoryPendingEntries.get(key);
   if(!pending) return false;
@@ -760,7 +794,14 @@ function flushDossierHistoryPendingEntryByKey(key, options = {}){
   dossierHistoryPendingEntries.delete(key);
   const changed = pushDossierHistoryEntry(pending.dossier, pending.entry);
   if(changed && options.persist){
-    queuePersistAppState();
+    const owner = findDossierOwnerByReference(pending.dossier);
+    if(owner && Number.isFinite(owner.clientId)){
+      persistDossierReferenceNow(owner.clientId, owner.dossier, { source: 'dossier-history' }).catch(()=>{
+        queuePersistAppState();
+      });
+    }else{
+      queuePersistAppState();
+    }
   }
   return changed;
 }
@@ -1279,13 +1320,53 @@ function getVisibleDeferredSectionKeys(){
   return Object.keys(DEFERRED_RENDER_SECTION_IDS).filter(key=>isDeferredRenderSectionVisible(key));
 }
 
+function getVisibleDossierCount(){
+  const userKey = getCurrentClientAccessCacheKey();
+  if(
+    visibleDossierCountCacheVersion === audienceRowsRawDataVersion
+    && visibleDossierCountCacheUserKey === userKey
+  ){
+    return visibleDossierCountCacheValue;
+  }
+  let dossierCount = 0;
+  const visibleClients = getVisibleClients();
+  for(const client of visibleClients){
+    dossierCount += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+  }
+  visibleDossierCountCacheValue = dossierCount;
+  visibleDossierCountCacheVersion = audienceRowsRawDataVersion;
+  visibleDossierCountCacheUserKey = userKey;
+  return dossierCount;
+}
+
+function isUltraLargeDatasetMode(){
+  const userKey = getCurrentClientAccessCacheKey();
+  if(
+    ultraLargeDatasetModeCacheVersion === audienceRowsRawDataVersion
+    && ultraLargeDatasetModeCacheUserKey === userKey
+  ){
+    return ultraLargeDatasetModeCacheValue;
+  }
+  const visibleClients = getVisibleClients();
+  const dossierCount = getVisibleDossierCount();
+  const ultraLarge = visibleClients.length >= ULTRA_LARGE_DATASET_VISIBLE_CLIENTS_THRESHOLD
+    || dossierCount >= ULTRA_LARGE_DATASET_DOSSIERS_THRESHOLD;
+  ultraLargeDatasetModeCacheValue = ultraLarge;
+  ultraLargeDatasetModeCacheVersion = audienceRowsRawDataVersion;
+  ultraLargeDatasetModeCacheUserKey = userKey;
+  return ultraLarge;
+}
+
 function isVeryLargeLiveSyncMode(){
-  return isLargeDatasetMode() && getVisibleClients().length >= 500;
+  return isUltraLargeDatasetMode() || (isLargeDatasetMode() && getVisibleClients().length >= 500);
 }
 
 function shouldPreferFastWorkbookPath(rowCount = 0){
   const totalRows = Math.max(0, Number(rowCount) || 0);
   if(totalRows > STYLED_XLSX_MAX_ROWS) return true;
+  if(isUltraLargeDatasetMode()){
+    return totalRows >= 40;
+  }
   if(!isLargeDatasetMode()) return false;
   if(isVeryLargeLiveSyncMode()){
     return totalRows >= 80;
@@ -2882,14 +2963,7 @@ async function ensureExcelLibraries({ needXlsx = true, needExcelJs = false, sile
 }
 
 function warmupExcelLibrariesOnIdle(){
-  const warmup = ()=>{
-    ensureExcelLibraries({ needXlsx: true, needExcelJs: true, silent: true }).catch(()=>{});
-  };
-  if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-    window.requestIdleCallback(warmup, { timeout: 2000 });
-    return;
-  }
-  setTimeout(warmup, 900);
+  // Keep startup lean: Excel libraries are loaded on demand when an import/export is triggered.
 }
 
 function clearScheduledWarmupTimer(timerId){
@@ -3037,6 +3111,9 @@ function scheduleBackgroundDataWarmup(delayMs = 1500){
 
 function queueLargeDatasetDashboardWarmup(delayMs = 120){
   if(typeof window === 'undefined' || !currentUser || !isLargeDatasetMode()) return;
+  const safeDelay = isUltraLargeDatasetMode()
+    ? Math.max(650, Math.max(0, Number(delayMs) || 0))
+    : Math.max(0, Number(delayMs) || 0);
   setTimeout(()=>{
     const run = ()=>{
       try{
@@ -3046,11 +3123,11 @@ function queueLargeDatasetDashboardWarmup(delayMs = 120){
       }
     };
     if(typeof window.requestIdleCallback === 'function'){
-      window.requestIdleCallback(run, { timeout: 1200 });
+      window.requestIdleCallback(run, { timeout: isUltraLargeDatasetMode() ? 3200 : 1200 });
       return;
     }
     run();
-  }, Math.max(0, Number(delayMs) || 0));
+  }, safeDelay);
 }
 
 function getCurrentSyncStatus(){
@@ -3459,17 +3536,9 @@ function isLargeDatasetMode(){
     return largeDatasetModeCacheValue;
   }
   const visibleClients = getVisibleClients();
-  let large = visibleClients.length >= 300;
-  if(!large){
-    let dossierCount = 0;
-    for(const client of visibleClients){
-      dossierCount += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
-      if(dossierCount >= 30000){
-        large = true;
-        break;
-      }
-    }
-  }
+  const dossierCount = getVisibleDossierCount();
+  const large = visibleClients.length >= LARGE_DATASET_VISIBLE_CLIENTS_THRESHOLD
+    || dossierCount >= LARGE_DATASET_DOSSIERS_THRESHOLD;
   largeDatasetModeCacheValue = large;
   largeDatasetModeCacheVersion = audienceRowsRawDataVersion;
   largeDatasetModeCacheUserKey = userKey;
@@ -3479,6 +3548,9 @@ function isLargeDatasetMode(){
 function getAdaptiveUiBatchDelay(baseDelay = 0, options = {}){
   const base = Math.max(0, Number(baseDelay) || 0);
   let delay = base;
+  if(isUltraLargeDatasetMode()){
+    delay = Math.max(delay, base + (Number(options.ultraLargeDatasetExtraMs) || 260));
+  }
   if(isLargeDatasetMode()){
     delay = Math.max(delay, base + (Number(options.largeDatasetExtraMs) || 140));
   }
@@ -3495,6 +3567,9 @@ function shouldDeferHeavySectionRender(rowCount = 0, options = {}){
   if(options?.immediate === true) return false;
   const totalRows = Math.max(0, Number(rowCount) || 0);
   if(totalRows <= 0) return false;
+  if(isUltraLargeDatasetMode()){
+    return totalRows >= 80;
+  }
   if(importInProgress || heavyUiOperationCount > 0){
     return totalRows >= 120;
   }
@@ -6742,6 +6817,22 @@ function buildAppStatePayload(){
   };
 }
 
+function buildRemoteStateVersionSignature(source){
+  const versionNum = Number(source?.version);
+  const updatedAt = String(source?.updatedAt || '').trim();
+  if(!(Number.isFinite(versionNum) && versionNum >= 0) || !updatedAt) return '';
+  return `remote:${versionNum}:${updatedAt}`;
+}
+
+function shouldUsePagedRemoteStateLoad(meta){
+  if(!meta || typeof meta !== 'object') return false;
+  if(String(meta?.recommendedMode || '').trim().toLowerCase() === 'paged') return true;
+  const clientCount = Number(meta?.clientCount);
+  if(Number.isFinite(clientCount) && clientCount >= REMOTE_STATE_PAGED_LOAD_MIN_CLIENTS) return true;
+  const dossierCount = Number(meta?.dossierCount);
+  return Number.isFinite(dossierCount) && dossierCount >= REMOTE_STATE_PAGED_LOAD_MIN_DOSSIERS;
+}
+
 function updateRemoteStateMetadata(source){
   const versionNum = Number(source?.version);
   remoteStateVersion = Number.isFinite(versionNum) && versionNum >= 0 ? versionNum : 0;
@@ -7755,29 +7846,25 @@ async function persistRemoteRequestNow(pathname, body){
   }
   setSyncStatus('syncing');
   try{
-    const res = await fetchWithTimeout(`${API_BASE}${pathname}`, {
-      method: 'POST',
-      headers: buildRemoteAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        ...body,
-        _sourceId: APP_INSTANCE_ID,
-        _baseVersion: remoteStateVersion
-      })
-    }, API_STATE_SAVE_TIMEOUT_MS);
-    if(res.status === 401){
-      handleUnauthorizedRemoteSession();
-      return false;
+    const payload = {
+      ...body,
+      _sourceId: APP_INSTANCE_ID,
+      _baseVersion: remoteStateVersion
+    };
+    const serializedPayload = JSON.stringify(payload);
+    let saveResult = null;
+    if(pathname === '/state' && serializedPayload.length >= REMOTE_STATE_CHUNK_UPLOAD_MIN_LENGTH){
+      saveResult = await persistChunkedRemoteStateNow(payload, serializedPayload);
+      if(!saveResult) return false;
+    }else{
+      const res = await fetchWithTimeout(`${API_BASE}${pathname}`, {
+        method: 'POST',
+        headers: buildRemoteAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: serializedPayload
+      }, API_STATE_SAVE_TIMEOUT_MS);
+      saveResult = await handlePersistRemoteResponse(res);
+      if(!saveResult) return false;
     }
-    if(res.status === 409){
-      const conflictPayload = await res.json().catch(()=>({}));
-      updateRemoteStateMetadata(conflictPayload);
-      remoteRefreshPending = true;
-      setSyncStatus('conflict', 'Conflit: serveur plus recent, rechargement...');
-      queueRemoteStateRefresh(REMOTE_SYNC_EVENT_DEBOUNCE_MS);
-      return false;
-    }
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const saveResult = await res.json().catch(()=>({}));
     updateRemoteStateMetadata(saveResult);
     markApiBaseHealthy(API_BASE);
     setSyncStatus('ok');
@@ -7787,6 +7874,58 @@ async function persistRemoteRequestNow(pathname, body){
     console.warn('Impossible de sauvegarder sur le serveur', err);
     return false;
   }
+}
+
+async function handlePersistRemoteResponse(res){
+  if(res.status === 401){
+    handleUnauthorizedRemoteSession();
+    return null;
+  }
+  if(res.status === 409){
+    const conflictPayload = await res.json().catch(()=>({}));
+    updateRemoteStateMetadata(conflictPayload);
+    remoteRefreshPending = true;
+    setSyncStatus('conflict', 'Conflit: serveur plus recent, rechargement...');
+    queueRemoteStateRefresh(REMOTE_SYNC_EVENT_DEBOUNCE_MS);
+    return null;
+  }
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json().catch(()=>({}));
+}
+
+function splitPayloadIntoUploadChunks(serializedPayload, chunkSize = REMOTE_STATE_CHUNK_UPLOAD_SIZE){
+  const raw = String(serializedPayload || '');
+  const safeChunkSize = Math.max(20000, Number(chunkSize) || REMOTE_STATE_CHUNK_UPLOAD_SIZE);
+  const chunks = [];
+  for(let start = 0; start < raw.length; start += safeChunkSize){
+    chunks.push(raw.slice(start, start + safeChunkSize));
+  }
+  return chunks.length ? chunks : ['{}'];
+}
+
+async function persistChunkedRemoteStateNow(payload, serializedPayload){
+  const chunks = splitPayloadIntoUploadChunks(serializedPayload);
+  const uploadId = `state-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  let finalResult = null;
+  for(let index = 0; index < chunks.length; index += 1){
+    const res = await fetchWithTimeout(`${API_BASE}/state/upload-chunk`, {
+      method: 'POST',
+      headers: buildRemoteAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        uploadId,
+        mode: 'replace',
+        index,
+        total: chunks.length,
+        chunk: chunks[index],
+        _sourceId: String(payload?._sourceId || '').trim(),
+        _baseVersion: payload?._baseVersion
+      })
+    }, API_STATE_SAVE_TIMEOUT_MS);
+    const result = await handlePersistRemoteResponse(res);
+    if(!result) return null;
+    finalResult = result;
+  }
+  return finalResult;
 }
 
 async function persistStateSliceNow(sliceKey, sliceValue, options = {}){
@@ -7912,21 +8051,232 @@ function queuePersistAppState(){
   }, 250);
 }
 
+async function fetchRemoteStateMetadata(){
+  const res = await fetchWithTimeout(`${API_BASE}/state/meta`, {
+    cache: 'no-store',
+    headers: buildRemoteAuthHeaders()
+  }, API_STATE_LOAD_TIMEOUT_MS);
+  if(res.status === 401){
+    handleUnauthorizedRemoteSession();
+    return null;
+  }
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchRemoteStateFromPagedExport(remoteMeta){
+  const nextState = {
+    clients: [],
+    salleAssignments: [],
+    users: [],
+    audienceDraft: {},
+    recycleBin: [],
+    recycleArchive: [],
+    importHistory: [],
+    version: Number(remoteMeta?.version) || 0,
+    updatedAt: String(remoteMeta?.updatedAt || '')
+  };
+  const pageLimit = Math.max(
+    10,
+    Number(remoteMeta?.recommendedClientPageSize) || REMOTE_STATE_PAGED_LOAD_CLIENT_PAGE_SIZE
+  );
+  let offset = 0;
+  let includeShared = true;
+  let pageCount = 0;
+
+  for(;;){
+    pageCount += 1;
+    if(pageCount > REMOTE_STATE_PAGED_LOAD_MAX_PAGES){
+      throw new Error('Chargement pagine du serveur interrompu: trop de pages.');
+    }
+    const res = await fetchWithTimeout(
+      `${API_BASE}/state/export-page?offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(pageLimit))}&includeShared=${includeShared ? '1' : '0'}`,
+      {
+        cache: 'no-store',
+        headers: buildRemoteAuthHeaders()
+      },
+      API_STATE_LOAD_TIMEOUT_MS
+    );
+    if(res.status === 401){
+      handleUnauthorizedRemoteSession();
+      return null;
+    }
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const parsed = await res.json();
+    markApiBaseHealthy(API_BASE);
+    updateRemoteStateMetadata(parsed);
+    if(includeShared && parsed?.sharedState && typeof parsed.sharedState === 'object'){
+      nextState.salleAssignments = Array.isArray(parsed.sharedState.salleAssignments) ? parsed.sharedState.salleAssignments : [];
+      nextState.users = Array.isArray(parsed.sharedState.users) ? parsed.sharedState.users : [];
+      nextState.audienceDraft = parsed.sharedState.audienceDraft && typeof parsed.sharedState.audienceDraft === 'object'
+        ? parsed.sharedState.audienceDraft
+        : {};
+      nextState.recycleBin = Array.isArray(parsed.sharedState.recycleBin) ? parsed.sharedState.recycleBin : [];
+      nextState.recycleArchive = Array.isArray(parsed.sharedState.recycleArchive) ? parsed.sharedState.recycleArchive : [];
+      nextState.importHistory = Array.isArray(parsed.sharedState.importHistory) ? parsed.sharedState.importHistory : [];
+    }
+    const pageClients = Array.isArray(parsed?.clients) ? parsed.clients : [];
+    if(pageClients.length){
+      nextState.clients.push(...pageClients);
+    }
+    nextState.version = Number(parsed?.version) || nextState.version;
+    nextState.updatedAt = String(parsed?.updatedAt || nextState.updatedAt || '');
+    if(!parsed?.hasMore) break;
+    const nextOffset = Number(parsed?.nextOffset);
+    if(!(Number.isFinite(nextOffset) && nextOffset > offset)){
+      throw new Error('Chargement pagine du serveur interrompu: curseur invalide.');
+    }
+    offset = nextOffset;
+    includeShared = false;
+  }
+
+  return nextState;
+}
+
+async function fetchRemoteStateChanges(sinceVersion){
+  const res = await fetchWithTimeout(
+    `${API_BASE}/state/changes?sinceVersion=${encodeURIComponent(String(sinceVersion))}`,
+    {
+      cache: 'no-store',
+      headers: buildRemoteAuthHeaders()
+    },
+    API_STATE_LOAD_TIMEOUT_MS
+  );
+  if(res.status === 401){
+    handleUnauthorizedRemoteSession();
+    return null;
+  }
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function mergeRemoteRefreshOptions(target, source){
+  const next = target && typeof target === 'object'
+    ? target
+    : { audience: false, sections: new Set(), secondarySections: new Set() };
+  const incoming = source && typeof source === 'object' ? source : null;
+  if(!incoming) return next;
+  if(incoming.audience === true) next.audience = true;
+  (Array.isArray(incoming.sections) ? incoming.sections : []).forEach((section)=>{
+    const safeSection = String(section || '').trim();
+    if(safeSection) next.sections.add(safeSection);
+  });
+  (Array.isArray(incoming.secondarySections) ? incoming.secondarySections : []).forEach((section)=>{
+    const safeSection = String(section || '').trim();
+    if(safeSection) next.secondarySections.add(safeSection);
+  });
+  return next;
+}
+
+async function applyRemoteStateChangesIncrementally(changePayload){
+  const changes = Array.isArray(changePayload?.changes) ? changePayload.changes : [];
+  if(!changes.length) return false;
+  const aggregatedOptions = { audience: false, sections: new Set(), secondarySections: new Set() };
+  for(const change of changes){
+    const patchKind = String(change?.patchKind || '').trim();
+    const patch = change?.patch && typeof change.patch === 'object' ? change.patch : null;
+    if(!patchKind || !patch) return false;
+    const appliedDossierPatch = patchKind === 'dossier'
+      ? applyRemoteDossierPatchLocally(patch)
+      : patchKind === 'dossier-batch'
+        ? applyRemoteDossierPatchBatchLocally(patch?.patches || [])
+        : null;
+    if(appliedDossierPatch){
+      mergeRemoteRefreshOptions(aggregatedOptions, buildRemoteDossierRefreshOptions(appliedDossierPatch));
+      continue;
+    }
+    if(applyRemoteSlicePatchLocally(patchKind, patch)){
+      mergeRemoteRefreshOptions(aggregatedOptions, getRemoteSliceRefreshOptions(patchKind));
+      continue;
+    }
+    return false;
+  }
+  updateRemoteStateMetadata(changePayload);
+  if(changePayload?.updatedAt) setLiveDelayMetricFromIso(changePayload.updatedAt);
+  finalizeRemoteStateUpdateLocally({
+    livePatch: true,
+    audience: aggregatedOptions.audience,
+    sections: [...aggregatedOptions.sections],
+    secondarySections: [...aggregatedOptions.secondarySections]
+  });
+  const remoteSignature = buildRemoteStateVersionSignature(changePayload);
+  if(remoteSignature){
+    lastPersistedStateSignature = remoteSignature;
+    lastLocalSnapshotSignature = remoteSignature;
+  }
+  queueDeferredLocalStateSnapshot(buildAppStatePayload(), {
+    source: 'server',
+    signature: remoteSignature
+  });
+  setSyncStatus('ok', 'Etat charge depuis serveur');
+  return true;
+}
+
+async function fetchRemoteStateSnapshot(remoteMeta = null){
+  if(shouldUsePagedRemoteStateLoad(remoteMeta)){
+    return fetchRemoteStateFromPagedExport(remoteMeta);
+  }
+  const res = await fetchWithTimeout(`${API_BASE}/state`, {
+    cache: 'no-store',
+    headers: buildRemoteAuthHeaders()
+  }, API_STATE_LOAD_TIMEOUT_MS);
+  if(res.status === 401){
+    handleUnauthorizedRemoteSession();
+    return null;
+  }
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 async function loadPersistedState(){
   let loaded = false;
   let changed = false;
   if(!LOCAL_ONLY_MODE && hasRemoteAuthSession()){
     try{
-      const res = await fetchWithTimeout(`${API_BASE}/state`, {
-        cache: 'no-store',
-        headers: buildRemoteAuthHeaders()
-      }, API_STATE_LOAD_TIMEOUT_MS);
-      if(res.status === 401){
-        handleUnauthorizedRemoteSession();
-      }else if(res.ok){
-        const parsed = await res.json();
+      let remoteMeta = null;
+      try{
+        remoteMeta = await fetchRemoteStateMetadata();
+      }catch(err){
+        console.warn('Metadata distante indisponible, fallback snapshot complet', err);
+      }
+      if(remoteMeta && typeof remoteMeta === 'object'){
         markApiBaseHealthy(API_BASE);
-        updateRemoteStateMetadata(parsed);
+        updateRemoteStateMetadata(remoteMeta);
+        const remoteSignature = buildRemoteStateVersionSignature(remoteMeta);
+        if(remoteSignature && remoteSignature === lastPersistedStateSignature){
+          loaded = true;
+          lastRemoteStateLoadVersion = remoteStateVersion;
+          lastRemoteStateLoadUpdatedAt = remoteStateUpdatedAt;
+          setSyncStatus('ok', 'Etat charge depuis serveur');
+          return false;
+        }
+        const targetVersion = Number(remoteMeta?.version);
+        const sourceVersion = Number(lastRemoteStateLoadVersion);
+        if(Number.isFinite(targetVersion) && targetVersion > 0 && Number.isFinite(sourceVersion) && sourceVersion > 0 && targetVersion > sourceVersion){
+          try{
+            const deltaPayload = await fetchRemoteStateChanges(sourceVersion);
+            if(
+              deltaPayload
+              && deltaPayload.snapshotRequired !== true
+              && Number(deltaPayload?.version) === targetVersion
+              && String(deltaPayload?.updatedAt || '') === String(remoteMeta?.updatedAt || '')
+            ){
+              const appliedIncrementally = await applyRemoteStateChangesIncrementally(deltaPayload);
+              if(appliedIncrementally){
+                loaded = true;
+                changed = true;
+                return true;
+              }
+            }
+          }catch(err){
+            console.warn('Delta distante indisponible, fallback snapshot', err);
+          }
+        }
+      }
+      const parsed = await fetchRemoteStateSnapshot(remoteMeta);
+      if(parsed && typeof parsed === 'object'){
+        markApiBaseHealthy(API_BASE);
+        if(!remoteMeta) updateRemoteStateMetadata(parsed);
         const normalizedState = normalizePersistedStateSource(parsed);
         if(normalizedState.signature && normalizedState.signature === lastPersistedStateSignature){
           loaded = true;
@@ -10124,7 +10474,6 @@ async function initApplication(){
     'recycle',
     'clientDropdown'
   );
-  warmupExcelLibrariesOnIdle();
   showView('dashboard', { warmup: false });
   if(localBootstrapSetupRequired){
     setTimeout(()=>{
@@ -11959,49 +12308,303 @@ function downloadDossierFile(clientId, index, fileIndex){
   downloadStoredFile(file);
 }
 
-function downloadDossierSummary(clientId, index){
+function formatDossierExcelCellValue(value, fallback = '-'){
+  if(value === null || value === undefined) return fallback;
+  if(typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  if(typeof value === 'boolean') return value ? 'Oui' : 'Non';
+  const text = String(value).trim();
+  return text || fallback;
+}
+
+function buildDossierProcedureExportSections(dossier){
+  const procedures = normalizeProcedures(dossier);
+  const detailsByProcedure = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+    ? dossier.procedureDetails
+    : {};
+  const sections = [];
+
+  procedures.forEach((procedureName)=>{
+    const label = String(procedureName || '').trim();
+    if(!label) return;
+    const details = detailsByProcedure[label] && typeof detailsByProcedure[label] === 'object'
+      ? detailsByProcedure[label]
+      : {};
+    const entries = Object.entries(details)
+      .filter(([field, value])=>{
+        if(String(field || '').startsWith('_')) return false;
+        if(value === null || value === undefined) return false;
+        const text = String(value).trim();
+        return text !== '';
+      });
+
+    sections.push({
+      procedure: label,
+      rows: entries.map(([field, value])=>[
+        getHistoryFieldLabel(`procedureDetails.${field}`),
+        formatDossierExcelCellValue(value)
+      ])
+    });
+  });
+
+  return sections;
+}
+
+function getDossierProcedureExcelAccentColor(procedureName){
+  const procClass = getProcedureColorClass(procedureName);
+  if(procClass === 'proc-ass') return 'FF1A4590';
+  if(procClass === 'proc-restitution') return 'FFD97706';
+  if(procClass === 'proc-nantissement') return 'FF6D28D9';
+  if(procClass === 'proc-redressement') return 'FF0F9D58';
+  if(procClass === 'proc-verification-creance') return 'FF0F766E';
+  if(procClass === 'proc-declaration-creance') return 'FFDB2777';
+  if(procClass === 'proc-sfdc') return 'FF2563EB';
+  if(procClass === 'proc-sbien') return 'FF7C3AED';
+  if(procClass === 'proc-injonction') return 'FFEA580C';
+  return 'FF1A4590';
+}
+
+function buildDossierSummarySections(client, dossier){
+  return [
+    {
+      title: 'Informations generales',
+      rows: [
+        ['Client', formatDossierExcelCellValue(client?.name)],
+        ['Debiteur', formatDossierExcelCellValue(dossier?.debiteur)],
+        ['Boite N°', formatDossierExcelCellValue(dossier?.boiteNo)],
+        ['Reference Client', formatDossierExcelCellValue(dossier?.referenceClient)],
+        ['Date d’affectation', formatDossierExcelCellValue(dossier?.dateAffectation)],
+        ['Procedure', formatDossierExcelCellValue(normalizeProcedures(dossier).join(', ') || dossier?.procedure)],
+        ['Montant', formatDossierExcelCellValue(dossier?.montant)],
+        ['Ville', formatDossierExcelCellValue(dossier?.ville)],
+        ['Adresse', formatDossierExcelCellValue(dossier?.adresse)],
+        ['WW', formatDossierExcelCellValue(dossier?.ww)],
+        ['Marque', formatDossierExcelCellValue(dossier?.marque)],
+        ['Type', formatDossierExcelCellValue(dossier?.type)]
+      ]
+    },
+    {
+      title: 'Caution',
+      rows: [
+        ['Caution', formatDossierExcelCellValue(dossier?.caution)],
+        ['Adresse de caution', formatDossierExcelCellValue(dossier?.cautionAdresse)],
+        ['Ville de caution', formatDossierExcelCellValue(dossier?.cautionVille)],
+        ['CIN de caution', formatDossierExcelCellValue(dossier?.cautionCin)],
+        ['RC', formatDossierExcelCellValue(dossier?.cautionRc)]
+      ]
+    },
+    {
+      title: 'Suivi',
+      rows: [
+        ['Statut', formatDossierExcelCellValue(dossier?.statut || 'En cours')],
+        ['Avancement', formatDossierExcelCellValue(dossier?.avancement)],
+        ['Note', formatDossierExcelCellValue(dossier?.note)]
+      ]
+    }
+  ];
+}
+
+function buildDossierDocumentExportRows(files){
+  if(!files.length){
+    return [['#', 'Nom', 'Taille (KB)'], [1, 'Aucun document', '-']];
+  }
+  return [
+    ['#', 'Nom', 'Taille (KB)'],
+    ...files.map((file, fileIndex)=>[
+      fileIndex + 1,
+      formatDossierExcelCellValue(file?.name, 'Sans nom'),
+      Math.round(Number(file?.size || 0) / 1024)
+    ])
+  ];
+}
+
+function appendDossierSectionToWorksheet(sheet, startRow, section, options = {}){
+  const title = String(section?.title || '').trim() || 'Section';
+  const rows = Array.isArray(section?.rows) ? section.rows : [];
+  const accentColor = String(options.accentColor || 'FF1A4590');
+  const sectionRow = sheet.getRow(startRow);
+  sheet.mergeCells(`A${startRow}:B${startRow}`);
+  sectionRow.getCell(1).value = title;
+  sectionRow.height = 24;
+  sectionRow.getCell(1).font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+  sectionRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: accentColor } };
+  sectionRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+
+  rows.forEach((cells, index)=>{
+    const rowNumber = startRow + index + 1;
+    const row = sheet.getRow(rowNumber);
+    row.height = 22;
+    row.getCell(1).value = cells[0];
+    row.getCell(2).value = cells[1];
+  });
+  return startRow + rows.length + 2;
+}
+
+function applyDossierWorksheetStyles(sheet, columnCount){
+  const border = {
+    top: { style: 'thin', color: { argb: 'FFD7DDEA' } },
+    left: { style: 'thin', color: { argb: 'FFD7DDEA' } },
+    bottom: { style: 'thin', color: { argb: 'FFD7DDEA' } },
+    right: { style: 'thin', color: { argb: 'FFD7DDEA' } }
+  };
+  for(let rowIndex = 1; rowIndex <= sheet.rowCount; rowIndex++){
+    const row = sheet.getRow(rowIndex);
+    for(let colIndex = 1; colIndex <= columnCount; colIndex++){
+      const cell = row.getCell(colIndex);
+      if(rowIndex <= 2 && colIndex > 1) continue;
+      const hasExplicitFill = !!(cell.fill && Object.keys(cell.fill).length);
+      const hasExplicitFont = !!(cell.font && Object.keys(cell.font).length);
+      if(rowIndex >= 4 && cell.value !== null && cell.value !== undefined && cell.value !== ''){
+        cell.border = border;
+      }
+      if(rowIndex >= 4){
+        cell.alignment = { horizontal: colIndex === 1 ? 'left' : 'left', vertical: 'middle', wrapText: true };
+        if(!hasExplicitFont && colIndex === 1){
+          cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF334155' } };
+        }else if(!hasExplicitFont){
+          cell.font = { name: 'Arial', size: 11, color: { argb: 'FF0F172A' } };
+        }
+        if(!hasExplicitFill && colIndex === 1){
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        }
+      }
+    }
+  }
+}
+
+async function createStyledDossierWorkbookBlob({ client, dossier, files, procedureSections, summarySections }){
+  const workbook = new ExcelJS.Workbook();
+  const title = 'CABINET ARAQUI HOUSSAINI';
+  const dossierRef = formatDossierExcelCellValue(dossier?.referenceClient || dossier?.debiteur || `Dossier ${client?.id || ''}`, 'Dossier');
+
+  const summarySheet = workbook.addWorksheet('Fiche dossier');
+  summarySheet.columns = [{ width: 28 }, { width: 54 }];
+  summarySheet.mergeCells('A1:B1');
+  summarySheet.mergeCells('A2:B2');
+  summarySheet.getCell('A1').value = title;
+  summarySheet.getCell('A2').value = `Fiche dossier - ${dossierRef}`;
+  summarySheet.getCell('A1').font = { name: 'Arial', size: 20, bold: true, color: { argb: 'FF1F3B8F' } };
+  summarySheet.getCell('A2').font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FF475569' } };
+  summarySheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+  summarySheet.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+  summarySheet.getRow(1).height = 30;
+  summarySheet.getRow(2).height = 22;
+
+  let currentRow = 4;
+  summarySections.forEach((section, index)=>{
+    currentRow = appendDossierSectionToWorksheet(summarySheet, currentRow, section, {
+      accentColor: index === 0 ? 'FF1A4590' : index === 1 ? 'FF0F766E' : 'FF2563EB'
+    });
+  });
+  summarySheet.views = [{ state: 'frozen', ySplit: 3 }];
+  applyDossierWorksheetStyles(summarySheet, 2);
+
+  const proceduresSheet = workbook.addWorksheet('Procedures');
+  proceduresSheet.columns = [{ width: 30 }, { width: 46 }];
+  proceduresSheet.mergeCells('A1:B1');
+  proceduresSheet.mergeCells('A2:B2');
+  proceduresSheet.getCell('A1').value = title;
+  proceduresSheet.getCell('A2').value = `Informations des procedures - ${dossierRef}`;
+  proceduresSheet.getCell('A1').font = { name: 'Arial', size: 20, bold: true, color: { argb: 'FF1F3B8F' } };
+  proceduresSheet.getCell('A2').font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FF475569' } };
+  proceduresSheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+  proceduresSheet.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+  proceduresSheet.getRow(1).height = 30;
+  proceduresSheet.getRow(2).height = 22;
+
+  let procedureRow = 4;
+  if(procedureSections.length){
+    procedureSections.forEach((section)=>{
+      procedureRow = appendDossierSectionToWorksheet(proceduresSheet, procedureRow, {
+        title: section.procedure,
+        rows: section.rows.length ? section.rows : [['Information', 'Aucune information de procédure']]
+      }, {
+        accentColor: getDossierProcedureExcelAccentColor(section.procedure)
+      });
+    });
+  }else{
+    procedureRow = appendDossierSectionToWorksheet(proceduresSheet, procedureRow, {
+      title: 'Procedures',
+      rows: [['Information', 'Aucune procédure enregistrée']]
+    }, {
+      accentColor: 'FF64748B'
+    });
+  }
+  proceduresSheet.views = [{ state: 'frozen', ySplit: 3 }];
+  applyDossierWorksheetStyles(proceduresSheet, 2);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob(
+    [buffer],
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+  );
+}
+
+async function downloadDossierSummary(clientId, index){
   const data = getDossierByIds(clientId, index);
   if(!data) return;
   const { client, dossier } = data;
-  const files = Array.isArray(dossier.files) ? dossier.files : [];
-  const lines = [
-    `Client: ${client.name || '-'}`,
-    `Debiteur: ${dossier.debiteur || '-'}`,
-    `Boite N°: ${dossier.boiteNo || '-'}`,
-    `Reference Client: ${dossier.referenceClient || '-'}`,
-    `Date affectation: ${dossier.dateAffectation || '-'}`,
-    `Procedure: ${dossier.procedure || '-'}`,
-    `Montant: ${dossier.montant || '-'}`,
-    `Ville: ${dossier.ville || '-'}`,
-    `Adresse: ${dossier.adresse || '-'}`,
-    `WW: ${dossier.ww || '-'}`,
-    `Marque: ${dossier.marque || '-'}`,
-    `Type: ${dossier.type || '-'}`,
-    `Caution: ${dossier.caution || '-'}`,
-    `Adresse de caution: ${dossier.cautionAdresse || '-'}`,
-    `Ville de caution: ${dossier.cautionVille || '-'}`,
-    `CIN de caution: ${dossier.cautionCin || '-'}`,
-    `RC: ${dossier.cautionRc || '-'}`,
-    `Statut: ${dossier.statut || 'En cours'}`,
-    `Avancement: ${dossier.avancement || '-'}`,
-    `Note: ${dossier.note || '-'}`,
-    '',
-    'Documents:'
-  ];
-  files.forEach((f, i)=>{
-    lines.push(`${i + 1}. ${f?.name || 'Sans nom'} (${Math.round(Number(f?.size || 0) / 1024)} KB)`);
-  });
-  if(!files.length) lines.push('Aucun document');
+  const directExportHandlePromise = primeDirectExportDirectoryAccess();
+  const richExcelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: true, silent: true });
+  if(!richExcelReady){
+    const basicExcelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: false });
+    if(!basicExcelReady) return;
+  }
+  const canUseStyledWorkbook = typeof ExcelJS !== 'undefined';
+  if(typeof XLSX === 'undefined' && !canUseStyledWorkbook){
+    return;
+  }
+  const procedureSections = buildDossierProcedureExportSections(dossier);
+  const summarySections = buildDossierSummarySections(client, dossier);
+  let blob = null;
 
-  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `dossier_${client.id}_${index + 1}.txt`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  if(canUseStyledWorkbook){
+    blob = await createStyledDossierWorkbookBlob({
+      client,
+      dossier,
+      procedureSections,
+      summarySections
+    });
+  }else{
+    const summaryAoA = [['CABINET ARAQUI HOUSSAINI'], [`Fiche dossier - ${formatDossierExcelCellValue(dossier.referenceClient || dossier.debiteur, 'Dossier')}`], []];
+    summarySections.forEach((section)=>{
+      summaryAoA.push([section.title, '']);
+      section.rows.forEach((row)=>summaryAoA.push(row));
+      summaryAoA.push([]);
+    });
+
+    const proceduresAoA = [['CABINET ARAQUI HOUSSAINI'], ['Informations des procedures'], []];
+    if(procedureSections.length){
+      procedureSections.forEach((section)=>{
+        proceduresAoA.push([section.procedure, '']);
+        proceduresAoA.push(['Champ', 'Valeur']);
+        if(section.rows.length){
+          section.rows.forEach((row)=>proceduresAoA.push(row));
+        }else{
+          proceduresAoA.push(['Information', 'Aucune information de procédure']);
+        }
+        proceduresAoA.push([]);
+      });
+    }else{
+      proceduresAoA.push(['Procedures', '']);
+      proceduresAoA.push(['Information', 'Aucune procédure enregistrée']);
+    }
+
+    const wb = XLSX.utils.book_new();
+    const dossierSheet = XLSX.utils.aoa_to_sheet(summaryAoA);
+    dossierSheet['!cols'] = [{ wch: 28 }, { wch: 54 }];
+    XLSX.utils.book_append_sheet(wb, dossierSheet, 'Fiche dossier');
+
+    const proceduresSheet = XLSX.utils.aoa_to_sheet(proceduresAoA);
+    proceduresSheet['!cols'] = [{ wch: 30 }, { wch: 46 }];
+    XLSX.utils.book_append_sheet(wb, proceduresSheet, 'Procedures');
+    blob = createXlsxBlobFromWorkbook(wb);
+  }
+
+  const filename = `fiche_dossier_${client.id}_${index + 1}.xlsx`;
+  await saveBlobDirectOrDownload(blob, filename, {
+    preferredHandle: await directExportHandlePromise,
+    openAfterExport: true
+  });
 }
 
 // ================== DILIGENCE ==================
@@ -12141,8 +12744,22 @@ function setAllFilteredDiligenceRowsForPrint(checked){
   renderDiligence();
 }
 
+function getDiligenceProcedureFilterValue(procedure){
+  return getProcedureBaseName(String(procedure || '').trim());
+}
+
+function isDiligenceAssProcedure(procedure){
+  return getDiligenceProcedureFilterValue(procedure) === 'ASS';
+}
+
+function matchesDiligenceProcedureFilter(procedure, filterValue){
+  const activeFilter = String(filterValue || 'all').trim() || 'all';
+  if(activeFilter === 'all') return true;
+  return getDiligenceProcedureFilterValue(procedure) === getDiligenceProcedureFilterValue(activeFilter);
+}
+
 function isDiligenceExecutionProcedure(procedure){
-  const proc = String(procedure || '').trim();
+  const proc = getDiligenceProcedureFilterValue(procedure);
   return proc === 'SFDC' || proc === 'S/bien' || proc === 'Injonction';
 }
 
@@ -12171,12 +12788,13 @@ function getDiligenceRows(){
     c.dossiers.forEach((d, di)=>{
       const procedures = normalizeProcedures(d);
       procedures.forEach(proc=>{
-        if(proc !== 'ASS' && proc !== 'SFDC' && proc !== 'S/bien' && proc !== 'Injonction') return;
+        const baseProc = getDiligenceProcedureFilterValue(proc);
+        if(baseProc !== 'ASS' && baseProc !== 'SFDC' && baseProc !== 'S/bien' && baseProc !== 'Injonction') return;
         const details = d?.procedureDetails?.[proc] || {};
-        if(proc === 'ASS' && !isDiligenceAssAudienceDue(details)) return;
+        if(baseProc === 'ASS' && !isDiligenceAssAudienceDue(details)) return;
         const tribunal = String(details.tribunal || '').trim();
         const rawSort = String(details.sort || '').trim();
-        const sort = isDiligenceExecutionProcedure(proc)
+        const sort = isDiligenceExecutionProcedure(baseProc)
           ? normalizeDiligenceSort(rawSort)
           : rawSort;
         const delegation = normalizeDiligenceAttOk(details.attDelegationOuDelegat || '') || 'att';
@@ -12190,6 +12808,7 @@ function getDiligenceRows(){
           clientName: c.name || '',
           dossier: d,
           procedure: proc,
+          procedureFilterValue: baseProc,
           details,
           sort,
           delegation,
@@ -12216,7 +12835,8 @@ function syncDiligenceProcedureFilter(rows){
   }
   const set = new Set();
   rows.forEach(r=>{
-    if(r.procedure) set.add(String(r.procedure));
+    const procedureValue = getDiligenceProcedureFilterValue(r.procedure);
+    if(procedureValue) set.add(procedureValue);
   });
   const sorted = [...set].sort((a,b)=>a.localeCompare(b, 'fr'));
   select.innerHTML = `<option value="all">Toutes</option>${sorted.map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}`;
@@ -12373,6 +12993,21 @@ function normalizeDiligenceSort(value){
   return 'Att PV';
 }
 
+function normalizeDiligenceNotificationSort(value){
+  const raw = String(value ?? '').trim().toLowerCase();
+  if(!raw) return '';
+  if(raw === 'nb') return 'NB';
+  if(raw.includes('notif')) return 'notifier';
+  return String(value ?? '').trim();
+}
+
+function getDiligenceNotificationSortValue(value, procedure = ''){
+  const normalized = normalizeDiligenceNotificationSort(value);
+  if(normalized) return normalized;
+  if(isDiligenceAssProcedure(procedure)) return 'notifier';
+  return '';
+}
+
 function normalizeDiligenceSearchQuery(value){
   return normalizeLooseText(String(value || '').trim()).toLowerCase();
 }
@@ -12516,6 +13151,30 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
       </select>
     `;
   }
+  if(field === 'notificationSort'){
+    const status = getDiligenceNotificationSortValue(normalized, row?.procedure);
+    const isAssProcedure = isDiligenceAssProcedure(row?.procedure);
+    if(!row?.canEdit){
+      return escapeHtml(status || '-');
+    }
+    if(!isAssProcedure){
+      return `
+      <input
+        type="text"
+        class="diligence-inline-input"
+        value="${escapeAttr(value || '')}"
+        oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+    `;
+    }
+    return `
+      <select
+        class="diligence-inline-select"
+        onchange="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="notifier" ${status === 'notifier' ? 'selected' : ''}>notifier</option>
+        <option value="NB" ${status === 'NB' ? 'selected' : ''}>NB</option>
+      </select>
+    `;
+  }
   if(field === 'dateNotification'){
     if(!row?.canEdit){
       return escapeHtml(normalized || '-');
@@ -12590,6 +13249,8 @@ function applyDiligenceFieldValue(clientId, dossierIndex, procKey, field, value)
     nextValue = isDiligenceExecutionProcedure(proc)
       ? normalizeDiligenceSort(value)
       : String(value ?? '').trim();
+  }else if(field === 'notificationSort'){
+    nextValue = normalizeDiligenceNotificationSort(value);
   }
   if(field === 'ville'){
     dossier.ville = nextValue;
@@ -12719,7 +13380,7 @@ function getFilteredDiligenceRows(allRows){
     return diligenceFilteredRowsCacheOutput;
   }
   const filteredRows = allRows.filter(row=>{
-    if(filterDiligenceProcedure !== 'all' && row.procedure !== filterDiligenceProcedure) return false;
+    if(!matchesDiligenceProcedureFilter(row.procedure, filterDiligenceProcedure)) return false;
     if(filterDiligenceSort !== 'all' && row.sort !== filterDiligenceSort) return false;
     if(filterDiligenceDelegation !== 'all' && row.delegation !== filterDiligenceDelegation) return false;
     if(
@@ -12812,7 +13473,7 @@ function getDiligenceExportColumnDefinitions(){
       header: 'Sort',
       width: 24,
       assOnly: true,
-      getValue: (row)=>String(row?.procedure || '').trim() === 'ASS' ? (row?.details?.sort || '') : ''
+      getValue: (row)=>isDiligenceAssProcedure(row?.procedure) ? (row?.details?.sort || '') : ''
     },
     {
       key: 'ordonnance',
@@ -12830,7 +13491,7 @@ function getDiligenceExportColumnDefinitions(){
       key: 'notificationSort',
       header: 'Sort notification',
       width: 24,
-      getValue: (row)=>row?.details?.notificationSort || ''
+      getValue: (row)=>getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure)
     },
     {
       key: 'certificatNonAppel',
@@ -12866,7 +13527,7 @@ function getDiligenceExportColumnDefinitions(){
       key: 'sortExecution',
       header: 'Sort exécution',
       width: 22,
-      getValue: (row)=>String(row?.procedure || '').trim() !== 'ASS' ? normalizeDiligenceSort(row?.details?.sort || '') : ''
+      getValue: (row)=>!isDiligenceAssProcedure(row?.procedure) ? normalizeDiligenceSort(row?.details?.sort || '') : ''
     },
     {
       key: 'tribunal',
@@ -12878,9 +13539,9 @@ function getDiligenceExportColumnDefinitions(){
 }
 
 function shouldShowDiligenceAssColumnsForRows(rows){
-  if(String(filterDiligenceProcedure || '').trim() === 'ASS') return true;
+  if(isDiligenceAssProcedure(filterDiligenceProcedure)) return true;
   const sourceRows = Array.isArray(rows) ? rows : [];
-  return !!sourceRows.length && sourceRows.every((row)=>String(row?.procedure || '').trim() === 'ASS');
+  return !!sourceRows.length && sourceRows.every((row)=>isDiligenceAssProcedure(row?.procedure));
 }
 
 function finalizeDiligenceExportDataset(rows){
@@ -12912,14 +13573,15 @@ function buildDiligenceSelectedExportDatasetBase(){
   syncDiligenceDelegationFilter(allRows);
   syncDiligenceOrdonnanceFilter(allRows);
   syncDiligenceTribunalFilter(allRows);
+  const filteredRows = getFilteredDiligenceRows(allRows);
   const rows = (
-    allRows === diligenceSelectedExportRowsCacheInput
+    filteredRows === diligenceSelectedExportRowsCacheInput
     && diligenceSelectedExportRowsCacheVersion === diligencePrintSelectionVersion
   )
     ? diligenceSelectedExportRowsCacheOutput
-    : allRows.filter(row=>isDiligenceSelectedForPrint(row));
+    : filteredRows.filter(row=>isDiligenceSelectedForPrint(row));
   if(rows !== diligenceSelectedExportRowsCacheOutput){
-    diligenceSelectedExportRowsCacheInput = allRows;
+    diligenceSelectedExportRowsCacheInput = filteredRows;
     diligenceSelectedExportRowsCacheVersion = diligencePrintSelectionVersion;
     diligenceSelectedExportRowsCacheOutput = rows;
   }

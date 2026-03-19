@@ -5,6 +5,7 @@ const fsp = require('fs/promises');
 const http = require('http');
 const https = require('https');
 const path = require('path');
+const zlib = require('zlib');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -27,6 +28,13 @@ const SERVER_BACKUP_RETENTION_COUNT = 20;
 const SERVER_BACKUP_MIN_INTERVAL_MS = 3 * 60 * 1000;
 const SERVER_SNAPSHOT_FLUSH_DELAY_MS = 250;
 const SERVER_SNAPSHOT_FLUSH_MAX_PENDING = 40;
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = 120000;
+const SERVER_HEADERS_TIMEOUT_MS = 125000;
+const SERVER_REQUEST_TIMEOUT_MS = 0;
+const STATE_EXPORT_PAGE_CLIENT_LIMIT_DEFAULT = 40;
+const STATE_EXPORT_PAGE_CLIENT_LIMIT_MAX = 120;
+const STATE_EXPORT_PAGED_CLIENT_THRESHOLD = 250;
+const STATE_EXPORT_PAGED_DOSSIER_THRESHOLD = 25000;
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://127.0.0.1:3000',
   'http://localhost:3000',
@@ -49,6 +57,10 @@ const DEFAULT_STATE = {
 let cachedState = null;
 let cachedStateSerialized = '';
 let cachedStateSerializedVersion = -1;
+let cachedStateGzip = null;
+let cachedStateGzipVersion = -1;
+let cachedStateExportStats = null;
+let cachedStateExportStatsVersion = -1;
 let lastBackupSignature = '';
 let lastBackupAt = 0;
 const sseClients = new Set();
@@ -306,16 +318,11 @@ async function readState() {
     const parsed = hydrateStoredState(JSON.parse(raw));
     setCachedState(parsed);
     try {
-      const journalRaw = await fsp.readFile(STATE_JOURNAL_FILE, 'utf8');
-      if (journalRaw.trim()) {
-        const journalEntries = journalRaw
-          .split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => JSON.parse(line));
+      const journalEntries = await readJournalEntries();
+      if (journalEntries.length) {
         let replayedState = cachedState;
         journalEntries.forEach((entry) => {
-          replayedState = applyMutationToState(replayedState, entry);
+          replayedState = applyMutationToState(replayedState, extractJournalMutation(entry));
         });
         setCachedState(replayedState);
       }
@@ -346,6 +353,10 @@ function setCachedState(state) {
   cachedState = state;
   cachedStateSerialized = '';
   cachedStateSerializedVersion = -1;
+  cachedStateGzip = null;
+  cachedStateGzipVersion = -1;
+  cachedStateExportStats = null;
+  cachedStateExportStatsVersion = -1;
 }
 
 function getSerializedState(state) {
@@ -364,6 +375,166 @@ function getSerializedState(state) {
     cachedStateSerializedVersion = version;
   }
   return serialized;
+}
+
+function getGzipSerializedState(state) {
+  const version = Number(state?.version);
+  if (
+    cachedStateGzip
+    && cachedStateGzipVersion >= 0
+    && Number.isFinite(version)
+    && cachedStateGzipVersion === version
+  ) {
+    return cachedStateGzip;
+  }
+  const gzipped = zlib.gzipSync(getSerializedState(state));
+  if (Number.isFinite(version) && version >= 0) {
+    cachedStateGzip = gzipped;
+    cachedStateGzipVersion = version;
+  }
+  return gzipped;
+}
+
+function clampPositiveInteger(value, fallback, max = Number.POSITIVE_INFINITY) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.max(0, Math.min(max, Math.floor(parsed)));
+}
+
+function extractJournalMutation(entry) {
+  if (entry?.mutation && typeof entry.mutation === 'object') return entry.mutation;
+  if (entry && typeof entry === 'object' && typeof entry.type === 'string') return entry;
+  return null;
+}
+
+function normalizeJournalEntry(entry) {
+  const mutation = extractJournalMutation(entry);
+  if (!mutation) return null;
+  const version = Number(entry?.version);
+  const updatedAt = String(entry?.updatedAt || '').trim();
+  const patchKind = String(entry?.patchKind || '').trim();
+  return {
+    version: Number.isFinite(version) && version > 0 ? version : null,
+    updatedAt,
+    patchKind,
+    patch: entry?.patch && typeof entry.patch === 'object' ? entry.patch : null,
+    mutation
+  };
+}
+
+async function readJournalEntries() {
+  try {
+    const journalRaw = await fsp.readFile(STATE_JOURNAL_FILE, 'utf8');
+    if (!journalRaw.trim()) return [];
+    return journalRaw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function countClientDossiers(client) {
+  return Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+}
+
+function getStateExportStats(state) {
+  const version = Number(state?.version);
+  if (
+    cachedStateExportStats
+    && cachedStateExportStatsVersion >= 0
+    && Number.isFinite(version)
+    && cachedStateExportStatsVersion === version
+  ) {
+    return cachedStateExportStats;
+  }
+  const clients = Array.isArray(state?.clients) ? state.clients : [];
+  let dossierCount = 0;
+  clients.forEach((client) => {
+    dossierCount += countClientDossiers(client);
+  });
+  const averageDossiersPerClient = clients.length > 0 ? dossierCount / clients.length : 0;
+  const targetDossiersPerPage = dossierCount >= 60000 ? 10000 : 8000;
+  const recommendedClientPageSize = averageDossiersPerClient > 0
+    ? Math.max(
+      STATE_EXPORT_PAGE_CLIENT_LIMIT_DEFAULT,
+      Math.min(
+        STATE_EXPORT_PAGE_CLIENT_LIMIT_MAX,
+        Math.round(targetDossiersPerPage / averageDossiersPerClient)
+      )
+    )
+    : STATE_EXPORT_PAGE_CLIENT_LIMIT_DEFAULT;
+  const stats = {
+    clientCount: clients.length,
+    dossierCount,
+    recommendedMode: clients.length >= STATE_EXPORT_PAGED_CLIENT_THRESHOLD || dossierCount >= STATE_EXPORT_PAGED_DOSSIER_THRESHOLD
+      ? 'paged'
+      : 'full',
+    recommendedClientPageSize
+  };
+  if (Number.isFinite(version) && version >= 0) {
+    cachedStateExportStats = stats;
+    cachedStateExportStatsVersion = version;
+  }
+  return stats;
+}
+
+function buildStateExportMetadata(state) {
+  const stats = getStateExportStats(state);
+  return {
+    version: Number(state?.version) || 0,
+    updatedAt: String(state?.updatedAt || new Date().toISOString()),
+    clientCount: stats.clientCount,
+    dossierCount: stats.dossierCount,
+    recommendedMode: stats.recommendedMode,
+    recommendedClientPageSize: stats.recommendedClientPageSize
+  };
+}
+
+function buildPagedStateExport(state, options = {}) {
+  const clients = Array.isArray(state?.clients) ? state.clients : [];
+  const offset = clampPositiveInteger(options.offset, 0);
+  const limit = Math.max(
+    1,
+    clampPositiveInteger(
+      options.limit,
+      STATE_EXPORT_PAGE_CLIENT_LIMIT_DEFAULT,
+      STATE_EXPORT_PAGE_CLIENT_LIMIT_MAX
+    )
+  );
+  const includeSharedState = options.includeSharedState !== false;
+  const pageClients = clients.slice(offset, offset + limit);
+  const nextOffset = offset + pageClients.length;
+  return {
+    ...buildStateExportMetadata(state),
+    mode: 'paged',
+    offset,
+    limit,
+    returnedClientCount: pageClients.length,
+    hasMore: nextOffset < clients.length,
+    nextOffset: nextOffset < clients.length ? nextOffset : null,
+    clients: pageClients,
+    sharedState: includeSharedState ? {
+      salleAssignments: Array.isArray(state?.salleAssignments) ? state.salleAssignments : [],
+      users: Array.isArray(state?.users) ? state.users : [],
+      audienceDraft: state?.audienceDraft && typeof state.audienceDraft === 'object' ? state.audienceDraft : {},
+      recycleBin: Array.isArray(state?.recycleBin) ? state.recycleBin : [],
+      recycleArchive: Array.isArray(state?.recycleArchive) ? state.recycleArchive : [],
+      importHistory: Array.isArray(state?.importHistory) ? state.importHistory : []
+    } : null
+  };
+}
+
+function buildJournalMutationEntry(savedState, mutation, options = {}) {
+  return {
+    version: Number(savedState?.version) || 0,
+    updatedAt: String(savedState?.updatedAt || new Date().toISOString()),
+    patchKind: String(options.patchKind || '').trim(),
+    patch: options.patch && typeof options.patch === 'object' ? deepCloneJson(options.patch) : null,
+    mutation
+  };
 }
 
 function buildBackupFileName(ts = new Date()) {
@@ -455,6 +626,13 @@ function loadSslCredentials() {
     console.warn('Failed to load SSL certificates:', err);
     return null;
   }
+}
+
+function tuneServerTimeouts(server) {
+  if (!server) return;
+  server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS;
+  server.requestTimeout = SERVER_REQUEST_TIMEOUT_MS;
 }
 
 function broadcastStateUpdated(payload) {
@@ -935,12 +1113,12 @@ function scheduleSnapshotFlush(delayMs = SERVER_SNAPSHOT_FLUSH_DELAY_MS) {
   }, Math.max(0, Number(delayMs) || 0));
 }
 
-async function persistJournalMutation(mutation) {
+async function persistJournalMutation(mutation, options = {}) {
   const currentState = await readState();
   const saved = applyMutationToState(currentState, mutation);
   setCachedState(saved);
   try {
-    await appendMutationJournalEntry(mutation);
+    await appendMutationJournalEntry(buildJournalMutationEntry(saved, mutation, options));
     pendingJournalMutationCount += 1;
     if (pendingJournalMutationCount >= SERVER_SNAPSHOT_FLUSH_MAX_PENDING) {
       await writeStateSnapshot(saved, { clearJournal: true });
@@ -954,18 +1132,25 @@ async function persistJournalMutation(mutation) {
   }
 }
 
-async function persistJournalMutations(mutations) {
+async function persistJournalMutations(mutations, options = {}) {
   const safeMutations = (Array.isArray(mutations) ? mutations : [])
     .filter((mutation) => mutation && typeof mutation === 'object');
   if (!safeMutations.length) {
     throw new Error('No mutations to persist.');
   }
   let saved = await readState();
-  for (const mutation of safeMutations) {
+  const journalEntries = [];
+  const safePatches = Array.isArray(options.patches) ? options.patches : [];
+  for (let index = 0; index < safeMutations.length; index += 1) {
+    const mutation = safeMutations[index];
     saved = applyMutationToState(saved, mutation);
+    journalEntries.push(buildJournalMutationEntry(saved, mutation, {
+      patchKind: options.patchKind,
+      patch: safePatches[index]
+    }));
   }
   setCachedState(saved);
-  const journalPayload = `${safeMutations.map((mutation) => JSON.stringify(mutation)).join('\n')}\n`;
+  const journalPayload = `${journalEntries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
   try {
     await fsp.appendFile(STATE_JOURNAL_FILE, journalPayload, 'utf8');
     pendingJournalMutationCount += safeMutations.length;
@@ -1157,7 +1342,143 @@ app.get('/api/state', async (req, res) => {
   await ensureDataFile();
   const state = await readState();
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
+  if (acceptEncoding.includes('gzip')) {
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    res.send(getGzipSerializedState(state));
+    return;
+  }
   res.send(getSerializedState(state));
+});
+
+app.get('/api/state/meta', async (req, res) => {
+  await ensureDataFile();
+  const state = await readState();
+  res.json({
+    ok: true,
+    ...buildStateExportMetadata(state)
+  });
+});
+
+app.get('/api/state/export-page', async (req, res) => {
+  await ensureDataFile();
+  const state = await readState();
+  const includeSharedState = String(req.query.includeShared || '1').trim().toLowerCase() !== '0';
+  res.json({
+    ok: true,
+    ...buildPagedStateExport(state, {
+      offset: req.query.offset,
+      limit: req.query.limit,
+      includeSharedState
+    })
+  });
+});
+
+app.get('/api/state/changes', async (req, res) => {
+  await ensureDataFile();
+  const currentState = await readState();
+  const currentVersion = Number(currentState?.version) || 0;
+  const sinceVersionRaw = Number(req.query.sinceVersion);
+  const sinceVersion = Number.isFinite(sinceVersionRaw) && sinceVersionRaw >= 0
+    ? Math.floor(sinceVersionRaw)
+    : -1;
+
+  if (sinceVersion < 0) {
+    return res.json({
+      ok: true,
+      version: currentVersion,
+      updatedAt: currentState?.updatedAt || new Date().toISOString(),
+      fromVersion: sinceVersion,
+      snapshotRequired: true,
+      reason: 'invalid-since-version',
+      changes: []
+    });
+  }
+
+  if (sinceVersion >= currentVersion) {
+    return res.json({
+      ok: true,
+      version: currentVersion,
+      updatedAt: currentState?.updatedAt || new Date().toISOString(),
+      fromVersion: sinceVersion,
+      snapshotRequired: false,
+      changes: []
+    });
+  }
+
+  const normalizedEntries = (await readJournalEntries())
+    .map(normalizeJournalEntry)
+    .filter(Boolean);
+
+  if (!normalizedEntries.length) {
+    return res.json({
+      ok: true,
+      version: currentVersion,
+      updatedAt: currentState?.updatedAt || new Date().toISOString(),
+      fromVersion: sinceVersion,
+      snapshotRequired: true,
+      reason: 'journal-empty',
+      changes: []
+    });
+  }
+
+  const hasIncompleteEntries = normalizedEntries.some((entry) => !Number.isFinite(entry.version) || !entry.patchKind || !entry.patch);
+  if (hasIncompleteEntries) {
+    return res.json({
+      ok: true,
+      version: currentVersion,
+      updatedAt: currentState?.updatedAt || new Date().toISOString(),
+      fromVersion: sinceVersion,
+      snapshotRequired: true,
+      reason: 'journal-incompatible',
+      changes: []
+    });
+  }
+
+  const firstVersion = Number(normalizedEntries[0]?.version) || 0;
+  if (sinceVersion < (firstVersion - 1)) {
+    return res.json({
+      ok: true,
+      version: currentVersion,
+      updatedAt: currentState?.updatedAt || new Date().toISOString(),
+      fromVersion: sinceVersion,
+      snapshotRequired: true,
+      reason: 'changes-not-available',
+      availableFromVersion: Math.max(0, firstVersion - 1),
+      changes: []
+    });
+  }
+
+  const changes = normalizedEntries
+    .filter((entry) => Number(entry.version) > sinceVersion)
+    .map((entry) => ({
+      version: Number(entry.version) || 0,
+      updatedAt: entry.updatedAt || currentState?.updatedAt || new Date().toISOString(),
+      patchKind: entry.patchKind,
+      patch: entry.patch
+    }));
+
+  if (!changes.length) {
+    return res.json({
+      ok: true,
+      version: currentVersion,
+      updatedAt: currentState?.updatedAt || new Date().toISOString(),
+      fromVersion: sinceVersion,
+      snapshotRequired: true,
+      reason: 'changes-not-found',
+      changes: []
+    });
+  }
+
+  return res.json({
+    ok: true,
+    version: currentVersion,
+    updatedAt: currentState?.updatedAt || new Date().toISOString(),
+    fromVersion: sinceVersion,
+    snapshotRequired: false,
+    changes
+  });
 });
 
 app.post('/api/state', async (req, res) => {
@@ -1192,6 +1513,7 @@ app.post('/api/state/upload-chunk', async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const uploadId = String(body.uploadId || '').trim();
   const sourceId = String(body._sourceId || '').trim();
+  const baseVersion = extractBaseVersion(body);
   const uploadMode = String(body.mode || '').trim().toLowerCase() === 'merge' ? 'merge' : 'replace';
   const index = Number(body.index);
   const total = Number(body.total);
@@ -1209,7 +1531,8 @@ app.post('/api/state/upload-chunk', async (req, res) => {
       chunks: new Array(total).fill(null),
       received: 0,
       sourceId,
-      mode: uploadMode
+      mode: uploadMode,
+      baseVersion
     };
     chunkedStateUploads.set(uploadId, session);
   }
@@ -1222,6 +1545,11 @@ app.post('/api/state/upload-chunk', async (req, res) => {
   if (session.mode !== uploadMode) {
     chunkedStateUploads.delete(uploadId);
     return res.status(400).json({ ok: false, code: 'UPLOAD_MODE_MISMATCH', message: 'Chunk mode mismatch.' });
+  }
+
+  if (session.baseVersion !== baseVersion) {
+    chunkedStateUploads.delete(uploadId);
+    return res.status(400).json({ ok: false, code: 'UPLOAD_BASE_VERSION_MISMATCH', message: 'Chunk base version mismatch.' });
   }
 
   if (session.chunks[index] === null) {
@@ -1241,6 +1569,9 @@ app.post('/api/state/upload-chunk', async (req, res) => {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
       const currentState = await readState();
+      if (session.baseVersion !== null && Number(currentState?.version || 0) !== session.baseVersion) {
+        return { conflict: true, state: currentState };
+      }
       const statePayload = parsed && typeof parsed === 'object' ? { ...parsed } : {};
       delete statePayload._sourceId;
       delete statePayload._baseVersion;
@@ -1251,6 +1582,9 @@ app.post('/api/state/upload-chunk', async (req, res) => {
       broadcastStateUpdated({ ...saved, sourceId: session.sourceId });
       return { saved };
     });
+    if (result?.conflict) {
+      return res.status(409).json(buildConflictResponse(result.state));
+    }
     return res.json({
       ok: true,
       complete: true,
@@ -1277,6 +1611,9 @@ app.post('/api/state/clients', async (req, res) => {
       const saved = await persistJournalMutation({
         type: 'clients',
         body
+      }, {
+        patchKind: 'clients',
+        patch: nextClientState.patch
       });
       broadcastStateUpdated({
         ...saved,
@@ -1316,6 +1653,9 @@ app.post('/api/state/users', async (req, res) => {
       const saved = await persistJournalMutation({
         type: 'users',
         body: { users: nextUsers }
+      }, {
+        patchKind: 'users',
+        patch: { users: nextUsers }
       });
       broadcastStateUpdated({
         ...saved,
@@ -1349,6 +1689,9 @@ app.post('/api/state/salle-assignments', async (req, res) => {
       const saved = await persistJournalMutation({
         type: 'salle-assignments',
         body: { salleAssignments: nextSalleAssignments }
+      }, {
+        patchKind: 'salle-assignments',
+        patch: { salleAssignments: nextSalleAssignments }
       });
       broadcastStateUpdated({
         ...saved,
@@ -1384,6 +1727,9 @@ app.post('/api/state/audience-draft', async (req, res) => {
       const saved = await persistJournalMutation({
         type: 'audience-draft',
         body: { audienceDraft: nextAudienceDraft }
+      }, {
+        patchKind: 'audience-draft',
+        patch: { audienceDraft: nextAudienceDraft }
       });
       broadcastStateUpdated({
         ...saved,
@@ -1411,6 +1757,9 @@ app.post('/api/state/dossiers', async (req, res) => {
       const saved = await persistJournalMutation({
         type: 'dossier',
         body
+      }, {
+        patchKind: 'dossier',
+        patch: body
       });
       broadcastStateUpdated({
         ...saved,
@@ -1446,7 +1795,11 @@ app.post('/api/state/dossiers/batch', async (req, res) => {
         patches.map((patch) => ({
           type: 'dossier',
           body: patch
-        }))
+        })),
+        {
+          patchKind: 'dossier',
+          patches
+        }
       );
       broadcastStateUpdated({
         ...saved,
@@ -1505,6 +1858,7 @@ app.get('/', (req, res) => {
 ensureDataFile()
   .then(() => {
     const httpServer = http.createServer(app);
+    tuneServerTimeouts(httpServer);
     httpServer.listen(PORT, HOST, () => {
       console.log(`Cabinet API running on http://${HOST}:${PORT}`);
     });
@@ -1516,6 +1870,7 @@ ensureDataFile()
     }
 
     const httpsServer = https.createServer(sslCredentials, app);
+    tuneServerTimeouts(httpsServer);
     httpsServer.listen(HTTPS_PORT, HOST, () => {
       console.log(`Cabinet API SSL running on https://${HOST}:${HTTPS_PORT}`);
     });

@@ -1,9 +1,9 @@
 const DILIGENCE_EMPTY_MESSAGE = 'Aucun dossier ASS/SFDC/S-bien/Injonction trouvé.';
 const DILIGENCE_LOADING_MESSAGE = 'Recherche diligence en cours...';
 function shouldShowDiligenceAssColumns(rows){
-  if(String(filterDiligenceProcedure || '').trim() === 'ASS') return true;
+  if(isDiligenceAssProcedure(filterDiligenceProcedure)) return true;
   const list = Array.isArray(rows) ? rows : [];
-  return !!list.length && list.every(row=>String(row?.procedure || '').trim() === 'ASS');
+  return !!list.length && list.every(row=>isDiligenceAssProcedure(row?.procedure));
 }
 
 function getDiligenceColCount(){
@@ -33,7 +33,7 @@ function buildDiligenceHeadHtml(){
 
 function renderDiligenceRowHtml(row){
   const procEncoded = encodeURIComponent(String(row.procedure || ''));
-  const isAssProcedure = String(row?.procedure || '').trim() === 'ASS';
+  const isAssProcedure = isDiligenceAssProcedure(row?.procedure);
   const isChecked = isDiligenceSelectedForPrint(row);
   const refClientValue = row.dossier?.referenceClient || '';
   const refValue = row.details?.referenceClient || '';
@@ -236,7 +236,7 @@ function renderDiligence(options = {}){
   if(diligenceQuery && allRows.length >= 1200 && !!getDiligenceFilterWorker()){
     const executionOnlyQuery = isDiligenceExecutionOnlyQuery(diligenceQuery);
     const narrowedRows = allRows.filter(row=>{
-      if(filterDiligenceProcedure !== 'all' && row.procedure !== filterDiligenceProcedure) return false;
+      if(!matchesDiligenceProcedureFilter(row.procedure, filterDiligenceProcedure)) return false;
       if(filterDiligenceSort !== 'all' && row.sort !== filterDiligenceSort) return false;
       if(filterDiligenceDelegation !== 'all' && row.delegation !== filterDiligenceDelegation) return false;
       if(

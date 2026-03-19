@@ -17,8 +17,8 @@ function readCountArg(flag, fallback, options = {}) {
 }
 
 const CLIENT_COUNT = readCountArg('--clients', 600);
-const DOSSIER_COUNT = readCountArg('--dossiers', 40000);
-const AUDIENCE_COUNT = readCountArg('--audiences', 60000);
+const DOSSIER_COUNT = readCountArg('--dossiers', 50000);
+const AUDIENCE_COUNT = readCountArg('--audiences', 80000);
 const USER_COUNT = readCountArg('--users', 20);
 const ADMIN_COUNT = readCountArg('--admins', 10, { allowZero: true });
 const MANAGER_COUNT = readCountArg('--managers', 2, { allowZero: true });
@@ -31,9 +31,14 @@ const DURATION_MS = DURATION_MINUTES * 60 * 1000;
 const PROGRESS_EVERY_MS = 30000;
 const HTTP_TIMEOUT_MS = 120000;
 const IMPORT_CHUNK_BYTES = 256 * 1024;
+const EXPORT_PAGE_CLIENTS = readCountArg('--export-page-clients', 40);
 const RUN_ROOT = path.join(SOURCE_ROOT, '.stress-runs', `api-stress-${Date.now()}`);
 const TEMP_SERVER_ROOT = path.join(RUN_ROOT, 'server');
 const RESULTS_PATH = path.join(RUN_ROOT, 'results.json');
+const MANAGER_USERNAME = String(process.env.MANAGER_USERNAME || 'walid').trim() || 'walid';
+const MANAGER_PASSWORD = String(process.env.MANAGER_PASSWORD || '1234').trim() || '1234';
+
+let authToken = '';
 
 if ((ADMIN_COUNT + MANAGER_COUNT + VIEWER_COUNT) !== USER_COUNT) {
   throw new Error(`User role total mismatch: admins(${ADMIN_COUNT}) + managers(${MANAGER_COUNT}) + clients-users(${VIEWER_COUNT}) must equal users(${USER_COUNT}).`);
@@ -172,13 +177,17 @@ async function requestJson(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const nextHeaders = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    };
+    if (authToken && !Object.prototype.hasOwnProperty.call(nextHeaders, 'Authorization')) {
+      nextHeaders.Authorization = `Bearer ${authToken}`;
+    }
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      }
+      headers: nextHeaders
     });
     const text = await response.text();
     let json = null;
@@ -193,12 +202,69 @@ async function requestJson(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   }
 }
 
+async function loginAsManager() {
+  const response = await requestJson(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: {},
+    body: JSON.stringify({
+      username: MANAGER_USERNAME,
+      password: MANAGER_PASSWORD
+    })
+  });
+  if (!response.ok || !response.json?.token) {
+    throw new Error(`POST /api/auth/login failed with ${response.status}`);
+  }
+  authToken = String(response.json.token || '').trim();
+  if (!authToken) {
+    throw new Error('Missing auth token after login.');
+  }
+  return response.json;
+}
+
 async function getState() {
   const response = await requestJson(`${BASE_URL}/api/state`, { method: 'GET', headers: {} });
   if (!response.ok || !response.json) {
     throw new Error(`GET /api/state failed with ${response.status}`);
   }
   return response.json;
+}
+
+async function getStateMeta() {
+  const response = await requestJson(`${BASE_URL}/api/state/meta`, { method: 'GET', headers: {} });
+  if (!response.ok || !response.json) {
+    throw new Error(`GET /api/state/meta failed with ${response.status}`);
+  }
+  return response.json;
+}
+
+async function getStateExportPage(offset = 0, limit = EXPORT_PAGE_CLIENTS, includeShared = true) {
+  const response = await requestJson(
+    `${BASE_URL}/api/state/export-page?offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}&includeShared=${includeShared ? '1' : '0'}`,
+    { method: 'GET', headers: {} }
+  );
+  if (!response.ok || !response.json) {
+    throw new Error(`GET /api/state/export-page failed with ${response.status}`);
+  }
+  return response.json;
+}
+
+async function getStateChanges(sinceVersion) {
+  const response = await requestJson(
+    `${BASE_URL}/api/state/changes?sinceVersion=${encodeURIComponent(String(sinceVersion))}`,
+    { method: 'GET', headers: {} }
+  );
+  if (!response.ok || !response.json) {
+    throw new Error(`GET /api/state/changes failed with ${response.status}`);
+  }
+  return response.json;
+}
+
+function updateSharedKnownVersion(shared, payload) {
+  if (!shared || !payload || typeof payload !== 'object') return;
+  const version = Number(payload.version);
+  if (Number.isFinite(version) && version > 0) {
+    shared.lastKnownVersion = Math.max(Number(shared.lastKnownVersion) || 0, version);
+  }
 }
 
 async function getHealth() {
@@ -224,6 +290,7 @@ async function createDossierAction(shared) {
   });
 
   if (!response.ok) throw new Error(`POST /api/state/dossiers create failed with ${response.status}`);
+  updateSharedKnownVersion(shared, response.json);
   shared.expectedDossierRefs.add(referenceClient);
   return { clientId, referenceClient };
 }
@@ -242,38 +309,105 @@ async function audienceDraftAction(shared) {
     })
   });
   if (!response.ok) throw new Error(`POST /api/state/audience-draft failed with ${response.status}`);
+  updateSharedKnownVersion(shared, response.json);
   return { key };
 }
 
-async function exportStateAction() {
-  const state = await getState();
-  const clientTotal = Array.isArray(state.clients) ? state.clients.length : 0;
-  let dossierTotal = 0;
-  for (const client of Array.isArray(state.clients) ? state.clients : []) {
-    dossierTotal += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+async function exportStateAction(shared) {
+  const meta = await getStateMeta();
+  const previousVersion = Number(shared?.lastExportVersion) || 0;
+  if (previousVersion > 0 && Number(meta?.version) === previousVersion) {
+    updateSharedKnownVersion(shared, meta);
+    return {
+      clientTotal: Number(meta?.clientCount) || 0,
+      dossierTotal: Number(meta?.dossierCount) || 0,
+      version: previousVersion,
+      changeCount: 0,
+      pages: 0,
+      mode: 'meta'
+    };
   }
-  return { clientTotal, dossierTotal, version: state.version };
+  if (previousVersion > 0 && Number(meta?.version) > previousVersion) {
+    const changes = await getStateChanges(previousVersion);
+    if (changes?.snapshotRequired !== true) {
+      shared.lastExportVersion = Number(changes?.version) || Number(meta?.version) || previousVersion;
+      updateSharedKnownVersion(shared, changes);
+      return {
+        clientTotal: Number(meta?.clientCount) || 0,
+        dossierTotal: Number(meta?.dossierCount) || 0,
+        version: shared.lastExportVersion,
+        changeCount: Array.isArray(changes?.changes) ? changes.changes.length : 0,
+        pages: 0,
+        mode: 'delta'
+      };
+    }
+  }
+  if (String(meta?.recommendedMode || '').trim().toLowerCase() !== 'paged') {
+    const state = await getState();
+    const clientTotal = Array.isArray(state.clients) ? state.clients.length : 0;
+    let dossierTotal = 0;
+    for (const client of Array.isArray(state.clients) ? state.clients : []) {
+      dossierTotal += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+    }
+    shared.lastExportVersion = Number(state?.version) || Number(meta?.version) || 0;
+    updateSharedKnownVersion(shared, state);
+    return { clientTotal, dossierTotal, version: state.version, pages: 1, mode: 'full' };
+  }
+  let clientTotal = 0;
+  let dossierTotal = 0;
+  let offset = 0;
+  let includeShared = true;
+  let pages = 0;
+  const pageLimit = Math.max(10, Number(meta?.recommendedClientPageSize) || EXPORT_PAGE_CLIENTS);
+  for (;;) {
+    const page = await getStateExportPage(offset, pageLimit, includeShared);
+    pages += 1;
+    const clients = Array.isArray(page.clients) ? page.clients : [];
+    clientTotal += clients.length;
+    for (const client of clients) {
+      dossierTotal += Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
+    }
+    if (!page.hasMore) break;
+    const nextOffset = Number(page.nextOffset);
+    if (!Number.isFinite(nextOffset) || nextOffset <= offset) {
+      throw new Error('GET /api/state/export-page returned an invalid nextOffset');
+    }
+    offset = nextOffset;
+    includeShared = false;
+  }
+  shared.lastExportVersion = Number(meta?.version) || 0;
+  updateSharedKnownVersion(shared, meta);
+  return {
+    clientTotal: Number(meta?.clientCount) || clientTotal,
+    dossierTotal: Number(meta?.dossierCount) || dossierTotal,
+    version: Number(meta?.version) || 0,
+    pages,
+    mode: 'paged'
+  };
 }
 
 async function importWholeStateAction(shared) {
-  const currentState = await getState();
   const nextClientId = shared.currentMaxClientId + 1;
   const clientLabel = `Stress Client ${nextClientId}`;
   const dossierRef = `STRESS-IMP-${shared.nextImportId += 1}`;
-  const nextState = {
-    ...currentState,
+  const importPayload = {
     clients: [
-      ...(Array.isArray(currentState.clients) ? currentState.clients : []),
       {
         id: nextClientId,
         name: clientLabel,
         dossiers: [buildStressDossier(dossierRef, `import-${nextClientId}`)]
       }
     ],
+    users: [],
+    salleAssignments: [],
+    audienceDraft: {},
+    recycleBin: [],
+    recycleArchive: [],
+    importHistory: [],
     updatedAt: nowIso()
   };
 
-  const raw = JSON.stringify(nextState);
+  const raw = JSON.stringify(importPayload);
   const total = Math.max(1, Math.ceil(Buffer.byteLength(raw, 'utf8') / IMPORT_CHUNK_BYTES));
   const uploadId = randomUUID();
   for (let index = 0; index < total; index += 1) {
@@ -291,9 +425,10 @@ async function importWholeStateAction(shared) {
         _sourceId: `stress-import-${uploadId}`
       })
     });
-    if (!response.ok) {
+  if (!response.ok) {
       throw new Error(`POST /api/state/upload-chunk failed with ${response.status}`);
     }
+    if (response.json) updateSharedKnownVersion(shared, response.json);
   }
 
   shared.currentMaxClientId = nextClientId;
@@ -318,6 +453,7 @@ async function createClientViaStateAction(shared) {
     })
   });
   if (!response.ok) throw new Error(`POST /api/state/clients failed with ${response.status}`);
+  updateSharedKnownVersion(shared, response.json);
   shared.currentMaxClientId = nextClientId;
   shared.expectedClientNames.add(clientLabel);
   return { nextClientId, clientLabel };
@@ -359,7 +495,7 @@ async function runAction(action, shared) {
     case 'health':
       return getHealth();
     case 'exportState':
-      return exportStateAction();
+      return exportStateAction(shared);
     case 'createDossier':
       return createDossierAction(shared);
     case 'audienceDraft':
@@ -454,6 +590,8 @@ async function main() {
     nextDossierId: 0,
     nextDraftId: 0,
     nextImportId: 0,
+    lastKnownVersion: 0,
+    lastExportVersion: 0,
     expectedClientNames: new Set(),
     expectedDossierRefs: new Set(),
     expectedImportedDossierRefs: new Set(),
@@ -484,6 +622,7 @@ async function main() {
 
   try {
     await waitForServer();
+    await loginAsManager();
 
     progressTimer = setInterval(() => {
       const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
