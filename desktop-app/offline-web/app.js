@@ -351,7 +351,12 @@ const DOSSIER_HISTORY_FIELD_LABELS = {
   'procedureDetails.villeProcedure': 'Ville',
   'procedureDetails.certificatNonAppelStatus': 'Statut certificat non appel',
   'procedureDetails.notificationStatus': 'Statut notification',
-  'procedureDetails.notificationSort': 'Sort notification'
+  'procedureDetails.notificationSort': 'Sort notification',
+  'procedureDetails.lettreRec': 'Lettre Rec',
+  'procedureDetails.curateurNo': 'Curateur N°',
+  'procedureDetails.notifCurateur': 'Notif curateur',
+  'procedureDetails.sortNotif': 'Sort notif',
+  'procedureDetails.avisCurateur': 'Avis curateur'
 };
 const DOSSIER_HISTORY_SOURCE_LABELS = {
   form: 'Modifier dossier',
@@ -11899,6 +11904,11 @@ function getDiligenceSearchValues(row){
     details.notificationNo,
     details.notificationStatus,
     details.notificationSort,
+    details.lettreRec,
+    details.curateurNo,
+    details.notifCurateur,
+    details.sortNotif,
+    details.avisCurateur,
     details.dateNotification,
     details.certificatNonAppelStatus,
     details.executionNo,
@@ -12247,7 +12257,7 @@ function openDossierDetails(clientId, index){
     </div>
     <div class="details-actions">
       <button type="button" class="btn-primary" onclick="downloadDossierSummary(${client.id}, ${index})">
-        <i class="fa-solid fa-file-arrow-down"></i> Télécharger fiche dossier
+        <i class="fa-regular fa-eye"></i> Voir le fichier
       </button>
       <button type="button" class="btn-danger" onclick="deleteDossier(${client.id}, ${index})" ${canDeleteData() ? '' : 'disabled'}>
         <i class="fa-solid fa-trash"></i> Supprimer dossier
@@ -13008,6 +13018,50 @@ function getDiligenceNotificationSortValue(value, procedure = ''){
   return '';
 }
 
+function isDiligenceAssNbLayout(row){
+  return isDiligenceAssProcedure(row?.procedure)
+    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'NB';
+}
+
+function getDiligenceAssHeaderMode(rows){
+  const list = Array.isArray(rows) ? rows.filter(row=>isDiligenceAssProcedure(row?.procedure)) : [];
+  if(!list.length) return 'default';
+  const nbCount = list.reduce((count, row)=>count + (isDiligenceAssNbLayout(row) ? 1 : 0), 0);
+  if(nbCount === 0) return 'default';
+  if(nbCount === list.length) return 'nb';
+  return 'mixed';
+}
+
+function normalizeDiligenceLettreRec(value){
+  const raw = String(value ?? '').trim().toLowerCase();
+  if(!raw) return '';
+  if(raw.includes('retour')) return 'lettre retour';
+  if(raw === 'ok' || raw.includes(' ok')) return 'OK';
+  if(raw.includes('lettre') || raw.includes('tr')) return 'att lettre du tr';
+  return String(value ?? '').trim();
+}
+
+function getDiligenceLettreRecValue(value){
+  const normalized = normalizeDiligenceLettreRec(value);
+  return normalized || 'att lettre du tr';
+}
+
+function normalizeDiligenceAvisCurateur(value){
+  const raw = String(value ?? '').trim().toLowerCase();
+  if(!raw) return '';
+  if(raw.includes('anj') || raw.includes('pliie') || raw.includes('plie')){
+    return 'pliie anj';
+  }
+  if(raw === 'ok' || raw.includes(' ok')) return 'OK';
+  if(raw.includes('tr')) return 'envoyer au tr';
+  return String(value ?? '').trim();
+}
+
+function getDiligenceAvisCurateurValue(value){
+  const normalized = normalizeDiligenceAvisCurateur(value);
+  return normalized || 'envoyer au tr';
+}
+
 function normalizeDiligenceSearchQuery(value){
   return normalizeLooseText(String(value || '').trim()).toLowerCase();
 }
@@ -13025,7 +13079,12 @@ const DILIGENCE_AUTOSIZE_FIELDS = new Set([
   'referenceClient',
   'juge',
   'attOrdOrOrdOk',
+  'lettreRec',
+  'curateurNo',
   'executionNo',
+  'notifCurateur',
+  'sortNotif',
+  'avisCurateur',
   'ville',
   'attDelegationOuDelegat',
   'huissier',
@@ -13044,7 +13103,12 @@ function getDiligenceAutoSizeWidthCh(field, text){
     referenceClient: 18,
     juge: 16,
     attOrdOrOrdOk: 10,
+    lettreRec: 16,
+    curateurNo: 14,
     executionNo: 14,
+    notifCurateur: 16,
+    sortNotif: 14,
+    avisCurateur: 14,
     ville: 14,
     attDelegationOuDelegat: 10,
     huissier: 14,
@@ -13054,7 +13118,12 @@ function getDiligenceAutoSizeWidthCh(field, text){
   const maxByField = {
     referenceClient: 34,
     juge: 34,
+    lettreRec: 22,
+    curateurNo: 24,
     executionNo: 34,
+    notifCurateur: 24,
+    sortNotif: 24,
+    avisCurateur: 18,
     ville: 26,
     huissier: 34,
     tribunal: 36,
@@ -13175,6 +13244,36 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
       </select>
     `;
   }
+  if(field === 'lettreRec'){
+    const status = getDiligenceLettreRecValue(normalized);
+    if(!row?.canEdit){
+      return escapeHtml(status || '-');
+    }
+    return `
+      <select
+        class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
+        onchange="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="att lettre du tr" ${status === 'att lettre du tr' ? 'selected' : ''}>att lettre du Tr</option>
+        <option value="lettre retour" ${status === 'lettre retour' ? 'selected' : ''}>lettre retour</option>
+        <option value="OK" ${status === 'OK' ? 'selected' : ''}>OK</option>
+      </select>
+    `;
+  }
+  if(field === 'avisCurateur'){
+    const status = getDiligenceAvisCurateurValue(normalized);
+    if(!row?.canEdit){
+      return escapeHtml(status || '-');
+    }
+    return `
+      <select
+        class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
+        onchange="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="envoyer au tr" ${status === 'envoyer au tr' ? 'selected' : ''}>envoyer au tr</option>
+        <option value="pliie anj" ${status === 'pliie anj' ? 'selected' : ''}>pliie anj</option>
+        <option value="OK" ${status === 'OK' ? 'selected' : ''}>OK</option>
+      </select>
+    `;
+  }
   if(field === 'dateNotification'){
     if(!row?.canEdit){
       return escapeHtml(normalized || '-');
@@ -13251,6 +13350,10 @@ function applyDiligenceFieldValue(clientId, dossierIndex, procKey, field, value)
       : String(value ?? '').trim();
   }else if(field === 'notificationSort'){
     nextValue = normalizeDiligenceNotificationSort(value);
+  }else if(field === 'lettreRec'){
+    nextValue = normalizeDiligenceLettreRec(value);
+  }else if(field === 'avisCurateur'){
+    nextValue = normalizeDiligenceAvisCurateur(value);
   }
   if(field === 'ville'){
     dossier.ville = nextValue;
@@ -13356,6 +13459,9 @@ function updateDiligenceField(clientId, dossierIndex, procKey, field, value){
   const result = applyDiligenceFieldValue(clientId, dossierIndex, proc, field, value);
   if(!result.changed) return;
   handleDossierDataChange({ audience: true, rerenderLinked: true });
+  if(field === 'notificationSort' && typeof renderDiligence === 'function'){
+    renderDiligence({ force: true });
+  }
   persistDossierReferenceNow(result.clientId, result.dossier, { source: 'diligence' }).catch(()=>{});
 }
 
@@ -13496,38 +13602,65 @@ function getDiligenceExportColumnDefinitions(){
     {
       key: 'certificatNonAppel',
       header: 'Certificat non appel',
+      headerAss: 'Certificat non appel / Lettre Rec',
+      headerNb: 'Lettre Rec',
       width: 26,
-      getValue: (row)=>row?.details?.certificatNonAppelStatus || ''
+      getValue: (row)=>isDiligenceAssNbLayout(row)
+        ? getDiligenceLettreRecValue(row?.details?.lettreRec || '')
+        : (row?.details?.certificatNonAppelStatus || '')
     },
     {
       key: 'executionNo',
       header: 'Exécution N°',
+      headerAss: 'Exécution N° / Curateur N°',
+      headerNb: 'Curateur N°',
       width: 20,
-      getValue: (row)=>row?.details?.executionNo || ''
+      getValue: (row)=>isDiligenceAssNbLayout(row)
+        ? (row?.details?.curateurNo || '')
+        : (row?.details?.executionNo || '')
     },
     {
       key: 'ville',
       header: 'Ville',
+      headerAss: 'Ville / ORD',
+      headerNb: 'ORD',
       width: 20,
-      getValue: (row)=>row?.dossier?.ville || ''
+      getValue: (row)=>isDiligenceAssNbLayout(row)
+        ? (getDiligenceOrdonnanceLabelFromDetails(row?.details) || '')
+        : (row?.dossier?.ville || '')
     },
     {
       key: 'delegation',
       header: 'Délégation',
+      headerAss: 'Délégation / Notif curateur',
+      headerNb: 'Notif curateur',
       width: 18,
-      getValue: (row)=>normalizeDiligenceAttOk(row?.details?.attDelegationOuDelegat || '') || ''
+      getValue: (row)=>isDiligenceAssNbLayout(row)
+        ? (row?.details?.notifCurateur || '')
+        : (normalizeDiligenceAttOk(row?.details?.attDelegationOuDelegat || '') || '')
     },
     {
       key: 'huissier',
       header: 'Huissier',
+      headerAss: 'Huissier / Sort notif',
+      headerNb: 'Sort notif',
       width: 26,
-      getValue: (row)=>row?.details?.huissier || ''
+      getValue: (row)=>isDiligenceAssNbLayout(row)
+        ? (row?.details?.sortNotif || '')
+        : (row?.details?.huissier || '')
     },
     {
       key: 'sortExecution',
       header: 'Sort exécution',
+      headerAss: 'Avis curateur',
+      headerNb: 'Avis curateur',
       width: 22,
-      getValue: (row)=>!isDiligenceAssProcedure(row?.procedure) ? normalizeDiligenceSort(row?.details?.sort || '') : ''
+      getValue: (row)=>{
+        if(isDiligenceAssNbLayout(row)){
+          return getDiligenceAvisCurateurValue(row?.details?.avisCurateur || '');
+        }
+        return !isDiligenceAssProcedure(row?.procedure) ? normalizeDiligenceSort(row?.details?.sort || '') : '';
+      }
     },
     {
       key: 'tribunal',
@@ -13547,6 +13680,7 @@ function shouldShowDiligenceAssColumnsForRows(rows){
 function finalizeDiligenceExportDataset(rows){
   const sourceRows = Array.isArray(rows) ? rows : [];
   const showAssColumns = shouldShowDiligenceAssColumnsForRows(sourceRows);
+  const assHeaderMode = showAssColumns ? getDiligenceAssHeaderMode(sourceRows) : 'default';
   const columns = getDiligenceExportColumnDefinitions().filter((column)=>!column.assOnly || showAssColumns);
   const activeColumns = columns.filter((column)=>{
     return sourceRows.some((row)=>{
@@ -13556,7 +13690,12 @@ function finalizeDiligenceExportDataset(rows){
   });
   return {
     rows: sourceRows,
-    headers: activeColumns.map(column=>column.header),
+    headers: activeColumns.map((column)=>{
+      if(!showAssColumns) return column.header;
+      if(assHeaderMode === 'nb') return column.headerNb || column.headerAss || column.header;
+      if(assHeaderMode === 'mixed') return column.headerAss || column.header;
+      return column.header;
+    }),
     tableRows: sourceRows.map((row)=>activeColumns.map((column)=>{
       const value = typeof column.getValue === 'function' ? column.getValue(row) : '';
       return String(value || '').trim();

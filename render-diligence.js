@@ -11,6 +11,27 @@ function getDiligenceColCount(){
 }
 
 function buildDiligenceHeadHtml(){
+  const assHeaderMode = diligenceVirtualShowAssColumns
+    ? getDiligenceAssHeaderMode(diligenceVirtualRows)
+    : 'default';
+  const certHeader = assHeaderMode === 'nb'
+    ? 'Lettre Rec'
+    : (assHeaderMode === 'mixed' ? 'Certificat non appel / Lettre Rec' : 'Certificat non appel');
+  const executionHeader = assHeaderMode === 'nb'
+    ? 'Curateur N°'
+    : (assHeaderMode === 'mixed' ? 'Execution N° / Curateur N°' : 'Execution N°');
+  const villeHeader = assHeaderMode === 'nb'
+    ? 'ORD'
+    : (assHeaderMode === 'mixed' ? 'Ville / ORD' : 'Ville');
+  const delegationHeader = assHeaderMode === 'nb'
+    ? 'Notif curateur'
+    : (assHeaderMode === 'mixed' ? 'Délégation / Notif curateur' : 'Délégation');
+  const huissierHeader = assHeaderMode === 'nb'
+    ? 'Sort notif'
+    : (assHeaderMode === 'mixed' ? 'Huissier / Sort notif' : 'Huissier');
+  const avisHeader = diligenceVirtualShowAssColumns
+    ? 'Avis curateur'
+    : 'Sort exécution';
   return `
     <th>Client</th>
     <th>Référence client</th>
@@ -21,12 +42,12 @@ function buildDiligenceHeadHtml(){
     <th>Ordonnance</th>
     <th>Notification N°</th>
     <th>Sort notification</th>
-    <th>Certificat non appel</th>
-    <th>Execution N°</th>
-    <th>Ville</th>
-    <th>Délégation</th>
-    <th>Huissier</th>
-    <th>Sort exécution</th>
+    <th>${certHeader}</th>
+    <th>${executionHeader}</th>
+    <th>${villeHeader}</th>
+    <th>${delegationHeader}</th>
+    <th>${huissierHeader}</th>
+    <th>${avisHeader}</th>
     <th>Tribunal</th>
   `;
 }
@@ -52,6 +73,26 @@ function renderDiligenceRowHtml(row){
   const huissierValue = row.details?.huissier || '';
   const executionSortValue = !isAssProcedure ? (row.details?.sort || '') : '';
   const tribunalValue = row.details?.tribunal || '';
+  const isAssNbLayout = isDiligenceAssNbLayout(row);
+  const afterNotificationCells = isAssNbLayout
+    ? `
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'lettreRec', row.details?.lettreRec || '')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'curateurNo', row.details?.curateurNo || '')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'notifCurateur', row.details?.notifCurateur || '')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'sortNotif', row.details?.sortNotif || '')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'avisCurateur', row.details?.avisCurateur || '')}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
+    `
+    : `
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
+      <td>${!isAssProcedure ? renderDiligenceEditableCell(row, procEncoded, 'sort', executionSortValue) : ''}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
+    `;
   return `
     <tr>
       <td>
@@ -73,13 +114,7 @@ function renderDiligenceRowHtml(row){
       <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', ordValue)}</td>
       <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationNo', notificationNoValue)}</td>
       <td>${renderDiligenceEditableCell(row, procEncoded, 'notificationSort', notificationSortValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'attDelegationOuDelegat', delegationValue)}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', huissierValue)}</td>
-      <td>${!isAssProcedure ? renderDiligenceEditableCell(row, procEncoded, 'sort', executionSortValue) : escapeHtml('-')}</td>
-      <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
+      ${afterNotificationCells}
     </tr>
   `;
 }
@@ -170,13 +205,17 @@ function renderDiligence(options = {}){
   const finalizeDiligenceRender = (rows)=>{
     const orderedRows = orderDiligenceRowsByCheckedSelection(rows);
     diligenceVirtualShowAssColumns = shouldShowDiligenceAssColumns(orderedRows);
+    const pageData = orderedRows.length
+      ? paginateRows(orderedRows, 'diligence')
+      : { rows: [], page: 1, totalPages: 1, from: 0, to: 0 };
+    diligenceVirtualRows = pageData.rows;
     const colCount = getDiligenceColCount();
 
     if(headRow){
       setElementHtmlWithRenderKey(
         headRow,
         buildDiligenceHeadHtml(),
-        `diligence-head::${diligenceVirtualShowAssColumns ? 'ass-columns' : 'compact-columns'}`,
+        `diligence-head::${diligenceVirtualShowAssColumns ? 'ass-columns' : 'compact-columns'}::${diligenceVirtualShowAssColumns ? getDiligenceAssHeaderMode(pageData.rows) : 'default'}`,
         { trustRenderKey: true }
       );
     }
@@ -205,7 +244,6 @@ function renderDiligence(options = {}){
       return;
     }
 
-    const pageData = paginateRows(orderedRows, 'diligence');
     const useVirtual = pageData.rows.length >= DILIGENCE_VIRTUAL_MIN_ROWS;
     diligenceVirtualRows = pageData.rows;
     diligenceVirtualShowInjonctionColumns = false;
