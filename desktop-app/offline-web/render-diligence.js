@@ -198,10 +198,11 @@ function renderDiligence(options = {}){
   const allRows = getDiligenceRows();
   syncDiligencePrintSelection(allRows);
   syncDiligenceProcedureFilter(allRows);
-  syncDiligenceSortFilter(allRows);
-  syncDiligenceDelegationFilter(allRows);
-  syncDiligenceOrdonnanceFilter(allRows);
-  syncDiligenceTribunalFilter(allRows);
+  const auxFilterRows = getDiligenceRowsScopedForAuxFilters(allRows);
+  syncDiligenceSortFilter(auxFilterRows);
+  syncDiligenceDelegationFilter(auxFilterRows);
+  syncDiligenceOrdonnanceFilter(auxFilterRows);
+  syncDiligenceTribunalFilter(auxFilterRows);
   const finalizeDiligenceRender = (rows)=>{
     const orderedRows = orderDiligenceRowsByCheckedSelection(rows);
     diligenceVirtualShowAssColumns = shouldShowDiligenceAssColumns(orderedRows);

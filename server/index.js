@@ -15,9 +15,10 @@ const WEB_DIR = path.join(__dirname, '..');
 const SSL_DIR = path.join(__dirname, 'ssl');
 const SSL_KEY_FILE = process.env.SSL_KEY_FILE || path.join(SSL_DIR, 'local.key');
 const SSL_CERT_FILE = process.env.SSL_CERT_FILE || path.join(SSL_DIR, 'local.crt');
-const DEFAULT_MANAGER_USERNAME = 'walid';
+const DEFAULT_MANAGER_USERNAME = 'manager';
+const DEFAULT_MANAGER_PASSWORD = '1234';
 const PASSWORD_HASH_ITERATIONS = 120000;
-const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_MIN_LENGTH = 1;
 const AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -101,12 +102,12 @@ function buildBootstrapUsers() {
     {
       id: 1,
       username: DEFAULT_MANAGER_USERNAME,
-      password: '',
+      password: DEFAULT_MANAGER_PASSWORD,
       passwordHash: '',
       passwordSalt: '',
       passwordVersion: 0,
       passwordUpdatedAt: '',
-      requirePasswordChange: true,
+      requirePasswordChange: false,
       role: 'manager',
       clientIds: []
     }
@@ -133,9 +134,18 @@ function ensureManagerUser(users) {
     (user) => String(user?.username || '').trim().toLowerCase() === DEFAULT_MANAGER_USERNAME
   );
   if (managerIndex >= 0) {
-    validUsers[managerIndex].username = DEFAULT_MANAGER_USERNAME;
-    validUsers[managerIndex].role = 'manager';
-    validUsers[managerIndex].clientIds = [];
+    const manager = validUsers[managerIndex];
+    manager.username = DEFAULT_MANAGER_USERNAME;
+    manager.role = 'manager';
+    manager.clientIds = [];
+    manager.requirePasswordChange = false;
+    if (!hasAnyStoredPassword(manager)) {
+      manager.password = DEFAULT_MANAGER_PASSWORD;
+      manager.passwordHash = '';
+      manager.passwordSalt = '';
+      manager.passwordVersion = 0;
+      manager.passwordUpdatedAt = '';
+    }
     return validUsers;
   }
   return validUsers;
@@ -152,12 +162,6 @@ function isBootstrapSetupRequired(state) {
 function getPasswordPolicyError(password) {
   const value = normalizeLoginPassword(password);
   if (!value) return 'Password is required.';
-  if (value.length < PASSWORD_MIN_LENGTH) {
-    return `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
-  }
-  if (!/[a-z]/i.test(value) || !/\d/.test(value)) {
-    return 'Password must include at least one letter and one number.';
-  }
   return '';
 }
 
@@ -1331,7 +1335,7 @@ app.post('/api/auth/login', async (req, res) => {
     user: {
       username: String(user.username || '').trim(),
       role: String(user.role || '').trim(),
-      requirePasswordChange: user.requirePasswordChange === true
+      requirePasswordChange: false
     }
   });
 });

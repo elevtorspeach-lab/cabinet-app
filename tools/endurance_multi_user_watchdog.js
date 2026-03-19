@@ -80,7 +80,7 @@ function sleep(ms) {
 }
 
 function normalizeRoleLabel(role, username) {
-  if (role === 'manager' && username !== 'walid') return 'manager';
+  if (role === 'manager' && username !== 'manager') return 'manager';
   return role;
 }
 
@@ -94,7 +94,7 @@ function buildUsers() {
   for (let i = 1; i <= MANAGER_COUNT; i += 1) {
     users.push({
       id: i,
-      username: i === 1 ? 'walid' : `manager${i}`,
+      username: i === 1 ? 'manager' : `manager${i}`,
       password: '1234',
       role: 'manager',
       clientIds: []

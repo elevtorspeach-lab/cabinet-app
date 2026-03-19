@@ -35,7 +35,7 @@ const EXPORT_PAGE_CLIENTS = readCountArg('--export-page-clients', 40);
 const RUN_ROOT = path.join(SOURCE_ROOT, '.stress-runs', `api-stress-${Date.now()}`);
 const TEMP_SERVER_ROOT = path.join(RUN_ROOT, 'server');
 const RESULTS_PATH = path.join(RUN_ROOT, 'results.json');
-const MANAGER_USERNAME = String(process.env.MANAGER_USERNAME || 'walid').trim() || 'walid';
+const MANAGER_USERNAME = String(process.env.MANAGER_USERNAME || 'manager').trim() || 'manager';
 const MANAGER_PASSWORD = String(process.env.MANAGER_PASSWORD || '1234').trim() || '1234';
 
 let authToken = '';
@@ -69,7 +69,7 @@ function buildUsers() {
     users.push({ id: i, username: `admin${i}`, role: 'admin' });
   }
   for (let i = 1; i <= MANAGER_COUNT; i += 1) {
-    users.push({ id: ADMIN_COUNT + i, username: i === 1 ? 'walid' : `manager${i}`, role: 'manager' });
+    users.push({ id: ADMIN_COUNT + i, username: i === 1 ? 'manager' : `manager${i}`, role: 'manager' });
   }
   for (let i = 1; i <= VIEWER_COUNT; i += 1) {
     users.push({ id: ADMIN_COUNT + MANAGER_COUNT + i, username: `client${i}`, role: 'client' });

@@ -1,3 +1,10 @@
+const AUDIENCE_EMPTY_MESSAGE = 'Aucune audience trouvée avec ces filtres.';
+const AUDIENCE_LOADING_MESSAGE = 'Recherche audience en cours...';
+const AUDIENCE_NO_CLIENT_MESSAGE = 'Aucun client assigné à ce compte. Contactez le gestionnaire.';
+const SUIVI_EMPTY_MESSAGE = 'Aucun dossier trouvé avec ces filtres.';
+const SUIVI_LOADING_MESSAGE = 'Recherche dossier en cours...';
+const SUIVI_NO_CLIENT_MESSAGE = 'Aucun client assigné à ce compte. Contactez le gestionnaire.';
+
 function getAudienceVirtualWindow(rowsLength){
   return getVirtualWindowByContainer('audienceTableContainer', rowsLength);
 }
@@ -14,8 +21,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
   const { c, d, procKey, p, key, draft } = row;
   const canEdit = canEditClient(c) && canEditData();
   const canView = Number.isFinite(Number(row?.c?.id)) && Number.isFinite(Number(row?.di));
-  const liveColor = String(p?.color || '').trim();
-  const safeColor = ['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light'].includes(liveColor) ? liveColor : '';
+  const safeColor = getAudienceRowEffectiveColor(row);
   const duplicateKey = buildAudienceDuplicateKey(row);
   const isDuplicate = !!(duplicateKey && duplicateKeySet.has(duplicateKey));
   const hasError = isAudienceRowInvalid(row, duplicateKeySet);
@@ -47,7 +53,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
       </td>
       <td data-label="Débiteur">${escapeHtml(d.debiteur || '-')}</td>
       <td data-label="Référence dossier">
-        <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(draft.refDossier || p.referenceClient || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)">
+        <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(getAudienceRowDraftReferenceValue(row))}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)">
         ${isMissingGlobal ? '<div class="audience-inline-error">Introuvable dans dossier global</div>' : ''}
       </td>
       <td data-label="Date d’audience"><input value="${escapeAttr(audienceDateValue)}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','dateAudience',this.value)" onblur="normalizeAudienceDateDraftInputFromEncoded('${keyEncoded}', this)"></td>
@@ -56,6 +62,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
       <td data-label="Tribunal">${escapeHtml(p.tribunal || '-')}</td>
       <td data-label="Procédure">${escapeHtml(procKey || '-')}</td>
       <td data-label="Date dépôt">${escapeHtml(displayDateDepot)}</td>
+      <td data-label="Statut">${renderStatusDisplay(d.statut || 'En cours', d.statutDetails || '')}</td>
       <td data-label="Actions">
         <div class="table-actions">
           <button type="button" class="btn-primary" ${canView ? `onclick="openDossierDetails(${Number(row.c.id)}, ${Number(row.di)})"` : 'disabled'}>
@@ -76,7 +83,7 @@ function renderAudienceVirtualWindow(force = false){
   const rows = Array.isArray(audienceVirtualRows) ? audienceVirtualRows : [];
   if(!rows.length){
     audienceVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
+    renderTableMessage(body, 13, AUDIENCE_EMPTY_MESSAGE, 'audience-empty');
     return;
   }
 
@@ -89,10 +96,10 @@ function renderAudienceVirtualWindow(force = false){
   const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
   const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
   const topSpacer = topHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="12" style="height:${topHeight}px"></td></tr>`
+    ? `<tr class="virtual-spacer"><td colspan="13" style="height:${topHeight}px"></td></tr>`
     : '';
   const bottomSpacer = bottomHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="12" style="height:${bottomHeight}px"></td></tr>`
+    ? `<tr class="virtual-spacer"><td colspan="13" style="height:${bottomHeight}px"></td></tr>`
     : '';
   const rowsHtml = rows
     .slice(start, end)
@@ -142,7 +149,7 @@ function renderSuiviVirtualWindow(force = false){
   const rows = Array.isArray(suiviVirtualRows) ? suiviVirtualRows : [];
   if(!rows.length){
     suiviVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = '<tr><td colspan="10" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
+    renderTableMessage(body, 10, SUIVI_EMPTY_MESSAGE, 'suivi-empty');
     return;
   }
   const { start, end } = getVirtualWindowByContainer('suiviTableContainer', rows.length);
@@ -169,19 +176,34 @@ function queueSuiviVirtualRender(){
   });
 }
 
+function orderSuiviRowsByCheckedSelection(rows){
+  if(!filterSuiviCheckedFirst || !Array.isArray(rows) || rows.length < 2) return rows;
+  const checkedRows = [];
+  const otherRows = [];
+  rows.forEach(row=>{
+    if(isSuiviSelectedForPrint(row)){
+      checkedRows.push(row);
+    }else{
+      otherRows.push(row);
+    }
+  });
+  return checkedRows.concat(otherRows);
+}
+
 function renderSuivi(options = {}){
   if(!shouldRenderDeferredSection('suivi', options)) return;
   const q = $('filterGlobal')?.value?.toLowerCase() || '';
-  const suiviFilterKey = [q, filterSuiviProcedure, filterSuiviTribunal].join('||');
-  syncPaginationFilterState('suivi', suiviFilterKey);
+  const suiviFilterCacheKey = [q, filterSuiviProcedure, filterSuiviTribunal].join('||');
+  const suiviRenderStateKey = [suiviFilterCacheKey, filterSuiviCheckedFirst ? 'checked-first' : 'default'].join('||');
+  syncPaginationFilterState('suivi', suiviRenderStateKey);
   const suiviBody = $('suiviBody');
   if(!suiviBody) return;
-  suiviBody.innerHTML='';
   if(!isManager() && getVisibleClients().length === 0){
     suiviVirtualRows = [];
     suiviVirtualLastRange = { start: -1, end: -1 };
-    suiviBody.innerHTML = '<tr><td colspan="10" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
+    renderTableMessage(suiviBody, 10, SUIVI_NO_CLIENT_MESSAGE, 'suivi-no-client');
     renderPagination('suivi', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
+    updateSuiviCheckedCount();
     return;
   }
   const base = getSuiviBaseRowsCached();
@@ -190,29 +212,63 @@ function renderSuivi(options = {}){
   const noTribunalFilter = filterSuiviTribunal === 'all';
   const noSearchFilter = !q;
   const finalizeSuiviRender = (sortedRows)=>{
-    syncSuiviPrintSelection(sortedRows);
-    const pageData = paginateRows(sortedRows, 'suivi');
+    const orderedRows = orderSuiviRowsByCheckedSelection(sortedRows);
+    syncSuiviPrintSelection(base.sortedDefaultRows);
+    const pageData = paginateRows(orderedRows, 'suivi');
     const useVirtual = pageData.rows.length >= SUIVI_VIRTUAL_MIN_ROWS;
     suiviVirtualRows = pageData.rows;
     suiviVirtualLastRange = { start: -1, end: -1 };
     if(!pageData.rows.length){
-      suiviBody.innerHTML = '<tr><td colspan="10" class="diligence-empty">Aucun dossier trouvé avec ces filtres.</td></tr>';
+      renderTableMessage(suiviBody, 10, SUIVI_EMPTY_MESSAGE, 'suivi-empty');
     }else if(useVirtual){
       renderSuiviVirtualWindow(true);
     }else{
-      suiviBody.innerHTML = pageData.rows.map(renderSuiviRowHtml).join('');
+      setElementHtmlWithRenderKey(
+        suiviBody,
+        pageData.rows.map(renderSuiviRowHtml).join(''),
+        [
+          'suivi-rows',
+          audienceRowsRawDataVersion,
+          suiviPrintSelectionVersion,
+          pageData.page,
+          pageData.rows.length,
+          suiviRenderStateKey
+        ].join('::'),
+        { trustRenderKey: true }
+      );
     }
     renderPagination('suivi', pageData);
     updateSuiviCheckedCount();
     syncSuiviFilterOptions(base.rowsMeta);
   };
+  const queueFinalizeSuiviRender = (rows, expectedStateKey = suiviRenderStateKey, expectedRequestId = null)=>{
+    const run = ()=>{
+      const currentStateKey = [
+        $('filterGlobal')?.value?.toLowerCase() || '',
+        filterSuiviProcedure,
+        filterSuiviTribunal,
+        filterSuiviCheckedFirst ? 'checked-first' : 'default'
+      ].join('||');
+      if(currentStateKey !== expectedStateKey) return;
+      if(expectedRequestId !== null && expectedRequestId !== suiviFilterRequestSeq) return;
+      finalizeSuiviRender(rows);
+    };
+    if(!shouldDeferHeavySectionRender(rows.length, options)){
+      run();
+      return;
+    }
+    scheduleDeferredSectionRender('suivi', run, {
+      delayMs: 60,
+      onPending: ()=>renderTableMessage(suiviBody, 10, SUIVI_LOADING_MESSAGE, 'suivi-loading')
+    });
+  };
   let sortedRows = [];
-  if(base === suiviFilteredRowsCacheSource && suiviFilterKey === suiviFilteredRowsCacheKey){
+  if(base === suiviFilteredRowsCacheSource && suiviFilterCacheKey === suiviFilteredRowsCacheKey){
     sortedRows = suiviFilteredRowsCacheOutput;
   }else if(noProcedureFilter && noTribunalFilter && noSearchFilter){
     sortedRows = base.sortedDefaultRows;
     suiviFilteredRowsCacheSource = base;
-    suiviFilteredRowsCacheKey = suiviFilterKey;
+    suiviFilteredRowsCacheKey = suiviFilterCacheKey;
     suiviFilteredRowsCacheOutput = sortedRows;
   }else if(!noSearchFilter && base.rawRows.length >= 1500 && !!getSuiviFilterWorker()){
     const narrowedRows = base.rawRows.filter(row=>{
@@ -222,7 +278,7 @@ function renderSuivi(options = {}){
       return true;
     });
     const requestId = ++suiviFilterRequestSeq;
-    suiviBody.innerHTML = '<tr><td colspan="10" class="diligence-empty">Recherche dossier en cours...</td></tr>';
+    renderTableMessage(suiviBody, 10, SUIVI_LOADING_MESSAGE, 'suivi-loading');
     runSuiviFilterInWorker(
       narrowedRows.map((row, idx)=>({
         idx,
@@ -244,7 +300,7 @@ function renderSuivi(options = {}){
           filterSuiviTribunal
         ].join('||');
         if(requestId !== suiviFilterRequestSeq) return;
-        if(currentStateKey !== suiviFilterKey) return;
+        if(currentStateKey !== suiviFilterCacheKey) return;
         let nextRows;
         if(Array.isArray(filteredIndexes)){
           nextRows = filteredIndexes.map(idx=>narrowedRows[idx]).filter(Boolean);
@@ -270,9 +326,9 @@ function renderSuivi(options = {}){
           .slice()
           .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
         suiviFilteredRowsCacheSource = base;
-        suiviFilteredRowsCacheKey = suiviFilterKey;
+        suiviFilteredRowsCacheKey = suiviFilterCacheKey;
         suiviFilteredRowsCacheOutput = nextSortedRows;
-        finalizeSuiviRender(nextSortedRows);
+        queueFinalizeSuiviRender(nextSortedRows, suiviRenderStateKey, requestId);
       })
       .catch(()=>{
         if(requestId !== suiviFilterRequestSeq) return;
@@ -308,10 +364,10 @@ function renderSuivi(options = {}){
       .slice()
       .sort((a, b)=>compareSuiviRowsByReferenceProximity(a, b, duplicatePairCounts));
     suiviFilteredRowsCacheSource = base;
-    suiviFilteredRowsCacheKey = suiviFilterKey;
+    suiviFilteredRowsCacheKey = suiviFilterCacheKey;
     suiviFilteredRowsCacheOutput = sortedRows;
   }
-  finalizeSuiviRender(sortedRows);
+  queueFinalizeSuiviRender(sortedRows);
 }
 
 function renderAudience(options = {}){
@@ -324,6 +380,7 @@ function renderAudience(options = {}){
     filterAudienceTribunal,
     filterAudienceDate,
     filterAudienceErrorsOnly ? '1' : '0',
+    filterAudienceCheckedFirst ? 'checked-first' : 'default',
     selectedAudienceColor
   ].join('||');
   syncPaginationFilterState(
@@ -335,12 +392,12 @@ function renderAudience(options = {}){
     queueSidebarSalleSessionsRender();
     return;
   }
-  body.innerHTML='';
+  renderImportHistoryPanel('audienceImportHistory', 'audience');
   if(!isManager() && getVisibleClients().length === 0){
     audienceVirtualRows = [];
     audienceVirtualDuplicateKeySet = new Set();
     audienceVirtualLastRange = { start: -1, end: -1 };
-    body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Aucun client assigné à ce compte. Contactez le gestionnaire.</td></tr>';
+    renderTableMessage(body, 13, AUDIENCE_NO_CLIENT_MESSAGE, 'audience-no-client');
     renderPagination('audience', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     updateAudienceCheckedCount();
     queueSidebarSalleSessionsRender();
@@ -348,7 +405,7 @@ function renderAudience(options = {}){
   }
 
   const finalizeAudienceRender = (allRows)=>{
-    const selectionPruned = pruneAudiencePrintSelection(allRows);
+    const selectionPruned = pruneAudiencePrintSelection(baseRows);
     syncAudienceFilterOptions(allRows);
     const duplicateKeySet = getAudienceDuplicateKeySet(allRows);
     const rows = getFilteredAudienceRows(allRows);
@@ -359,11 +416,23 @@ function renderAudience(options = {}){
     audienceVirtualDuplicateKeySet = duplicateKeySet;
     audienceVirtualLastRange = { start: -1, end: -1 };
     if(!pageData.rows.length){
-      body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Aucune audience trouvée avec ces filtres.</td></tr>';
+      renderTableMessage(body, 13, AUDIENCE_EMPTY_MESSAGE, 'audience-empty');
     }else if(useVirtual){
       renderAudienceVirtualWindow(true);
     }else{
-      body.innerHTML = pageData.rows.map(row=>renderAudienceRowHtml(row, duplicateKeySet)).join('');
+      setElementHtmlWithRenderKey(
+        body,
+        pageData.rows.map(row=>renderAudienceRowHtml(row, duplicateKeySet)).join(''),
+        [
+          'audience-rows',
+          audienceRowsRawDataVersion,
+          audiencePrintSelectionVersion,
+          pageData.page,
+          pageData.rows.length,
+          audienceFilterStateKey
+        ].join('::'),
+        { trustRenderKey: true }
+      );
     }
     renderPagination('audience', pageData);
     if(selectionPruned){
@@ -373,24 +442,57 @@ function renderAudience(options = {}){
     }
     queueSidebarSalleSessionsRender();
   };
+  const queueFinalizeAudienceRender = (rows, expectedStateKey = audienceFilterStateKey, expectedRequestId = null)=>{
+    const run = ()=>{
+      const currentStateKey = [
+        $('filterAudience')?.value?.toLowerCase() || '',
+        filterAudienceColor,
+        filterAudienceProcedure,
+        filterAudienceTribunal,
+        filterAudienceDate,
+        filterAudienceErrorsOnly ? '1' : '0',
+        filterAudienceCheckedFirst ? 'checked-first' : 'default',
+        selectedAudienceColor
+      ].join('||');
+      if(currentStateKey !== expectedStateKey) return;
+      if(expectedRequestId !== null && expectedRequestId !== audienceFilterRequestSeq) return;
+      finalizeAudienceRender(rows);
+    };
+    if(!shouldDeferHeavySectionRender(rows.length, options)){
+      run();
+      return;
+    }
+    scheduleDeferredSectionRender('audience', run, {
+      delayMs: 60,
+      onPending: ()=>renderTableMessage(body, 13, AUDIENCE_LOADING_MESSAGE, 'audience-loading')
+    });
+  };
 
   const baseRows = getAudienceRowsDedupedCached();
   const colorFilteredRows = filterAudienceColor === 'all'
     ? baseRows
     : baseRows.filter(row=>String(row?.p?.color || '').trim() === filterAudienceColor);
+  const exactMatchedRows = audienceQuery
+    ? getAudienceRowsByExactQuery(colorFilteredRows, audienceQuery)
+    : null;
   const canUseWorker = (
     !!audienceQuery
+    && !exactMatchedRows
     && audienceQuery.length >= 2
     && colorFilteredRows.length >= 1500
     && !!getAudienceFilterWorker()
   );
   if(!canUseWorker){
-    finalizeAudienceRender(getAudienceRows());
+    if(exactMatchedRows){
+      queueFinalizeAudienceRender(exactMatchedRows);
+    }else{
+      queueFinalizeAudienceRender(getAudienceRows());
+    }
     return;
   }
 
   const requestId = ++audienceFilterRequestSeq;
-  body.innerHTML = '<tr><td colspan="12" class="diligence-empty">Recherche audience en cours...</td></tr>';
+  renderTableMessage(body, 13, AUDIENCE_LOADING_MESSAGE, 'audience-loading');
   runAudienceFilterInWorker(
     colorFilteredRows.map((row, idx)=>({
       idx,
@@ -407,19 +509,20 @@ function renderAudience(options = {}){
         filterAudienceTribunal,
         filterAudienceDate,
         filterAudienceErrorsOnly ? '1' : '0',
+        filterAudienceCheckedFirst ? 'checked-first' : 'default',
         selectedAudienceColor
       ].join('||');
       if(requestId !== audienceFilterRequestSeq) return;
       if(currentStateKey !== audienceFilterStateKey) return;
       if(!Array.isArray(filteredIndexes)){
-        finalizeAudienceRender(getAudienceRows());
+        queueFinalizeAudienceRender(getAudienceRows(), audienceFilterStateKey, requestId);
         return;
       }
-      finalizeAudienceRender(filteredIndexes.map(idx=>colorFilteredRows[idx]).filter(Boolean));
+      queueFinalizeAudienceRender(filteredIndexes.map(idx=>colorFilteredRows[idx]).filter(Boolean), audienceFilterStateKey, requestId);
     })
     .catch(()=>{
       if(requestId !== audienceFilterRequestSeq) return;
-      finalizeAudienceRender(getAudienceRows());
+      queueFinalizeAudienceRender(getAudienceRows(), audienceFilterStateKey, requestId);
     });
 }
 

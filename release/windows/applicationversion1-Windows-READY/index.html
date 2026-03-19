@@ -183,9 +183,12 @@
     </div>
 
     <div class="audience-filter-row">
-      <div class="search-box">
-        <i class="fa-solid fa-filter"></i>
-        <input type="text" id="filterAudience" placeholder="Filter global (toutes les infos)..." />
+      <div class="audience-search-shell">
+        <div class="search-box audience-search-box">
+          <i class="fa-solid fa-filter"></i>
+          <input type="text" id="filterAudience" placeholder="Filter global (date / client / réf client / réf dossier)..." autocomplete="off" />
+        </div>
+        <div id="filterAudienceSuggestions" class="audience-search-suggestions" role="listbox" hidden></div>
       </div>
 
       <div class="audience-color-filter">
@@ -426,7 +429,7 @@
               <label>Mot de passe</label>
               <input type="password" id="teamPassword" placeholder="mot de passe" />
               <div class="diligence-empty" style="margin-top:8px;">
-                Minimum 10 caractères avec au moins une lettre et un chiffre. Laisser vide pour garder le mot de passe actuel.
+                Vous pouvez utiliser un mot de passe simple comme `1234`. Laisser vide pour garder le mot de passe actuel.
               </div>
             </div>
             <div class="form-group">
@@ -523,38 +526,44 @@
             <input type="text" id="boiteNoInput" placeholder="Numéro de boîte"/>
           </div>
 
+          <div class="creation-priority-banner full">
+            <i class="fa-solid fa-bolt"></i>
+            <span>Champs prioritaires: Référence Client, Date d’affectation, Ville, Adresse, Montant et Débiteur.</span>
+          </div>
+
           <div class="form-group">
             <label>Client</label>
             <select id="selectClient"></select>
           </div>
 
-          <div class="form-group">
-            <label>Référence Client</label>
+          <div class="form-group creation-priority-field">
+            <label>Référence Client <span class="creation-priority-badge">Prioritaire</span></label>
             <input type="text" id="referenceClientInput" placeholder="Référence client"/>
+            <div id="referenceClientError" class="creation-field-error">Cette référence client existe déjà.</div>
           </div>
 
-          <div class="form-group">
-            <label>Date d’affectation</label>
+          <div class="form-group creation-priority-field">
+            <label>Date d’affectation <span class="creation-priority-badge">Prioritaire</span></label>
             <input type="text" id="dateAffectation" placeholder="jj/mm/aaaa" inputmode="numeric" autocomplete="off"/>
           </div>
 
-          <div class="form-group">
-            <label>Ville</label>
+          <div class="form-group creation-priority-field">
+            <label>Ville <span class="creation-priority-badge">Prioritaire</span></label>
             <input type="text" id="villeInput" placeholder="Ville"/>
           </div>
 
-          <div class="form-group">
-            <label>Adresse</label>
+          <div class="form-group creation-priority-field">
+            <label>Adresse <span class="creation-priority-badge">Prioritaire</span></label>
             <input type="text" id="adresseInput" placeholder="Adresse"/>
           </div>
 
-          <div class="form-group">
-            <label>Montant</label>
+          <div class="form-group creation-priority-field">
+            <label>Montant <span class="creation-priority-badge">Prioritaire</span></label>
             <input type="text" id="montantInput" inputmode="decimal" placeholder="Montant"/>
           </div>
 
-          <div class="form-group">
-            <label>Débiteur</label>
+          <div class="form-group creation-priority-field">
+            <label>Débiteur <span class="creation-priority-badge">Prioritaire</span></label>
             <input type="text" id="debiteurInput" placeholder="Nom du débiteur"/>
           </div>
 
@@ -623,6 +632,7 @@
           </div>
 
           <div id="procedureDetails" class="procedure-details full"></div>
+          <datalist id="procedureTribunalOptions"></datalist>
 
           <!-- DOCUMENTS + NOTE/STATUT -->
           <div class="form-group full two-col">
@@ -878,11 +888,11 @@
     </div>
     <div class="modal-body password-setup-body">
       <p id="passwordSetupLead" class="password-setup-lead">
-        Ce compte utilise encore un mot de passe de démarrage. Définissez maintenant un mot de passe fort pour continuer.
+        Vous pouvez mettre à jour le mot de passe de ce compte si vous le souhaitez.
       </p>
       <div class="form-group full">
         <label for="passwordSetupInput">Nouveau mot de passe</label>
-        <input type="password" id="passwordSetupInput" placeholder="Minimum 10 caractères" />
+        <input type="password" id="passwordSetupInput" placeholder="Ex: 1234" />
       </div>
       <div class="form-group full">
         <label for="passwordSetupConfirmInput">Confirmer le mot de passe</label>

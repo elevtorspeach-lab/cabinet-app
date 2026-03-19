@@ -826,6 +826,93 @@ tr:hover{background:#f1f5f9}
 .pro-title{display:flex;align-items:center;gap:10px;font-weight:600;color:#1e3a8a}
 .pro-body{padding:20px}
 
+.creation-priority-banner{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:12px 14px;
+  border-radius:16px;
+  border:1px solid #bfdbfe;
+  background:
+    radial-gradient(140px 70px at 0% 0%, rgba(59,130,246,.16), transparent 72%),
+    linear-gradient(180deg,#eff6ff 0%, #f8fbff 100%);
+  color:#1e3a8a;
+  font-weight:700;
+  box-shadow:0 12px 24px rgba(37,99,235,.08);
+}
+
+.creation-priority-banner i{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:32px;
+  height:32px;
+  border-radius:999px;
+  background:#dbeafe;
+  color:#1d4ed8;
+}
+
+.creation-priority-field{
+  position:relative;
+  padding:14px;
+  border-radius:18px;
+  border:1px solid #c7d2fe;
+  background:
+    linear-gradient(180deg, rgba(239,246,255,.98) 0%, rgba(255,255,255,.98) 100%);
+  box-shadow:0 14px 28px rgba(59,130,246,.08);
+}
+
+.creation-priority-field label{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  color:#1e3a8a;
+  font-weight:800;
+}
+
+.creation-priority-field input{
+  border:1.5px solid #93c5fd;
+  background:#ffffff;
+  box-shadow:0 0 0 4px rgba(191,219,254,.28);
+}
+
+.creation-priority-field input:focus{
+  border-color:#2563eb;
+  box-shadow:0 0 0 5px rgba(59,130,246,.18);
+}
+
+.creation-priority-field input.input-invalid{
+  border-color:#ef4444;
+  box-shadow:0 0 0 5px rgba(239,68,68,.16);
+}
+
+.creation-field-error{
+  display:none;
+  margin-top:6px;
+  color:#b91c1c;
+  font-size:13px;
+  font-weight:700;
+}
+
+.creation-field-error.visible{
+  display:block;
+}
+
+.creation-priority-badge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:4px 10px;
+  border-radius:999px;
+  background:#1d4ed8;
+  color:#fff;
+  font-size:11px;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+
 /* ================== CHECKBOX GROUP ================== */
 .checkbox-group{display:flex;gap:15px;flex-wrap:wrap}
 .checkbox-group label{padding:6px 10px;border-radius:8px;border:1px solid #e5e7eb;cursor:pointer;transition:.2s}
@@ -1581,6 +1668,16 @@ tr:hover{background:#f1f5f9}
   #creationSection .full{
     grid-column:1 / -1;
   }
+  #creationSection .creation-priority-field{
+    padding:12px;
+  }
+  #creationSection .creation-priority-field label{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  #creationSection .creation-priority-badge{
+    font-size:10px;
+  }
   #creationSection .caution-cin-rc-row{
     grid-template-columns:1fr;
   }
@@ -1929,10 +2026,88 @@ tr:hover{background:#f1f5f9}
   padding:10px 12px;
 }
 
-.audience-filter-row .search-box{
+.audience-filter-row .audience-search-shell{
   flex:0 1 560px;
   min-width:320px;
   max-width:560px;
+  position:relative;
+}
+
+.audience-filter-row .search-box{
+  width:100%;
+}
+
+.audience-search-suggestions{
+  position:absolute;
+  top:calc(100% + 8px);
+  left:0;
+  right:0;
+  z-index:30;
+  display:none;
+  padding:8px;
+  border:1px solid rgba(148,163,184,.22);
+  border-radius:18px;
+  background:rgba(255,255,255,.98);
+  box-shadow:0 18px 40px rgba(15,23,42,.12);
+  backdrop-filter:blur(10px);
+}
+
+.audience-search-suggestions:not([hidden]){
+  display:grid;
+  gap:6px;
+}
+
+.audience-search-suggestion{
+  display:grid;
+  gap:6px;
+  width:100%;
+  padding:11px 12px;
+  border:none;
+  border-radius:14px;
+  background:transparent;
+  text-align:left;
+  cursor:pointer;
+  transition:background .16s ease, transform .16s ease;
+}
+
+.audience-search-suggestion:hover,
+.audience-search-suggestion.active{
+  background:#eff6ff;
+  transform:translateY(-1px);
+}
+
+.audience-search-suggestion-title{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:#0f172a;
+  font-weight:800;
+}
+
+.audience-search-suggestion-title i{
+  color:#2563eb;
+}
+
+.audience-search-suggestion-meta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+
+.audience-search-suggestion-meta span{
+  padding:5px 9px;
+  border-radius:999px;
+  background:#f8fafc;
+  border:1px solid #dbeafe;
+  color:#334155;
+  font-size:12px;
+  line-height:1.35;
+}
+
+.audience-search-suggestion em{
+  font-style:italic;
+  color:#1d4ed8;
+  font-weight:700;
 }
 
 .audience-color-filter{
@@ -2165,6 +2340,7 @@ tr.color-purple-light{border-left:6px solid #c2410c;background:#ffcda8}
     grid-template-columns:1fr;
     gap:10px;
   }
+  #audienceSection .audience-filter-row .audience-search-shell,
   #audienceSection .audience-filter-row .search-box,
   #audienceSection .audience-color-filter{
     width:100%;
