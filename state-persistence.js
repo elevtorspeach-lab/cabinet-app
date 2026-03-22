@@ -1,3 +1,29 @@
+function buildPersistedStateSignature({
+  clients = [],
+  salleAssignments = [],
+  users = [],
+  audienceDraft: draft = {},
+  recycleBin = [],
+  recycleArchive = [],
+  importHistory = [],
+  version = Number.NaN,
+  updatedAt = ''
+} = {}){
+  const normalizedUpdatedAt = String(updatedAt || '').trim();
+  if(Number.isFinite(version) && version >= 0 && normalizedUpdatedAt){
+    return `remote:${version}:${normalizedUpdatedAt}`;
+  }
+  return buildStateSignature(
+    clients,
+    salleAssignments,
+    users,
+    draft,
+    recycleBin,
+    recycleArchive,
+    importHistory
+  );
+}
+
 function normalizePersistedStateSource(rawState){
   const loadedClients = Array.isArray(rawState?.clients)
     ? rawState.clients.map(client=>normalizeClient(client, { deep: false })).filter(Boolean)
@@ -13,19 +39,17 @@ function normalizePersistedStateSource(rawState){
   const loadedRecycleArchive = normalizeRecycleArchiveEntries(rawState?.recycleArchive);
   const loadedImportHistory = normalizeImportHistoryEntries(rawState?.importHistory);
   const nextUsers = ensureManagerUser(loadedUsers);
-  const rawVersion = Number(rawState?.version);
-  const rawUpdatedAt = String(rawState?.updatedAt || '').trim();
-  const nextSignature = Number.isFinite(rawVersion) && rawVersion >= 0 && rawUpdatedAt
-    ? `remote:${rawVersion}:${rawUpdatedAt}`
-    : buildStateSignature(
-      loadedClients,
-      loadedSalleAssignments,
-      nextUsers,
-      loadedDraft,
-      loadedRecycleBin,
-      loadedRecycleArchive,
-      loadedImportHistory
-    );
+  const nextSignature = buildPersistedStateSignature({
+    clients: loadedClients,
+    salleAssignments: loadedSalleAssignments,
+    users: nextUsers,
+    audienceDraft: loadedDraft,
+    recycleBin: loadedRecycleBin,
+    recycleArchive: loadedRecycleArchive,
+    importHistory: loadedImportHistory,
+    version: Number(rawState?.version),
+    updatedAt: rawState?.updatedAt
+  });
   return {
     clients: loadedClients,
     salleAssignments: loadedSalleAssignments,
@@ -113,15 +137,15 @@ async function applyPersistedStateSource(normalizedState, options = {}){
   AppState.recycleBin = normalizedState.recycleBin;
   AppState.recycleArchive = normalizedState.recycleArchive;
   AppState.importHistory = normalizedState.importHistory;
-  lastPersistedStateSignature = normalizedState.signature || buildStateSignature(
-    AppState.clients,
-    AppState.salleAssignments,
-    USERS,
+  lastPersistedStateSignature = normalizedState.signature || buildPersistedStateSignature({
+    clients: AppState.clients,
+    salleAssignments: AppState.salleAssignments,
+    users: USERS,
     audienceDraft,
-    AppState.recycleBin,
-    AppState.recycleArchive,
-    AppState.importHistory
-  );
+    recycleBin: AppState.recycleBin,
+    recycleArchive: AppState.recycleArchive,
+    importHistory: AppState.importHistory
+  });
   syncCurrentUserFromUsers();
 
   const cacheWrites = resolvePersistedStateCacheWrites(normalizedState, options);

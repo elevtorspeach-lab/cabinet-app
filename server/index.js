@@ -5,9 +5,11 @@ const fsp = require('fs/promises');
 const http = require('http');
 const https = require('https');
 const path = require('path');
+const { promisify } = require('util');
 const zlib = require('zlib');
 
 const app = express();
+const gzipAsync = promisify(zlib.gzip);
 const PORT = Number(process.env.PORT || 3000);
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 3443);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -60,8 +62,12 @@ let cachedStateSerialized = '';
 let cachedStateSerializedVersion = -1;
 let cachedStateGzip = null;
 let cachedStateGzipVersion = -1;
+let cachedStateGzipPromise = null;
 let cachedStateExportStats = null;
 let cachedStateExportStatsVersion = -1;
+let cachedStateCompressionToken = 0;
+let cachedScopedStatePayloads = new Map();
+let cachedPagedStateExportPayloads = new Map();
 let lastBackupSignature = '';
 let lastBackupAt = 0;
 const sseClients = new Set();
@@ -216,11 +222,20 @@ function verifyServerUserPassword(user, rawPassword) {
 }
 
 function createAuthSession(user) {
+  const clientIds = Array.isArray(user?.clientIds)
+    ? [...new Set(
+      user.clientIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    )].sort((a, b) => a - b)
+    : [];
   const token = crypto.randomBytes(32).toString('hex');
   const session = {
     token,
+    userId: Number(user?.id) || 0,
     username: String(user?.username || '').trim().toLowerCase(),
     role: String(user?.role || '').trim().toLowerCase(),
+    clientIds,
     issuedAt: Date.now(),
     expiresAt: Date.now() + AUTH_SESSION_TTL_MS
   };
@@ -359,8 +374,13 @@ function setCachedState(state) {
   cachedStateSerializedVersion = -1;
   cachedStateGzip = null;
   cachedStateGzipVersion = -1;
+  cachedStateGzipPromise = null;
   cachedStateExportStats = null;
   cachedStateExportStatsVersion = -1;
+  cachedStateCompressionToken += 1;
+  cachedScopedStatePayloads = new Map();
+  cachedPagedStateExportPayloads = new Map();
+  void warmCachedStateCompression(state).catch(() => {});
 }
 
 function getSerializedState(state) {
@@ -381,7 +401,7 @@ function getSerializedState(state) {
   return serialized;
 }
 
-function getGzipSerializedState(state) {
+function warmCachedStateCompression(state) {
   const version = Number(state?.version);
   if (
     cachedStateGzip
@@ -389,20 +409,131 @@ function getGzipSerializedState(state) {
     && Number.isFinite(version)
     && cachedStateGzipVersion === version
   ) {
-    return cachedStateGzip;
+    return Promise.resolve(cachedStateGzip);
   }
-  const gzipped = zlib.gzipSync(getSerializedState(state));
+  if (
+    cachedStateGzipPromise
+    && cachedStateGzipVersion >= 0
+    && Number.isFinite(version)
+    && cachedStateGzipVersion === version
+  ) {
+    return cachedStateGzipPromise;
+  }
+  const compressionToken = cachedStateCompressionToken;
+  const compressionPromise = gzipAsync(getSerializedState(state))
+    .then((gzipped) => {
+      if (
+        compressionToken === cachedStateCompressionToken
+        && Number.isFinite(version)
+        && version >= 0
+      ) {
+        cachedStateGzip = gzipped;
+        cachedStateGzipVersion = version;
+      }
+      if (cachedStateGzipPromise === compressionPromise) {
+        cachedStateGzipPromise = null;
+      }
+      return gzipped;
+    })
+    .catch((err) => {
+      if (cachedStateGzipPromise === compressionPromise) {
+        cachedStateGzipPromise = null;
+      }
+      throw err;
+    });
   if (Number.isFinite(version) && version >= 0) {
-    cachedStateGzip = gzipped;
     cachedStateGzipVersion = version;
   }
-  return gzipped;
+  cachedStateGzipPromise = compressionPromise;
+  return compressionPromise;
 }
 
 function clampPositiveInteger(value, fallback, max = Number.POSITIVE_INFINITY) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return fallback;
   return Math.max(0, Math.min(max, Math.floor(parsed)));
+}
+
+function getStateScopeKeyForSession(session) {
+  if (String(session?.role || '').trim().toLowerCase() !== 'client') return 'all';
+  const clientIds = Array.isArray(session?.clientIds)
+    ? session.clientIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b)
+    : [];
+  return clientIds.length ? `client:${clientIds.join(',')}` : 'client:none';
+}
+
+function buildScopedStatePayloadEntry(state, session) {
+  const scopeKey = getStateScopeKeyForSession(session);
+  if (scopeKey === 'all') return null;
+  const version = Number(state?.version);
+  const cacheKey = `${Number.isFinite(version) && version >= 0 ? version : 'na'}::${scopeKey}`;
+  const cachedEntry = cachedScopedStatePayloads.get(cacheKey);
+  if (cachedEntry) return cachedEntry;
+
+  const allowedClientIds = new Set(
+    Array.isArray(session?.clientIds)
+      ? session.clientIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+      : []
+  );
+  const scopedState = {
+    ...state,
+    clients: (Array.isArray(state?.clients) ? state.clients : []).filter((client) => (
+      allowedClientIds.has(Number(client?.id))
+    ))
+  };
+  const nextEntry = {
+    scopeKey,
+    state: scopedState,
+    serialized: '',
+    gzip: null,
+    gzipPromise: null,
+    exportStats: null
+  };
+  cachedScopedStatePayloads.set(cacheKey, nextEntry);
+  return nextEntry;
+}
+
+function getStateForSession(state, session) {
+  const scopedEntry = buildScopedStatePayloadEntry(state, session);
+  return scopedEntry ? scopedEntry.state : state;
+}
+
+function getSerializedStateForSession(state, session) {
+  const scopedEntry = buildScopedStatePayloadEntry(state, session);
+  if (!scopedEntry) return getSerializedState(state);
+  if (scopedEntry.serialized) return scopedEntry.serialized;
+  scopedEntry.serialized = JSON.stringify(scopedEntry.state);
+  return scopedEntry.serialized;
+}
+
+async function getGzipSerializedStateForSession(state, session) {
+  const scopedEntry = buildScopedStatePayloadEntry(state, session);
+  if (!scopedEntry) {
+    return warmCachedStateCompression(state);
+  }
+  if (scopedEntry.gzip) return scopedEntry.gzip;
+  if (scopedEntry.gzipPromise) return scopedEntry.gzipPromise;
+  const compressionPromise = gzipAsync(getSerializedStateForSession(state, session))
+    .then((gzipped) => {
+      if (scopedEntry.gzipPromise === compressionPromise) {
+        scopedEntry.gzipPromise = null;
+      }
+      scopedEntry.gzip = gzipped;
+      return gzipped;
+    })
+    .catch((err) => {
+      if (scopedEntry.gzipPromise === compressionPromise) {
+        scopedEntry.gzipPromise = null;
+      }
+      throw err;
+    });
+  scopedEntry.gzipPromise = compressionPromise;
+  return compressionPromise;
 }
 
 function extractJournalMutation(entry) {
@@ -444,16 +575,7 @@ function countClientDossiers(client) {
   return Array.isArray(client?.dossiers) ? client.dossiers.length : 0;
 }
 
-function getStateExportStats(state) {
-  const version = Number(state?.version);
-  if (
-    cachedStateExportStats
-    && cachedStateExportStatsVersion >= 0
-    && Number.isFinite(version)
-    && cachedStateExportStatsVersion === version
-  ) {
-    return cachedStateExportStats;
-  }
+function computeStateExportStats(state) {
   const clients = Array.isArray(state?.clients) ? state.clients : [];
   let dossierCount = 0;
   clients.forEach((client) => {
@@ -470,7 +592,7 @@ function getStateExportStats(state) {
       )
     )
     : STATE_EXPORT_PAGE_CLIENT_LIMIT_DEFAULT;
-  const stats = {
+  return {
     clientCount: clients.length,
     dossierCount,
     recommendedMode: clients.length >= STATE_EXPORT_PAGED_CLIENT_THRESHOLD || dossierCount >= STATE_EXPORT_PAGED_DOSSIER_THRESHOLD
@@ -478,6 +600,19 @@ function getStateExportStats(state) {
       : 'full',
     recommendedClientPageSize
   };
+}
+
+function getStateExportStats(state) {
+  const version = Number(state?.version);
+  if (
+    cachedStateExportStats
+    && cachedStateExportStatsVersion >= 0
+    && Number.isFinite(version)
+    && cachedStateExportStatsVersion === version
+  ) {
+    return cachedStateExportStats;
+  }
+  const stats = computeStateExportStats(state);
   if (Number.isFinite(version) && version >= 0) {
     cachedStateExportStats = stats;
     cachedStateExportStatsVersion = version;
@@ -485,8 +620,15 @@ function getStateExportStats(state) {
   return stats;
 }
 
-function buildStateExportMetadata(state) {
-  const stats = getStateExportStats(state);
+function getStateExportStatsForSession(state, session) {
+  const scopedEntry = buildScopedStatePayloadEntry(state, session);
+  if (!scopedEntry) return getStateExportStats(state);
+  if (scopedEntry.exportStats) return scopedEntry.exportStats;
+  scopedEntry.exportStats = computeStateExportStats(scopedEntry.state);
+  return scopedEntry.exportStats;
+}
+
+function buildStateExportMetadataFromStats(state, stats) {
   return {
     version: Number(state?.version) || 0,
     updatedAt: String(state?.updatedAt || new Date().toISOString()),
@@ -497,7 +639,15 @@ function buildStateExportMetadata(state) {
   };
 }
 
-function buildPagedStateExport(state, options = {}) {
+function buildStateExportMetadata(state) {
+  return buildStateExportMetadataFromStats(state, getStateExportStats(state));
+}
+
+function buildStateExportMetadataForSession(state, session) {
+  return buildStateExportMetadataFromStats(state, getStateExportStatsForSession(state, session));
+}
+
+function buildPagedStateExport(state, options = {}, exportMetadata = null) {
   const clients = Array.isArray(state?.clients) ? state.clients : [];
   const offset = clampPositiveInteger(options.offset, 0);
   const limit = Math.max(
@@ -512,7 +662,7 @@ function buildPagedStateExport(state, options = {}) {
   const pageClients = clients.slice(offset, offset + limit);
   const nextOffset = offset + pageClients.length;
   return {
-    ...buildStateExportMetadata(state),
+    ...(exportMetadata || buildStateExportMetadata(state)),
     mode: 'paged',
     offset,
     limit,
@@ -529,6 +679,36 @@ function buildPagedStateExport(state, options = {}) {
       importHistory: Array.isArray(state?.importHistory) ? state.importHistory : []
     } : null
   };
+}
+
+function buildPagedStateExportCacheKey(state, session, options = {}) {
+  const version = Number(state?.version);
+  const scopeKey = getStateScopeKeyForSession(session);
+  const offset = clampPositiveInteger(options.offset, 0);
+  const limit = Math.max(
+    1,
+    clampPositiveInteger(
+      options.limit,
+      STATE_EXPORT_PAGE_CLIENT_LIMIT_DEFAULT,
+      STATE_EXPORT_PAGE_CLIENT_LIMIT_MAX
+    )
+  );
+  const includeSharedState = options.includeSharedState !== false ? 1 : 0;
+  return `${Number.isFinite(version) && version >= 0 ? version : 'na'}::${scopeKey}::${offset}::${limit}::${includeSharedState}`;
+}
+
+function getPagedStateExportJson(state, session, options = {}) {
+  const cacheKey = buildPagedStateExportCacheKey(state, session, options);
+  const cachedPayload = cachedPagedStateExportPayloads.get(cacheKey);
+  if (cachedPayload) return cachedPayload;
+  const scopedState = getStateForSession(state, session);
+  const exportMetadata = buildStateExportMetadataForSession(state, session);
+  const payload = JSON.stringify({
+    ok: true,
+    ...buildPagedStateExport(scopedState, options, exportMetadata)
+  });
+  cachedPagedStateExportPayloads.set(cacheKey, payload);
+  return payload;
 }
 
 function buildJournalMutationEntry(savedState, mutation, options = {}) {
@@ -669,6 +849,31 @@ function buildConflictResponse(state) {
     version: Number(state?.version) || 0,
     updatedAt: state?.updatedAt || new Date().toISOString()
   };
+}
+
+function getRequestBodyObject(req) {
+  return req?.body && typeof req.body === 'object' ? req.body : {};
+}
+
+function sendJsonError(res, statusCode, code, fallbackMessage, err = null) {
+  return res.status(statusCode).json({
+    ok: false,
+    code,
+    message: err?.message || fallbackMessage
+  });
+}
+
+function sendConflictJson(res, state) {
+  return res.status(409).json(buildConflictResponse(state));
+}
+
+function sendVersionedOk(res, saved, extras = {}) {
+  return res.json({
+    ok: true,
+    version: saved?.version,
+    updatedAt: saved?.updatedAt,
+    ...extras
+  });
 }
 
 function sanitizePatchArray(value) {
@@ -1270,24 +1475,24 @@ app.post('/api/auth/bootstrap', async (req, res) => {
   await ensureDataFile();
   const state = await readState();
   if (!isBootstrapSetupRequired(state)) {
-    return res.status(409).json({ ok: false, code: 'BOOTSTRAP_ALREADY_CONFIGURED', message: 'Bootstrap account is already configured.' });
+    return sendJsonError(res, 409, 'BOOTSTRAP_ALREADY_CONFIGURED', 'Bootstrap account is already configured.');
   }
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = getRequestBodyObject(req);
   const username = String(body.username || DEFAULT_MANAGER_USERNAME).trim().toLowerCase();
   const password = normalizeLoginPassword(body.password || '');
   if (username !== DEFAULT_MANAGER_USERNAME) {
-    return res.status(400).json({ ok: false, code: 'INVALID_USERNAME', message: 'Bootstrap can only configure the manager account.' });
+    return sendJsonError(res, 400, 'INVALID_USERNAME', 'Bootstrap can only configure the manager account.');
   }
   const passwordPolicyError = getPasswordPolicyError(password);
   if (passwordPolicyError) {
-    return res.status(400).json({ ok: false, code: 'INVALID_PASSWORD', message: passwordPolicyError });
+    return sendJsonError(res, 400, 'INVALID_PASSWORD', passwordPolicyError);
   }
   const users = ensureManagerUser(getAuthUsersFromState(state));
   const managerIndex = users.findIndex(
     (user) => String(user?.username || '').trim().toLowerCase() === DEFAULT_MANAGER_USERNAME
   );
   if (managerIndex === -1) {
-    return res.status(500).json({ ok: false, code: 'BOOTSTRAP_MANAGER_MISSING', message: 'Bootstrap manager account is missing.' });
+    return sendJsonError(res, 500, 'BOOTSTRAP_MANAGER_MISSING', 'Bootstrap manager account is missing.');
   }
   users[managerIndex] = secureServerUserPassword(users[managerIndex], password, { requirePasswordChange: false });
   const saved = await writeState(
@@ -1297,10 +1502,7 @@ app.post('/api/auth/bootstrap', async (req, res) => {
     },
     { previousState: state }
   );
-  return res.json({
-    ok: true,
-    version: saved.version,
-    updatedAt: saved.updatedAt,
+  return sendVersionedOk(res, saved, {
     user: {
       username: DEFAULT_MANAGER_USERNAME,
       role: 'manager',
@@ -1311,22 +1513,18 @@ app.post('/api/auth/bootstrap', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   await ensureDataFile();
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = getRequestBodyObject(req);
   const username = String(body.username || '').trim().toLowerCase();
   const password = normalizeLoginPassword(body.password || '');
   const state = await readState();
   if (isBootstrapSetupRequired(state)) {
-    return res.status(428).json({
-      ok: false,
-      code: 'BOOTSTRAP_REQUIRED',
-      message: 'Initial manager password must be configured before login.'
-    });
+    return sendJsonError(res, 428, 'BOOTSTRAP_REQUIRED', 'Initial manager password must be configured before login.');
   }
   const user = getAuthUsersFromState(state).find(
     (entry) => String(entry?.username || '').trim().toLowerCase() === username
   );
   if (!user || !verifyServerUserPassword(user, password)) {
-    return res.status(401).json({ ok: false, code: 'INVALID_CREDENTIALS', message: 'Invalid username or password.' });
+    return sendJsonError(res, 401, 'INVALID_CREDENTIALS', 'Invalid username or password.');
   }
   const session = createAuthSession(user);
   return res.json({
@@ -1345,23 +1543,29 @@ app.use('/api/state', requireApiAuth);
 app.get('/api/state', async (req, res) => {
   await ensureDataFile();
   const state = await readState();
+  const scopedState = getStateForSession(state, req.authSession);
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
   if (acceptEncoding.includes('gzip')) {
     res.setHeader('Content-Encoding', 'gzip');
     res.setHeader('Vary', 'Accept-Encoding');
-    res.send(getGzipSerializedState(state));
+    res.send(await getGzipSerializedStateForSession(state, req.authSession));
     return;
   }
-  res.send(getSerializedState(state));
+  res.send(scopedState === state ? getSerializedState(state) : getSerializedStateForSession(state, req.authSession));
 });
 
 app.get('/api/state/meta', async (req, res) => {
   await ensureDataFile();
   const state = await readState();
+  const scopedState = getStateForSession(state, req.authSession);
   res.json({
     ok: true,
-    ...buildStateExportMetadata(state)
+    ...(
+      scopedState === state
+        ? buildStateExportMetadata(state)
+        : buildStateExportMetadataForSession(state, req.authSession)
+    )
   });
 });
 
@@ -1369,14 +1573,12 @@ app.get('/api/state/export-page', async (req, res) => {
   await ensureDataFile();
   const state = await readState();
   const includeSharedState = String(req.query.includeShared || '1').trim().toLowerCase() !== '0';
-  res.json({
-    ok: true,
-    ...buildPagedStateExport(state, {
-      offset: req.query.offset,
-      limit: req.query.limit,
-      includeSharedState
-    })
-  });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.send(getPagedStateExportJson(state, req.authSession, {
+    offset: req.query.offset,
+    limit: req.query.limit,
+    includeSharedState
+  }));
 });
 
 app.get('/api/state/changes', async (req, res) => {
@@ -1489,7 +1691,7 @@ app.post('/api/state', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const baseVersion = extractBaseVersion(body);
       const currentState = await readState();
@@ -1504,17 +1706,17 @@ app.post('/api/state', async (req, res) => {
       return { saved };
     });
     if (result?.conflict) {
-      return res.status(409).json(buildConflictResponse(result.state));
+      return sendConflictJson(res, result.state);
     }
-    res.json({ ok: true, version: result.saved.version, updatedAt: result.saved.updatedAt });
+    return sendVersionedOk(res, result.saved);
   } catch (err) {
-    res.status(500).json({ ok: false, code: 'STATE_SAVE_FAILED', message: err?.message || 'State save failed.' });
+    return sendJsonError(res, 500, 'STATE_SAVE_FAILED', 'State save failed.', err);
   }
 });
 
 app.post('/api/state/upload-chunk', async (req, res) => {
   cleanupChunkedUploads();
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = getRequestBodyObject(req);
   const uploadId = String(body.uploadId || '').trim();
   const sourceId = String(body._sourceId || '').trim();
   const baseVersion = extractBaseVersion(body);
@@ -1524,7 +1726,7 @@ app.post('/api/state/upload-chunk', async (req, res) => {
   const chunk = typeof body.chunk === 'string' ? body.chunk : '';
 
   if (!uploadId || !Number.isFinite(index) || !Number.isFinite(total) || total < 1 || index < 0 || index >= total) {
-    return res.status(400).json({ ok: false, code: 'INVALID_UPLOAD_CHUNK', message: 'Invalid chunk metadata.' });
+    return sendJsonError(res, 400, 'INVALID_UPLOAD_CHUNK', 'Invalid chunk metadata.');
   }
 
   let session = chunkedStateUploads.get(uploadId);
@@ -1543,17 +1745,17 @@ app.post('/api/state/upload-chunk', async (req, res) => {
 
   if (session.total !== total) {
     chunkedStateUploads.delete(uploadId);
-    return res.status(400).json({ ok: false, code: 'UPLOAD_TOTAL_MISMATCH', message: 'Chunk total mismatch.' });
+    return sendJsonError(res, 400, 'UPLOAD_TOTAL_MISMATCH', 'Chunk total mismatch.');
   }
 
   if (session.mode !== uploadMode) {
     chunkedStateUploads.delete(uploadId);
-    return res.status(400).json({ ok: false, code: 'UPLOAD_MODE_MISMATCH', message: 'Chunk mode mismatch.' });
+    return sendJsonError(res, 400, 'UPLOAD_MODE_MISMATCH', 'Chunk mode mismatch.');
   }
 
   if (session.baseVersion !== baseVersion) {
     chunkedStateUploads.delete(uploadId);
-    return res.status(400).json({ ok: false, code: 'UPLOAD_BASE_VERSION_MISMATCH', message: 'Chunk base version mismatch.' });
+    return sendJsonError(res, 400, 'UPLOAD_BASE_VERSION_MISMATCH', 'Chunk base version mismatch.');
   }
 
   if (session.chunks[index] === null) {
@@ -1587,20 +1789,11 @@ app.post('/api/state/upload-chunk', async (req, res) => {
       return { saved };
     });
     if (result?.conflict) {
-      return res.status(409).json(buildConflictResponse(result.state));
+      return sendConflictJson(res, result.state);
     }
-    return res.json({
-      ok: true,
-      complete: true,
-      version: result.saved.version,
-      updatedAt: result.saved.updatedAt
-    });
+    return sendVersionedOk(res, result.saved, { complete: true });
   } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      code: 'UPLOAD_FINALIZE_FAILED',
-      message: err?.message || 'Failed to finalize chunked upload.'
-    });
+    return sendJsonError(res, 500, 'UPLOAD_FINALIZE_FAILED', 'Failed to finalize chunked upload.', err);
   }
 });
 
@@ -1608,7 +1801,7 @@ app.post('/api/state/clients', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const currentState = await readState();
       const nextClientState = applyClientPatch(currentState, body);
@@ -1627,18 +1820,9 @@ app.post('/api/state/clients', async (req, res) => {
       });
       return { saved, patch: nextClientState.patch };
     });
-    res.json({
-      ok: true,
-      version: result.saved.version,
-      updatedAt: result.saved.updatedAt,
-      patch: result.patch
-    });
+    return sendVersionedOk(res, result.saved, { patch: result.patch });
   } catch (err) {
-    res.status(400).json({
-      ok: false,
-      code: 'INVALID_CLIENT_PATCH',
-      message: err?.message || 'Invalid client patch request.'
-    });
+    return sendJsonError(res, 400, 'INVALID_CLIENT_PATCH', 'Invalid client patch request.', err);
   }
 });
 
@@ -1646,7 +1830,7 @@ app.post('/api/state/users', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const baseVersion = extractBaseVersion(body);
       const currentState = await readState();
@@ -1670,11 +1854,11 @@ app.post('/api/state/users', async (req, res) => {
       return { saved };
     });
     if (result?.conflict) {
-      return res.status(409).json(buildConflictResponse(result.state));
+      return sendConflictJson(res, result.state);
     }
-    res.json({ ok: true, version: result.saved.version, updatedAt: result.saved.updatedAt });
+    return sendVersionedOk(res, result.saved);
   } catch (err) {
-    res.status(500).json({ ok: false, code: 'USERS_SAVE_FAILED', message: err?.message || 'Users save failed.' });
+    return sendJsonError(res, 500, 'USERS_SAVE_FAILED', 'Users save failed.', err);
   }
 });
 
@@ -1682,7 +1866,7 @@ app.post('/api/state/salle-assignments', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const baseVersion = extractBaseVersion(body);
       const currentState = await readState();
@@ -1706,11 +1890,11 @@ app.post('/api/state/salle-assignments', async (req, res) => {
       return { saved };
     });
     if (result?.conflict) {
-      return res.status(409).json(buildConflictResponse(result.state));
+      return sendConflictJson(res, result.state);
     }
-    res.json({ ok: true, version: result.saved.version, updatedAt: result.saved.updatedAt });
+    return sendVersionedOk(res, result.saved);
   } catch (err) {
-    res.status(500).json({ ok: false, code: 'SALLE_SAVE_FAILED', message: err?.message || 'Salle save failed.' });
+    return sendJsonError(res, 500, 'SALLE_SAVE_FAILED', 'Salle save failed.', err);
   }
 });
 
@@ -1718,7 +1902,7 @@ app.post('/api/state/audience-draft', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const baseVersion = extractBaseVersion(body);
       const currentState = await readState();
@@ -1744,11 +1928,11 @@ app.post('/api/state/audience-draft', async (req, res) => {
       return { saved };
     });
     if (result?.conflict) {
-      return res.status(409).json(buildConflictResponse(result.state));
+      return sendConflictJson(res, result.state);
     }
-    res.json({ ok: true, version: result.saved.version, updatedAt: result.saved.updatedAt });
+    return sendVersionedOk(res, result.saved);
   } catch (err) {
-    res.status(500).json({ ok: false, code: 'AUDIENCE_DRAFT_SAVE_FAILED', message: err?.message || 'Audience draft save failed.' });
+    return sendJsonError(res, 500, 'AUDIENCE_DRAFT_SAVE_FAILED', 'Audience draft save failed.', err);
   }
 });
 
@@ -1756,7 +1940,7 @@ app.post('/api/state/dossiers', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const saved = await persistJournalMutation({
         type: 'dossier',
@@ -1773,13 +1957,9 @@ app.post('/api/state/dossiers', async (req, res) => {
       });
       return { saved };
     });
-    res.json({ ok: true, version: result.saved.version, updatedAt: result.saved.updatedAt });
+    return sendVersionedOk(res, result.saved);
   } catch (err) {
-    res.status(400).json({
-      ok: false,
-      code: 'INVALID_DOSSIER_PATCH',
-      message: err?.message || 'Invalid dossier patch request.'
-    });
+    return sendJsonError(res, 400, 'INVALID_DOSSIER_PATCH', 'Invalid dossier patch request.', err);
   }
 });
 
@@ -1787,7 +1967,7 @@ app.post('/api/state/dossiers/batch', async (req, res) => {
   try {
     const result = await enqueueStateMutation(async () => {
       await ensureDataFile();
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const body = getRequestBodyObject(req);
       const sourceId = String(body?._sourceId || '').trim();
       const patches = Array.isArray(body?.patches)
         ? body.patches.filter((patch) => patch && typeof patch === 'object')
@@ -1813,18 +1993,9 @@ app.post('/api/state/dossiers/batch', async (req, res) => {
       });
       return { saved, count: patches.length };
     });
-    res.json({
-      ok: true,
-      version: result.saved.version,
-      updatedAt: result.saved.updatedAt,
-      count: result.count
-    });
+    return sendVersionedOk(res, result.saved, { count: result.count });
   } catch (err) {
-    res.status(400).json({
-      ok: false,
-      code: 'INVALID_DOSSIER_PATCH_BATCH',
-      message: err?.message || 'Invalid dossier patch batch request.'
-    });
+    return sendJsonError(res, 400, 'INVALID_DOSSIER_PATCH_BATCH', 'Invalid dossier patch batch request.', err);
   }
 });
 

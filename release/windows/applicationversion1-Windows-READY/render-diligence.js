@@ -1,5 +1,53 @@
 const DILIGENCE_EMPTY_MESSAGE = 'Aucun dossier ASS/SFDC/S-bien/Injonction trouvé.';
 const DILIGENCE_LOADING_MESSAGE = 'Recherche diligence en cours...';
+
+function getDiligenceFilterStateKey(query){
+  return [
+    query,
+    filterDiligenceProcedure,
+    filterDiligenceSort,
+    filterDiligenceDelegation,
+    filterDiligenceOrdonnance,
+    filterDiligenceTribunal,
+    filterDiligenceCheckedFirst ? 'checked-first' : 'default'
+  ].join('||');
+}
+
+function buildDiligenceStatusRowHtml(message, colCount = getDiligenceColCount()){
+  return `<tr><td colspan="${colCount}" class="diligence-empty">${message}</td></tr>`;
+}
+
+function buildDiligenceStatusRowKey(prefix, colCount = getDiligenceColCount()){
+  return `${prefix}::${colCount}`;
+}
+
+function setDiligenceStatusRow(body, message, keyPrefix, colCount = getDiligenceColCount()){
+  setElementHtmlWithRenderKey(
+    body,
+    buildDiligenceStatusRowHtml(message, colCount),
+    buildDiligenceStatusRowKey(keyPrefix, colCount)
+  );
+}
+
+function buildDiligenceCountLabel(totalRows){
+  const labels = [];
+  labels.push(filterDiligenceProcedure === 'all' ? 'toutes les procédures' : `procédure: ${filterDiligenceProcedure}`);
+  labels.push(filterDiligenceSort === 'all' ? 'tous les sorts' : `sort: ${filterDiligenceSort}`);
+  labels.push(filterDiligenceDelegation === 'all' ? 'toutes les délégations' : `délégation: ${filterDiligenceDelegation}`);
+  labels.push(filterDiligenceOrdonnance === 'all' ? 'toutes les ordonnances' : `ordonnance: ${getDiligenceOrdonnanceLabel(filterDiligenceOrdonnance)}`);
+  labels.push(filterDiligenceTribunal === 'all' ? 'tous les tribunaux' : `tribunal: ${filterDiligenceTribunal}`);
+  return `${totalRows} ligne(s) diligence (${labels.join(', ')})`;
+}
+
+function renderDiligenceRowsHtml(rows){
+  return rows.map(row=>renderDiligenceRowHtml(row)).join('');
+}
+
+function maybeApplyDiligenceAutoSizing(root = document){
+  if(isVeryLargeLiveSyncMode()) return;
+  applyDiligenceAutoSizing(root);
+}
+
 function shouldShowDiligenceAssColumns(rows){
   if(isDiligenceAssProcedure(filterDiligenceProcedure)) return true;
   const list = Array.isArray(rows) ? rows : [];
@@ -126,11 +174,7 @@ function renderDiligenceVirtualWindow(force = false){
   const colCount = getDiligenceColCount();
   if(!rows.length){
     diligenceVirtualLastRange = { start: -1, end: -1 };
-    setElementHtmlWithRenderKey(
-      body,
-      `<tr><td colspan="${colCount}" class="diligence-empty">${DILIGENCE_EMPTY_MESSAGE}</td></tr>`,
-      `diligence-empty::${colCount}`
-    );
+    setDiligenceStatusRow(body, DILIGENCE_EMPTY_MESSAGE, 'diligence-empty', colCount);
     return;
   }
   const { start, end } = getVirtualWindowByContainer('diligenceTableContainer', rows.length);
@@ -145,12 +189,9 @@ function renderDiligenceVirtualWindow(force = false){
   const bottomSpacer = bottomHeight > 0
     ? `<tr class="virtual-spacer"><td colspan="${colCount}" style="height:${bottomHeight}px"></td></tr>`
     : '';
-  const rowsHtml = rows
-    .slice(start, end)
-    .map(row=>renderDiligenceRowHtml(row))
-    .join('');
+  const rowsHtml = renderDiligenceRowsHtml(rows.slice(start, end));
   body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
-  applyDiligenceAutoSizing(body);
+  maybeApplyDiligenceAutoSizing(body);
 }
 
 function queueDiligenceVirtualRender(){
@@ -163,6 +204,12 @@ function queueDiligenceVirtualRender(){
 
 function orderDiligenceRowsByCheckedSelection(rows){
   if(!filterDiligenceCheckedFirst || !Array.isArray(rows) || rows.length < 2) return rows;
+  if(
+    rows === diligenceCheckedOrderedRowsCacheInput
+    && diligenceCheckedOrderedRowsCacheVersion === diligencePrintSelectionVersion
+  ){
+    return diligenceCheckedOrderedRowsCacheOutput;
+  }
   const checkedRows = [];
   const otherRows = [];
   rows.forEach(row=>{
@@ -172,21 +219,17 @@ function orderDiligenceRowsByCheckedSelection(rows){
       otherRows.push(row);
     }
   });
-  return checkedRows.concat(otherRows);
+  const out = checkedRows.concat(otherRows);
+  diligenceCheckedOrderedRowsCacheInput = rows;
+  diligenceCheckedOrderedRowsCacheVersion = diligencePrintSelectionVersion;
+  diligenceCheckedOrderedRowsCacheOutput = out;
+  return out;
 }
 
 function renderDiligence(options = {}){
   if(!shouldRenderDeferredSection('diligence', options)) return;
   const diligenceQuery = normalizeDiligenceSearchQuery($('diligenceSearchInput')?.value || '');
-  const diligenceFilterStateKey = [
-    diligenceQuery,
-    filterDiligenceProcedure,
-    filterDiligenceSort,
-    filterDiligenceDelegation,
-    filterDiligenceOrdonnance,
-    filterDiligenceTribunal,
-    filterDiligenceCheckedFirst ? 'checked-first' : 'default'
-  ].join('||');
+  const diligenceFilterStateKey = getDiligenceFilterStateKey(diligenceQuery);
   syncPaginationFilterState(
     'diligence',
     diligenceFilterStateKey
@@ -222,24 +265,13 @@ function renderDiligence(options = {}){
     }
 
     if(count){
-      const labels = [];
-      labels.push(filterDiligenceProcedure === 'all' ? 'toutes les procédures' : `procédure: ${filterDiligenceProcedure}`);
-      labels.push(filterDiligenceSort === 'all' ? 'tous les sorts' : `sort: ${filterDiligenceSort}`);
-      labels.push(filterDiligenceDelegation === 'all' ? 'toutes les délégations' : `délégation: ${filterDiligenceDelegation}`);
-      labels.push(filterDiligenceOrdonnance === 'all' ? 'toutes les ordonnances' : `ordonnance: ${getDiligenceOrdonnanceLabel(filterDiligenceOrdonnance)}`);
-      labels.push(filterDiligenceTribunal === 'all' ? 'tous les tribunaux' : `tribunal: ${filterDiligenceTribunal}`);
-      const label = labels.join(', ');
-      setElementTextIfChanged(count, `${orderedRows.length} ligne(s) diligence (${label})`);
+      setElementTextIfChanged(count, buildDiligenceCountLabel(orderedRows.length));
     }
 
     if(!orderedRows.length){
       diligenceVirtualRows = [];
       diligenceVirtualLastRange = { start: -1, end: -1 };
-      setElementHtmlWithRenderKey(
-        body,
-        `<tr><td colspan="${colCount}" class="diligence-empty">${DILIGENCE_EMPTY_MESSAGE}</td></tr>`,
-        `diligence-empty::${colCount}`
-      );
+      setDiligenceStatusRow(body, DILIGENCE_EMPTY_MESSAGE, 'diligence-empty', colCount);
       renderPagination('diligence', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
       updateDiligenceCheckedCount();
       return;
@@ -254,7 +286,7 @@ function renderDiligence(options = {}){
     }else{
       setElementHtmlWithRenderKey(
         body,
-        pageData.rows.map(row=>renderDiligenceRowHtml(row)).join(''),
+        renderDiligenceRowsHtml(pageData.rows),
         [
           'diligence-rows',
           audienceRowsRawDataVersion,
@@ -266,10 +298,28 @@ function renderDiligence(options = {}){
         ].join('::'),
         { trustRenderKey: true }
       );
-      applyDiligenceAutoSizing(body);
+      maybeApplyDiligenceAutoSizing(body);
     }
     renderPagination('diligence', pageData);
     updateDiligenceCheckedCount();
+  };
+  const queueFinalizeDiligenceRender = (rows, expectedStateKey = diligenceFilterStateKey, expectedRequestId = null)=>{
+    const run = ()=>{
+      const currentStateKey = getDiligenceFilterStateKey(
+        normalizeDiligenceSearchQuery($('diligenceSearchInput')?.value || '')
+      );
+      if(currentStateKey !== expectedStateKey) return;
+      if(expectedRequestId !== null && expectedRequestId !== diligenceFilterRequestSeq) return;
+      finalizeDiligenceRender(rows);
+    };
+    if(!shouldDeferHeavySectionRender(rows.length, options)){
+      run();
+      return;
+    }
+    scheduleDeferredSectionRender('diligence', run, {
+      delayMs: 70,
+      onPending: ()=>setDiligenceStatusRow(body, DILIGENCE_LOADING_MESSAGE, 'diligence-loading')
+    });
   };
 
   if(diligenceQuery && allRows.length >= 1200 && !!getDiligenceFilterWorker()){
@@ -286,11 +336,7 @@ function renderDiligence(options = {}){
       return true;
     });
     const requestId = ++diligenceFilterRequestSeq;
-    setElementHtmlWithRenderKey(
-      body,
-      `<tr><td colspan="${getDiligenceColCount()}" class="diligence-empty">${DILIGENCE_LOADING_MESSAGE}</td></tr>`,
-      `diligence-loading::${getDiligenceColCount()}`
-    );
+    setDiligenceStatusRow(body, DILIGENCE_LOADING_MESSAGE, 'diligence-loading');
     runDiligenceFilterInWorker(
       narrowedRows.map((row, idx)=>({
         idx,
@@ -302,29 +348,23 @@ function renderDiligence(options = {}){
       { executionOnlyQuery }
     )
       .then((filteredIndexes)=>{
-        const currentStateKey = [
-          normalizeDiligenceSearchQuery($('diligenceSearchInput')?.value || ''),
-          filterDiligenceProcedure,
-          filterDiligenceSort,
-          filterDiligenceDelegation,
-          filterDiligenceOrdonnance,
-          filterDiligenceTribunal,
-          filterDiligenceCheckedFirst ? 'checked-first' : 'default'
-        ].join('||');
+        const currentStateKey = getDiligenceFilterStateKey(
+          normalizeDiligenceSearchQuery($('diligenceSearchInput')?.value || '')
+        );
         if(requestId !== diligenceFilterRequestSeq) return;
         if(currentStateKey !== diligenceFilterStateKey) return;
         if(!Array.isArray(filteredIndexes)){
-          finalizeDiligenceRender(getFilteredDiligenceRows(allRows));
+          queueFinalizeDiligenceRender(getFilteredDiligenceRows(allRows), diligenceFilterStateKey, requestId);
           return;
         }
-        finalizeDiligenceRender(filteredIndexes.map(idx=>narrowedRows[idx]).filter(Boolean));
+        queueFinalizeDiligenceRender(filteredIndexes.map(idx=>narrowedRows[idx]).filter(Boolean), diligenceFilterStateKey, requestId);
       })
       .catch(()=>{
         if(requestId !== diligenceFilterRequestSeq) return;
-        finalizeDiligenceRender(getFilteredDiligenceRows(allRows));
+        queueFinalizeDiligenceRender(getFilteredDiligenceRows(allRows), diligenceFilterStateKey, requestId);
       });
     return;
   }
 
-  finalizeDiligenceRender(getFilteredDiligenceRows(allRows));
+  queueFinalizeDiligenceRender(getFilteredDiligenceRows(allRows));
 }

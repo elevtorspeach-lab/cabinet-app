@@ -16,6 +16,10 @@ const LOGIN_LOCKOUT_MS = 2 * 60 * 1000;
 const PASSWORD_SETUP_MODE_FORCED = 'forced';
 const PASSWORD_SETUP_MODE_BOOTSTRAP_LOCAL = 'bootstrap-local';
 const PASSWORD_SETUP_MODE_BOOTSTRAP_REMOTE = 'bootstrap-remote';
+const STANDARD_TEAM_TOTAL_MANAGERS = 2;
+const STANDARD_TEAM_TOTAL_ADMINS = 10;
+const STANDARD_TEAM_TOTAL_CLIENTS = 9;
+const STANDARD_TEAM_DEFAULT_PASSWORD = '1234';
 
 function buildSeedUsers(){
   return [
@@ -61,6 +65,12 @@ let suiviTribunalAliasMap = new Map();
 let suiviTribunalLabelMap = new Map();
 let suiviPrintSelection = new Set();
 let suiviPrintSelectionVersion = 0;
+let lastSuiviRenderedRows = [];
+let lastSuiviRenderedPageRows = [];
+let lastSuiviRenderedStateKey = '';
+let lastSuiviRenderedPage = 1;
+let lastSuiviRenderedRowKeySet = new Set();
+let lastSuiviRenderedSelectedCount = 0;
 let filterDiligenceProcedure = 'all';
 let filterDiligenceSort = 'all';
 let filterDiligenceDelegation = 'all';
@@ -81,6 +91,7 @@ let editingOriginalProcedures = [];
 let customProcedures = [];
 let suppressProcedureChange = false;
 let currentUser = null;
+let currentView = '';
 let editingTeamUserId = null;
 let dashboardCalendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 let procedureMontantGroups = [];
@@ -163,6 +174,11 @@ let lastRemoteAppliedCacheWriteAt = 0;
 let lastAutoBackupAt = 0;
 let lastAutoBackupSignature = '';
 let lastAudienceRenderedRows = [];
+let lastAudienceRenderedPageRows = [];
+let lastAudienceRenderedStateKey = '';
+let lastAudienceRenderedPage = 1;
+let lastAudienceRenderedRowKeySet = new Set();
+let lastAudienceRenderedSelectedCount = 0;
 let audienceVirtualRows = [];
 let audienceVirtualDuplicateKeySet = new Set();
 let audienceVirtualLastRange = { start: -1, end: -1 };
@@ -194,7 +210,11 @@ let audienceErrorRowsCacheOutput = [];
 let audienceSelectedExportRowsCacheInput = null;
 let audienceSelectedExportRowsCacheVersion = -1;
 let audienceSelectedExportRowsCacheOutput = [];
+let audienceSelectionCountRowsRef = null;
+let audienceSelectionCountVersion = -1;
+let audienceSelectionCountValue = 0;
 let sidebarSalleRenderTimer = null;
+let sidebarSalleRenderSeq = 0;
 let indexedDbOpenPromise = null;
 let suiviVirtualRows = [];
 let suiviVirtualLastRange = { start: -1, end: -1 };
@@ -206,6 +226,15 @@ let suiviFilterOptionsRowsMetaRef = null;
 let suiviFilteredRowsCacheSource = null;
 let suiviFilteredRowsCacheKey = '';
 let suiviFilteredRowsCacheOutput = [];
+let suiviCheckedOrderedRowsCacheInput = null;
+let suiviCheckedOrderedRowsCacheVersion = -1;
+let suiviCheckedOrderedRowsCacheOutput = [];
+let suiviSelectionCountRowsRef = null;
+let suiviSelectionCountVersion = -1;
+let suiviSelectionCountValue = 0;
+let suiviSelectedExportRowsCacheInput = null;
+let suiviSelectedExportRowsCacheVersion = -1;
+let suiviSelectedExportRowsCacheOutput = [];
 let diligenceVirtualRows = [];
 let diligenceVirtualLastRange = { start: -1, end: -1 };
 let diligenceVirtualRafId = null;
@@ -217,6 +246,9 @@ let diligenceRowsCacheViewerKey = '';
 let diligenceFilteredRowsCacheInput = null;
 let diligenceFilteredRowsCacheKey = '';
 let diligenceFilteredRowsCacheOutput = [];
+let diligenceCheckedOrderedRowsCacheInput = null;
+let diligenceCheckedOrderedRowsCacheVersion = -1;
+let diligenceCheckedOrderedRowsCacheOutput = [];
 let diligenceFilterProcedureRowsRef = null;
 let diligenceFilterTribunalRowsRef = null;
 let diligenceFilterSortRowsRef = null;
@@ -411,8 +443,13 @@ const IMPORT_STATUS_THROTTLE_MS = 120;
 const AUDIENCE_VIRTUAL_MIN_ROWS = 40;
 const AUDIENCE_VIRTUAL_ROW_HEIGHT = 56;
 const AUDIENCE_VIRTUAL_OVERSCAN = 10;
+const SALLE_SIDEBAR_SESSION_RENDER_LIMIT = 18;
+const SALLE_SIDEBAR_SESSION_RENDER_LIMIT_VERY_LARGE = 8;
 const AUDIENCE_DEFAULT_SORT_MAX_ROWS = 60000;
 const STYLED_XLSX_MAX_ROWS = 12000;
+const AUDIENCE_REGULAR_EXPORT_CSV_THRESHOLD = 40000;
+const SELECTED_EXPORT_CSV_THRESHOLD = 200;
+const SALLE_EXPORT_CSV_THRESHOLD = 250;
 const LARGE_DATASET_VISIBLE_CLIENTS_THRESHOLD = 300;
 const LARGE_DATASET_DOSSIERS_THRESHOLD = 30000;
 const ULTRA_LARGE_DATASET_VISIBLE_CLIENTS_THRESHOLD = 450;
@@ -464,6 +501,9 @@ const XLSX_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/xlsx.full.min.js' : '/v
 const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/vendor/libs/exceljs.min.js';
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 const EXCELJS_CDN_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+const AUDIENCE_EXPORT_HEADER_IMAGE_URL = IS_FILE_PROTOCOL ? './assets/audience-export-header.jpeg' : '/assets/audience-export-header.jpeg';
+const AUDIENCE_EXPORT_TEMPLATE_URL = IS_FILE_PROTOCOL ? './assets/audience-export-template.xlsx' : '/assets/audience-export-template.xlsx';
+const AUDIENCE_EXPORT_HEADER_IMAGE_DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAlgCWAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAElBLoDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9U6KKKACiiigAooooAKKKKACiiigAooooAKKKKAMrxB4V0nxXarbavYQ6hAp3COYZAPrXmnir9k34Y+KrWWJ/DVvp08gwbqx+SUficj9K9goranWq0vgk18zGpRpVfjin8j8s/wBpf9lnU/gfeJf2kj6j4buH2xXWPmjbsj+/XmvA6/Z/4neBbP4keBdX8PXyr5V5AyK5GTG2OGHoR61+OPiLRp/D+tXmn3MZint5WjZG6gg4r7zKsdLF03Gp8UfxPg81wMcJUUqfwy/AzqKKVfvD617Z4h9Kfso/spj41NPreuTzWfh22fywIcCS4fuFY5wBjnjvX2xof7Knwu0KJFTwnZ3cqjHn3QLv+dc1+wzJDJ+z1pPkAAC6uA2P72/mvoCvz7McbXnXnBSaSdrI/QcuwVCGHhNxTbV7sxfDfg3RPB8MkWi6bBpscmN6wLgNjpW1RRXiOTk7tntpKKskFFFFIYUUUUAFZviTW7fw3oGoapdyCK3tYWldz2wK0q+df25vH3/CI/Bi406Jv9I1mUWhQHB8vBZm/wDHR+ddGHouvWjSXVnPiKyoUZVX0R+b/jjxPceL/GGqa1efNcXlw00nuSf8K/Tv9j74lH4jfBrTftEqvqOlj7FOoP3VXIj/ADUCvymJyc19V/sA/Ez/AIRn4kTeG7mYR2OtR7UX+9cKRs/QtX3ea4ZVcK+Vax1X9eh8JlWJdLFLmektH/Xqfo7RRRX54foYUUUUAFMmhS4heKRQ8bjaynoR6U+igDir74L+B9TDC68M2E4Y5O+M8/rXHeIP2Q/hbr0LovhqHTHccyWJKN9ec17NRXRHEVoO8ZtfM55YejUVpQT+R8NfFT/gneLexlu/A+qSXEkYLCxvyC8nsrgAD8a+K9e0G+8NarcadqVtJaXlu5jkikXBUg9K/bmvhP8A4KJ/DuxtdQ8PeJrKBY76/MltdFRjft2lWwOp+Y19RleZ1atVUKzvfZny+aZZSpUnXoq1t0fG3hzw3qXizV7fTNKtJb29nbYkUSliTX2j8Kf+CeIltIbzxzqbwSOAx0+wK74z6M/IP4V6n+xz+zvbfC/wjB4g1a2R/EupR+Zl1ybaI8qqn1IwSffFfSNZZhm8+d0sO7Jde/obZflEORVcQrt9O3qeP6H+yX8LdEhRT4Vtb+Rek15l3/pXf+GPh/4c8Fs7aHo9tphcbW+zrjI9K6Givm516tT45N/M+jhQpU/ggl8gooorA3CiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACvy6/be8B/8Id8btRuUQiHV0W/XA+UZJUgfiv61+ot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NH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABP/2Q==';
 const CLIENT_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/client-filter.worker.js' : '/workers/client-filter.worker.js';
 const AUDIENCE_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/audience-filter.worker.js' : '/workers/audience-filter.worker.js';
 const SUIVI_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/suivi-filter.worker.js' : '/workers/suivi-filter.worker.js';
@@ -476,16 +516,24 @@ let clientFilterWorkerFailed = false;
 let clientFilterRequestSeq = 0;
 let clientDeferredRenderTimer = null;
 let clientDeferredRenderSeq = 0;
+let dashboardDeferredRenderTimer = null;
+let dashboardDeferredRenderSeq = 0;
 let audienceFilterWorker = null;
 let audienceFilterWorkerFailed = false;
 let audienceFilterRequestSeq = 0;
 let audienceDeferredRenderTimer = null;
 let audienceDeferredRenderSeq = 0;
+let audienceExportHeaderImageDataUrlPromise = null;
+let audienceExportTemplateArrayBufferPromise = null;
 let suiviFilterWorker = null;
 let suiviFilterWorkerFailed = false;
 let suiviFilterRequestSeq = 0;
 let suiviDeferredRenderTimer = null;
 let suiviDeferredRenderSeq = 0;
+let salleDeferredRenderTimer = null;
+let salleDeferredRenderSeq = 0;
+let diligenceDeferredRenderTimer = null;
+let diligenceDeferredRenderSeq = 0;
 let diligenceFilterWorker = null;
 let diligenceFilterWorkerFailed = false;
 let diligenceFilterRequestSeq = 0;
@@ -998,10 +1046,28 @@ function invalidateDerivedCaches(options = {}){
   suiviFilteredRowsCacheSource = null;
   suiviFilteredRowsCacheKey = '';
   suiviFilteredRowsCacheOutput = [];
+  suiviCheckedOrderedRowsCacheInput = null;
+  suiviCheckedOrderedRowsCacheVersion = -1;
+  suiviCheckedOrderedRowsCacheOutput = [];
+  suiviSelectionCountRowsRef = null;
+  suiviSelectionCountVersion = -1;
+  suiviSelectionCountValue = 0;
+  suiviSelectedExportRowsCacheInput = null;
+  suiviSelectedExportRowsCacheVersion = -1;
+  suiviSelectedExportRowsCacheOutput = [];
+  lastSuiviRenderedRows = [];
+  lastSuiviRenderedPageRows = [];
+  lastSuiviRenderedStateKey = '';
+  lastSuiviRenderedPage = 1;
+  lastSuiviRenderedRowKeySet = new Set();
+  lastSuiviRenderedSelectedCount = 0;
   diligenceRowsCache = null;
   diligenceFilteredRowsCacheInput = null;
   diligenceFilteredRowsCacheKey = '';
   diligenceFilteredRowsCacheOutput = [];
+  diligenceCheckedOrderedRowsCacheInput = null;
+  diligenceCheckedOrderedRowsCacheVersion = -1;
+  diligenceCheckedOrderedRowsCacheOutput = [];
   diligenceFilterProcedureRowsRef = null;
   diligenceFilterTribunalRowsRef = null;
   diligenceFilterSortRowsRef = null;
@@ -1048,6 +1114,15 @@ function markAudienceRowsCacheDirty(){
   audienceSelectedExportRowsCacheInput = null;
   audienceSelectedExportRowsCacheVersion = -1;
   audienceSelectedExportRowsCacheOutput = [];
+  lastAudienceRenderedRows = [];
+  lastAudienceRenderedPageRows = [];
+  lastAudienceRenderedStateKey = '';
+  lastAudienceRenderedPage = 1;
+  lastAudienceRenderedRowKeySet = new Set();
+  lastAudienceRenderedSelectedCount = 0;
+  audienceSelectionCountRowsRef = null;
+  audienceSelectionCountVersion = -1;
+  audienceSelectionCountValue = 0;
   diligenceSelectedExportRowsCacheInput = null;
   diligenceSelectedExportRowsCacheVersion = -1;
   diligenceSelectedExportRowsCacheOutput = [];
@@ -1064,6 +1139,9 @@ function markAudienceColorCachesDirty(){
   audienceFilteredRowsCacheInput = null;
   audienceFilteredRowsCacheKey = '';
   audienceFilteredRowsCacheOutput = [];
+  audienceSelectionCountRowsRef = null;
+  audienceSelectionCountVersion = -1;
+  audienceSelectionCountValue = 0;
 }
 
 function markNonAudienceDossierCachesDirty(){
@@ -1391,16 +1469,43 @@ function refreshVisibleSectionsAfterRemoteSync(sectionKeys = null){
     ? new Set(sectionKeys.map(key=>String(key || '').trim()).filter(Boolean))
     : null;
   const shouldRender = (key)=>visibleKeys.has(key) && (!requestedKeys || requestedKeys.has(key));
+  const shouldUseDeferredHeavyRender = isLargeDatasetMode() || importInProgress || heavyUiOperationCount > 0;
+  const queueDeferredRemoteSectionRender = (sectionKey, renderFn, delayMs = 60)=>{
+    if(!shouldUseDeferredHeavyRender) return false;
+    return scheduleDeferredSectionRender(sectionKey, renderFn, { delayMs });
+  };
   if(shouldRender('dashboard')){
     const lightRefresh = remoteDashboardLightRefreshPending;
     remoteDashboardLightRefreshPending = false;
-    renderDashboard(lightRefresh ? { includeAudienceMetrics: false } : {});
+    if(!queueDeferredRemoteSectionRender('dashboard', ()=>renderDashboard(lightRefresh ? { includeAudienceMetrics: false } : {}), 50)){
+      renderDashboard(lightRefresh ? { includeAudienceMetrics: false } : {});
+    }
   }
-  if(shouldRender('clients')) renderClients();
-  if(shouldRender('suivi')) renderSuivi();
-  if(shouldRender('audience')) renderAudience();
-  if(shouldRender('diligence')) renderDiligence();
-  if(shouldRender('salle')) renderSalle();
+  if(shouldRender('clients')){
+    if(!queueDeferredRemoteSectionRender('clients', ()=>renderClients(), 50)){
+      renderClients();
+    }
+  }
+  if(shouldRender('suivi')){
+    if(!queueDeferredRemoteSectionRender('suivi', ()=>renderSuivi(), 70)){
+      renderSuivi();
+    }
+  }
+  if(shouldRender('audience')){
+    if(!queueDeferredRemoteSectionRender('audience', ()=>renderAudience(), 70)){
+      renderAudience();
+    }
+  }
+  if(shouldRender('diligence')){
+    if(!queueDeferredRemoteSectionRender('diligence', ()=>renderDiligence(), 70)){
+      renderDiligence();
+    }
+  }
+  if(shouldRender('salle')){
+    if(!queueDeferredRemoteSectionRender('salle', ()=>renderSalle(), 80)){
+      renderSalle();
+    }
+  }
   if(shouldRender('equipe')) renderEquipe();
   if(shouldRender('recycle')) renderRecycleBin();
   if(shouldRender('creation')) updateClientDropdown();
@@ -1896,7 +2001,12 @@ function finalizeRemoteStateUpdateLocally(options = {}){
   lastRemoteStateLoadVersion = remoteStateVersion;
   lastRemoteStateLoadUpdatedAt = remoteStateUpdatedAt;
   syncCurrentUserFromUsers();
-  markDeferredRenderDirty(...refreshSections, ...secondaryRefreshSections, 'clientDropdown');
+  const shouldRefreshClientDropdown = options.refreshClientDropdown === true || refreshSections.includes('clients') || secondaryRefreshSections.includes('clients');
+  if(shouldRefreshClientDropdown){
+    markDeferredRenderDirty(...refreshSections, ...secondaryRefreshSections, 'clientDropdown');
+  }else{
+    markDeferredRenderDirty(...refreshSections, ...secondaryRefreshSections);
+  }
   queueRemoteSyncRender(refreshSections);
   if(secondaryRefreshSections.length){
     queueRemoteSyncRender(secondaryRefreshSections, {
@@ -2379,6 +2489,24 @@ function yieldToMainThread(){
   return new Promise(resolve=>setTimeout(resolve, 0));
 }
 
+function promiseWithTimeout(promise, timeoutMs, label = 'Operation'){
+  const safeTimeoutMs = Math.max(1000, Number(timeoutMs) || 0);
+  return new Promise((resolve, reject)=>{
+    const timer = setTimeout(()=>{
+      reject(new Error(`${label} timeout`));
+    }, safeTimeoutMs);
+    Promise.resolve(promise)
+      .then((value)=>{
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err)=>{
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 async function runChunked(items, task, options = {}){
   const list = Array.isArray(items) ? items : [];
   const chunkSize = Math.max(1, Number(options.chunkSize) || IMPORT_CHUNK_SIZE);
@@ -2410,6 +2538,13 @@ function makeProgressReporter(prefix){
     lastAt = now;
     updateImportProgress(prefix, done, total);
   };
+}
+
+function shouldPreferSelectedExportCsvPath(rowCount = 0){
+  const totalRows = Math.max(0, Number(rowCount) || 0);
+  if(totalRows <= 0) return false;
+  if(totalRows >= STYLED_XLSX_MAX_ROWS) return true;
+  return isVeryLargeLiveSyncMode() && totalRows >= SELECTED_EXPORT_CSV_THRESHOLD;
 }
 
 function getRenderForSection(section){
@@ -2578,6 +2713,38 @@ function makeSuiviPrintKey(clientId, dossierIndex){
   return `${Number(clientId) || 0}::${Number(dossierIndex) || 0}`;
 }
 
+function getSuiviRenderStateKey(){
+  const q = $('filterGlobal')?.value?.toLowerCase() || '';
+  const suiviFilterCacheKey = [q, filterSuiviProcedure, filterSuiviTribunal].join('||');
+  return [suiviFilterCacheKey, filterSuiviCheckedFirst ? 'checked-first' : 'default'].join('||');
+}
+
+function countSelectedSuiviRows(rows){
+  const list = Array.isArray(rows) ? rows : [];
+  if(
+    list === suiviSelectionCountRowsRef
+    && suiviSelectionCountVersion === suiviPrintSelectionVersion
+  ){
+    return suiviSelectionCountValue;
+  }
+  const out = list.reduce((count, row)=>count + (isSuiviSelectedForPrint(row) ? 1 : 0), 0);
+  suiviSelectionCountRowsRef = list;
+  suiviSelectionCountVersion = suiviPrintSelectionVersion;
+  suiviSelectionCountValue = out;
+  return out;
+}
+
+function syncSuiviRenderedSelectionCache(rows, pageRows, stateKey, page){
+  const filteredRows = Array.isArray(rows) ? rows : [];
+  const visibleRows = Array.isArray(pageRows) ? pageRows : [];
+  lastSuiviRenderedRows = filteredRows;
+  lastSuiviRenderedPageRows = visibleRows;
+  lastSuiviRenderedStateKey = String(stateKey || '');
+  lastSuiviRenderedPage = Math.max(1, Number(page) || 1);
+  lastSuiviRenderedRowKeySet = new Set(filteredRows.map((row)=>makeSuiviPrintKey(row?.c?.id, row?.index)));
+  lastSuiviRenderedSelectedCount = countSelectedSuiviRows(filteredRows);
+}
+
 function isSuiviSelectedForPrint(row){
   return suiviPrintSelection.has(makeSuiviPrintKey(row?.c?.id, row?.index));
 }
@@ -2598,19 +2765,35 @@ function syncPageSelectionToggleControl(inputId, labelId, totalRows, selectedRow
 }
 
 function getVisibleSuiviPageRowsForPrintSelection(){
+  const currentStateKey = getSuiviRenderStateKey();
+  if(
+    currentStateKey === lastSuiviRenderedStateKey
+    && lastSuiviRenderedPage === (Number(paginationState.suivi) || 1)
+  ){
+    return lastSuiviRenderedPageRows;
+  }
+  const filteredRows = getFilteredSuiviRowsForSelection();
   const orderedRows = typeof orderSuiviRowsByCheckedSelection === 'function'
-    ? orderSuiviRowsByCheckedSelection(getFilteredSuiviRowsForSelection())
-    : getFilteredSuiviRowsForSelection();
+    ? orderSuiviRowsByCheckedSelection(filteredRows)
+    : filteredRows;
   return getCurrentPageRows(orderedRows, 'suivi');
 }
 
 function getAllFilteredSuiviRowsForPrintSelection(){
+  if(getSuiviRenderStateKey() === lastSuiviRenderedStateKey){
+    return lastSuiviRenderedRows;
+  }
   return getFilteredSuiviRowsForSelection();
 }
 
 function syncSuiviPageSelectionToggle(){
   const rows = getAllFilteredSuiviRowsForPrintSelection();
-  const selected = rows.reduce((count, row)=>count + (isSuiviSelectedForPrint(row) ? 1 : 0), 0);
+  const selected = (
+    rows === lastSuiviRenderedRows
+    && getSuiviRenderStateKey() === lastSuiviRenderedStateKey
+  )
+    ? lastSuiviRenderedSelectedCount
+    : countSelectedSuiviRows(rows);
   syncPageSelectionToggleControl('suiviPageSelectionToggle', 'suiviCheckedCount', rows.length, selected);
 }
 
@@ -2625,9 +2808,22 @@ function toggleSuiviPrintSelection(clientId, dossierIndex, checked){
   if(checked){
     const sizeBefore = suiviPrintSelection.size;
     suiviPrintSelection.add(key);
-    if(suiviPrintSelection.size !== sizeBefore) suiviPrintSelectionVersion += 1;
+    if(suiviPrintSelection.size !== sizeBefore){
+      suiviPrintSelectionVersion += 1;
+      if(lastSuiviRenderedRowKeySet.has(key)){
+        lastSuiviRenderedSelectedCount = Math.min(
+          lastSuiviRenderedRows.length,
+          lastSuiviRenderedSelectedCount + 1
+        );
+      }
+    }
   }else{
-    if(suiviPrintSelection.delete(key)) suiviPrintSelectionVersion += 1;
+    if(suiviPrintSelection.delete(key)){
+      suiviPrintSelectionVersion += 1;
+      if(lastSuiviRenderedRowKeySet.has(key)){
+        lastSuiviRenderedSelectedCount = Math.max(0, lastSuiviRenderedSelectedCount - 1);
+      }
+    }
   }
   updateSuiviCheckedCount();
   if(filterSuiviCheckedFirst){
@@ -2642,14 +2838,14 @@ function syncSuiviPrintSelection(allRows){
   const changed = next.size !== suiviPrintSelection.size || [...next].some(key=>!suiviPrintSelection.has(key));
   suiviPrintSelection = next;
   if(changed) suiviPrintSelectionVersion += 1;
+  if(changed){
+    lastSuiviRenderedSelectedCount = countSelectedSuiviRows(lastSuiviRenderedRows);
+  }
   updateSuiviCheckedCount();
 }
 
 function setAllVisibleSuiviRowsForPrint(checked){
-  const orderedRows = typeof orderSuiviRowsByCheckedSelection === 'function'
-    ? orderSuiviRowsByCheckedSelection(getFilteredSuiviRowsForSelection())
-    : getFilteredSuiviRowsForSelection();
-  const rows = getCurrentPageRows(orderedRows, 'suivi');
+  const rows = getVisibleSuiviPageRowsForPrintSelection();
   if(!rows.length){
     alert('Aucune ligne visible.');
     return;
@@ -2666,6 +2862,9 @@ function setAllVisibleSuiviRowsForPrint(checked){
     }
   });
   if(changed) suiviPrintSelectionVersion += 1;
+  if(changed && getSuiviRenderStateKey() === lastSuiviRenderedStateKey){
+    lastSuiviRenderedSelectedCount = countSelectedSuiviRows(lastSuiviRenderedRows);
+  }
   updateSuiviCheckedCount();
   if(filterSuiviCheckedFirst) paginationState.suivi = 1;
   renderSuivi();
@@ -2689,6 +2888,9 @@ function setAllFilteredSuiviRowsForPrint(checked){
     }
   });
   if(changed) suiviPrintSelectionVersion += 1;
+  if(changed && rows === lastSuiviRenderedRows){
+    lastSuiviRenderedSelectedCount = checked ? rows.length : 0;
+  }
   updateSuiviCheckedCount();
   if(filterSuiviCheckedFirst) paginationState.suivi = 1;
   renderSuivi();
@@ -2728,7 +2930,18 @@ function getAllSuiviRows(){
 }
 
 function getSelectedSuiviRowsForExport(){
-  return getAllSuiviRows().filter(row=>isSuiviSelectedForPrint(row));
+  const rows = getAllSuiviRows();
+  if(
+    rows === suiviSelectedExportRowsCacheInput
+    && suiviSelectedExportRowsCacheVersion === suiviPrintSelectionVersion
+  ){
+    return suiviSelectedExportRowsCacheOutput;
+  }
+  const out = rows.filter(row=>isSuiviSelectedForPrint(row));
+  suiviSelectedExportRowsCacheInput = rows;
+  suiviSelectedExportRowsCacheVersion = suiviPrintSelectionVersion;
+  suiviSelectedExportRowsCacheOutput = out;
+  return out;
 }
 
 function buildSuiviSelectedExportDatasetBase(){
@@ -2877,10 +3090,24 @@ function previewSuiviSelectedRows(){
 }
 
 async function exportSuiviSelectedXLS(options = {}){
+  if(!canExportData()) return alert('Accès refusé');
   return runWithHeavyUiOperation(async ()=>{
     const dataset = await buildSuiviSelectedExportDatasetAsync();
     if(!dataset.rows.length){
       alert('Cochez au moins une ligne pour exporter.');
+      return;
+    }
+    if(shouldPreferSelectedExportCsvPath(dataset.rows.length)){
+      const csvBlob = await createMappedCsvBlobChunked({
+        headers: dataset.headers,
+        items: dataset.tableRows,
+        mapRow: (row)=>row,
+        progressLabel: 'Export suivi CSV',
+        chunkSize: 120
+      });
+      await saveBlobDirectOrDownload(csvBlob, 'suivi_export.csv', {
+        openAfterExport: options?.openAfterExport === true
+      });
       return;
     }
     await exportAudienceWorkbookXlsxStyled({
@@ -3163,6 +3390,51 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 6000){
   }
 }
 
+function waitForMs(ms){
+  return new Promise((resolve)=>setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function getRemoteSaveTimeoutMs(pathname, body){
+  const safePath = String(pathname || '').trim();
+  const baseTimeout = API_STATE_SAVE_TIMEOUT_MS + (isLargeDatasetMode() ? 12000 : 0) + (isUltraLargeDatasetMode() ? 8000 : 0);
+  if(safePath === '/state/dossiers'){
+    const action = String(body?.action || '').trim().toLowerCase();
+    if(action === 'update' || action === 'delete'){
+      return baseTimeout + 8000;
+    }
+  }
+  if(safePath === '/state/dossiers/batch'){
+    const patches = Array.isArray(body?.patches) ? body.patches : [];
+    const safeOnly = patches.length > 0 && patches.every((patch)=>{
+      const action = String(patch?.action || '').trim().toLowerCase();
+      return action === 'update' || action === 'delete';
+    });
+    if(safeOnly){
+      return baseTimeout + 10000;
+    }
+  }
+  return baseTimeout;
+}
+
+function shouldRetryPersistRequest(pathname, body, error){
+  const safePath = String(pathname || '').trim();
+  const message = String(error?.message || error || '').trim().toLowerCase();
+  const isAbort = error?.name === 'AbortError' || message.includes('abort');
+  if(!isAbort) return false;
+  if(safePath === '/state/dossiers'){
+    const action = String(body?.action || '').trim().toLowerCase();
+    return action === 'update' || action === 'delete';
+  }
+  if(safePath === '/state/dossiers/batch'){
+    const patches = Array.isArray(body?.patches) ? body.patches : [];
+    return patches.length > 0 && patches.every((patch)=>{
+      const action = String(patch?.action || '').trim().toLowerCase();
+      return action === 'update' || action === 'delete';
+    });
+  }
+  return false;
+}
+
 function hasRemoteAuthSession(){
   return !!String(remoteAuthToken || '').trim();
 }
@@ -3375,12 +3647,52 @@ function canEditData(){
   return isManager() || isAdmin();
 }
 
+function canImportData(){
+  return canEditData();
+}
+
+function canExportData(){
+  return canEditData();
+}
+
 function canDeleteData(){
   return isManager();
 }
 
 function canManageTeam(){
   return isManager();
+}
+
+function getAccessibleViewsForCurrentUser(){
+  if(!currentUser){
+    return new Set(['dashboard', 'clients', 'creation', 'suivi', 'audience', 'diligence', 'salle', 'equipe', 'recycle']);
+  }
+  if(isManager()){
+    return new Set(['dashboard', 'clients', 'creation', 'suivi', 'audience', 'diligence', 'salle', 'equipe', 'recycle']);
+  }
+  if(isAdmin()){
+    return new Set(['dashboard', 'clients', 'creation', 'suivi', 'audience', 'diligence', 'salle']);
+  }
+  return new Set(['dashboard', 'suivi']);
+}
+
+function getFallbackViewForCurrentUser(){
+  return isViewer() ? 'suivi' : 'dashboard';
+}
+
+function resolveAccessibleView(viewName){
+  const requested = String(viewName || '').trim() || getFallbackViewForCurrentUser();
+  const allowed = getAccessibleViewsForCurrentUser();
+  if(allowed.has(requested)) return requested;
+  return allowed.has('dashboard') ? 'dashboard' : getFallbackViewForCurrentUser();
+}
+
+function setRoleControlledVisibility(ids, visible){
+  ids.forEach((id)=>{
+    const el = $(id);
+    if(!el) return;
+    el.style.display = visible ? '' : 'none';
+  });
 }
 
 function canViewClient(client){
@@ -3574,6 +3886,15 @@ function getAdaptiveUiBatchDelay(baseDelay = 0, options = {}){
   return delay;
 }
 
+function getDossierPatchPersistDelayMs(){
+  return getAdaptiveUiBatchDelay(DOSSIER_PATCH_DEBOUNCE_MS, {
+    ultraLargeDatasetExtraMs: 650,
+    largeDatasetExtraMs: 300,
+    busyExtraMs: 380,
+    importExtraMs: 520
+  });
+}
+
 function shouldDeferHeavySectionRender(rowCount = 0, options = {}){
   if(options?.immediate === true) return false;
   const totalRows = Math.max(0, Number(rowCount) || 0);
@@ -3593,6 +3914,12 @@ function shouldDeferHeavySectionRender(rowCount = 0, options = {}){
 function scheduleDeferredSectionRender(sectionKey, renderFn, options = {}){
   if(typeof renderFn !== 'function') return false;
   const stateMap = {
+    dashboard: {
+      get timer(){ return dashboardDeferredRenderTimer; },
+      set timer(value){ dashboardDeferredRenderTimer = value; },
+      get seq(){ return dashboardDeferredRenderSeq; },
+      set seq(value){ dashboardDeferredRenderSeq = value; }
+    },
     clients: {
       get timer(){ return clientDeferredRenderTimer; },
       set timer(value){ clientDeferredRenderTimer = value; },
@@ -3610,6 +3937,18 @@ function scheduleDeferredSectionRender(sectionKey, renderFn, options = {}){
       set timer(value){ suiviDeferredRenderTimer = value; },
       get seq(){ return suiviDeferredRenderSeq; },
       set seq(value){ suiviDeferredRenderSeq = value; }
+    },
+    salle: {
+      get timer(){ return salleDeferredRenderTimer; },
+      set timer(value){ salleDeferredRenderTimer = value; },
+      get seq(){ return salleDeferredRenderSeq; },
+      set seq(value){ salleDeferredRenderSeq = value; }
+    },
+    diligence: {
+      get timer(){ return diligenceDeferredRenderTimer; },
+      set timer(value){ diligenceDeferredRenderTimer = value; },
+      get seq(){ return diligenceDeferredRenderSeq; },
+      set seq(value){ diligenceDeferredRenderSeq = value; }
     }
   };
   const state = stateMap[sectionKey];
@@ -3628,7 +3967,7 @@ function scheduleDeferredSectionRender(sectionKey, renderFn, options = {}){
     const execute = ()=>{
       state.timer = null;
       if(token !== state.seq) return;
-      if(importInProgress || heavyUiOperationCount > 0){
+      if(importInProgress){
         queueRun(140);
         return;
       }
@@ -4423,17 +4762,105 @@ function createXlsxBlobFromWorkbook(wb){
   );
 }
 
-function triggerBrowserDownloadFromBlob(blob, filename){
+function escapeCsvCell(value){
+  const text = String(value ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+async function createMappedCsvBlobChunked({ headers, items, mapRow, separator = ';', progressLabel = 'Export CSV', chunkSize = 200 }){
+  const list = Array.isArray(items) ? items : [];
+  const mapper = typeof mapRow === 'function' ? mapRow : (value)=>value;
+  const safeSeparator = String(separator || ';');
+  const parts = ['\uFEFF'];
+  if(Array.isArray(headers) && headers.length){
+    parts.push(headers.map(escapeCsvCell).join(safeSeparator), '\r\n');
+  }
+  await runChunked(list, async (item, index, total)=>{
+    const row = await mapper(item, index, total);
+    const values = Array.isArray(row) ? row : [];
+    parts.push(values.map(escapeCsvCell).join(safeSeparator), '\r\n');
+  }, {
+    chunkSize,
+    onProgress: makeProgressReporter(progressLabel)
+  });
+  return new Blob(parts, { type: 'text/csv;charset=utf-8;' });
+}
+
+function primeBrowserDownloadTarget(title = 'Preparation du fichier...'){
+  if(typeof window === 'undefined' || typeof window.open !== 'function') return null;
+  try{
+    const popup = window.open('', '_blank');
+    if(!popup) return null;
+    try{
+      popup.document.title = String(title || 'Preparation du fichier...');
+      if(popup.document.body){
+        popup.document.body.innerHTML = '<div style="font-family:Arial,sans-serif;padding:24px;">Preparation du fichier Excel...</div>';
+      }
+    }catch(_){}
+    return popup;
+  }catch(err){
+    console.warn('Ouverture fenetre de telechargement impossible', err);
+    return null;
+  }
+}
+
+function triggerBrowserDownloadFromBlob(blob, filename, options = {}){
   if(!blob) return false;
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = String(filename || 'export');
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  const browserTarget = options.browserDownloadTarget && !options.browserDownloadTarget.closed
+    ? options.browserDownloadTarget
+    : null;
+  let a = null;
+  try{
+    const ownerDocument = browserTarget?.document || document;
+    a = ownerDocument.createElement('a');
+    a.href = url;
+    a.download = String(filename || 'export');
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    ownerDocument.body.appendChild(a);
+    a.click();
+  }catch(err){
+    console.warn('Telechargement direct impossible, ouverture URL blob', err);
+    if(browserTarget && !browserTarget.closed){
+      try{
+        browserTarget.location.href = url;
+      }catch(_){
+        window.open(url, '_blank', 'noopener');
+      }
+    }else{
+      window.open(url, '_blank', 'noopener');
+    }
+  }
+  setTimeout(()=>{
+    try{ a?.remove(); }catch(_){}
+    try{
+      if(browserTarget && !browserTarget.closed) browserTarget.close();
+    }catch(_){}
+    try{ URL.revokeObjectURL(url); }catch(_){}
+  }, 30000);
   return true;
+}
+
+async function primeBrowserSaveFileHandle(filename = 'export.xlsx', options = {}){
+  if(typeof window === 'undefined') return null;
+  if(window.isSecureContext !== true) return null;
+  if(typeof window.showSaveFilePicker !== 'function') return null;
+  try{
+    return await window.showSaveFilePicker({
+      suggestedName: String(filename || 'export.xlsx'),
+      types: [{
+        description: String(options.description || 'Fichier Excel'),
+        accept: {
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx']
+        }
+      }]
+    });
+  }catch(err){
+    if(String(err?.name || '') === 'AbortError') return false;
+    console.warn('Selection du fichier export impossible', err);
+    return null;
+  }
 }
 
 function canUseDirectBrowserExport(){
@@ -4472,6 +4899,14 @@ async function writeBlobToDirectoryHandle(handle, filename, blob){
   return true;
 }
 
+async function writeBlobToFileHandle(fileHandle, blob){
+  if(!fileHandle || !blob) return false;
+  const writable = await fileHandle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+  return true;
+}
+
 function primeDirectExportDirectoryAccess(){
   return Promise.resolve(null);
 }
@@ -4481,21 +4916,32 @@ async function saveBlobDirectOrDownload(blob, filename, options = {}){
     console.warn('Aucun contenu à exporter pour', filename);
     return 'error';
   }
-  if(options.openAfterExport === true && hasDesktopExportBridge()){
+  const preferredFileHandle = options.preferredFileHandle || null;
+  if(preferredFileHandle){
+    try{
+      await writeBlobToFileHandle(preferredFileHandle, blob);
+      return 'file-handle';
+    }catch(err){
+      console.warn('Export fichier direct impossible, fallback telechargement', err);
+    }
+  }
+  if(hasDesktopExportBridge()){
     try{
       const desktopResult = await saveBlobViaDesktopExportBridge(blob, filename);
       if(desktopResult?.ok){
-        return 'desktop-open';
+        return options.openAfterExport === true ? 'desktop-open' : 'desktop-save';
       }
       const details = String(desktopResult?.error || '').trim();
       if(details){
-        console.warn('Ouverture automatique Excel impossible', details);
+        console.warn('Export desktop impossible', details);
       }
     }catch(err){
-      console.warn('Export desktop automatique impossible', err);
+      console.warn('Export desktop impossible', err);
     }
   }
-  const fallback = ()=>triggerBrowserDownloadFromBlob(blob, filename);
+  const fallback = ()=>triggerBrowserDownloadFromBlob(blob, filename, {
+    browserDownloadTarget: options.browserDownloadTarget || null
+  });
   if(options.direct !== true){
     fallback();
     return 'download';
@@ -4529,11 +4975,14 @@ async function saveBlobDirectOrDownload(blob, filename, options = {}){
   return 'download';
 }
 
-async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', sheetName = 'Audience', colWidths = [], filename = 'audience_export.xlsx', preferWorker = false, openAfterExport = false }){
+async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', sheetName = 'Audience', colWidths = [], filename = 'audience_export.xlsx', preferWorker = false, openAfterExport = false, layoutPreset = 'default', browserDownloadTarget = null, preferredFileHandle = null }){
   const directExportHandlePromise = primeDirectExportDirectoryAccess();
   const rowCount = Array.isArray(rows) ? rows.length : 0;
-  const useFastWorkbookPath = preferWorker === true || shouldPreferFastWorkbookPath(rowCount);
+  const useAudienceReferenceLayout = layoutPreset === 'audience-reference';
+  const useFastWorkbookPath = !useAudienceReferenceLayout && (preferWorker === true || shouldPreferFastWorkbookPath(rowCount));
   const subtitleText = String(subtitle || '').trim();
+  const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: !useFastWorkbookPath });
+  if(!excelReady) return;
   if(useFastWorkbookPath){
     const workerBlob = await createXlsxBlobInWorker({
       headers,
@@ -4545,13 +4994,13 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     if(workerBlob){
       await saveBlobDirectOrDownload(workerBlob, filename, {
         preferredHandle: await directExportHandlePromise,
-        openAfterExport
+        openAfterExport,
+        browserDownloadTarget,
+        preferredFileHandle
       });
       return;
     }
   }
-  const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: !useFastWorkbookPath });
-  if(!excelReady) return;
   if(useFastWorkbookPath || typeof ExcelJS === 'undefined'){
     if(typeof XLSX === 'undefined'){
       alert('Export XLSX indisponible: librairie Excel non chargée.');
@@ -4572,15 +5021,201 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     const blob = createXlsxBlobFromWorkbook(wb);
     await saveBlobDirectOrDownload(blob, filename, {
       preferredHandle: await directExportHandlePromise,
-      openAfterExport
+      openAfterExport,
+      browserDownloadTarget,
+      preferredFileHandle
     });
     return;
   }
 
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(sheetName);
   const colCount = headers.length;
   const lastColLetter = String.fromCharCode(64 + Math.max(1, colCount));
+
+  if(useAudienceReferenceLayout && colCount === 7){
+    try{
+      const templateArrayBuffer = await getAudienceExportTemplateArrayBuffer();
+      if(templateArrayBuffer){
+        const templateWorkbook = new ExcelJS.Workbook();
+        await templateWorkbook.xlsx.load(templateArrayBuffer);
+        const templateSheet = templateWorkbook.getWorksheet('Audience') || templateWorkbook.worksheets[0];
+        if(!templateSheet) throw new Error('Feuille template audience introuvable');
+        const sampleRow = templateSheet.getRow(9);
+        const sampleStyles = Array.from({ length: colCount }, (_, index)=>{
+          const cell = sampleRow.getCell(index + 1);
+          return {
+            font: cell.font ? JSON.parse(JSON.stringify(cell.font)) : null,
+            fill: cell.fill ? JSON.parse(JSON.stringify(cell.fill)) : null,
+            alignment: cell.alignment ? JSON.parse(JSON.stringify(cell.alignment)) : null,
+            border: cell.border ? JSON.parse(JSON.stringify(cell.border)) : null,
+            numFmt: cell.numFmt || ''
+          };
+        });
+        const sampleRowHeight = Number(sampleRow.height || 35.25);
+        const existingRowsToDelete = Math.max(0, Number(templateSheet.rowCount || 0) - 8);
+        if(existingRowsToDelete > 0){
+          templateSheet.spliceRows(9, existingRowsToDelete);
+        }
+        if(rows.length){
+          const preparedRows = rows.map(row=>Array.isArray(row) ? row.slice(0, colCount) : new Array(colCount).fill(''));
+          templateSheet.spliceRows(9, 0, ...preparedRows);
+        }
+        templateSheet.getCell('A6').value = subtitleText;
+        templateSheet.views = [{ showGridLines: false }];
+        await runChunked(Array.from({ length: rows.length }, (_, index)=>index + 9), async (rowIndex)=>{
+          const sheetRow = templateSheet.getRow(rowIndex);
+          sheetRow.height = sampleRowHeight;
+          for(let c = 1; c <= colCount; c++){
+            const cell = sheetRow.getCell(c);
+            const style = sampleStyles[c - 1];
+            if(style?.font) cell.font = JSON.parse(JSON.stringify(style.font));
+            if(style?.fill) cell.fill = JSON.parse(JSON.stringify(style.fill));
+            if(style?.alignment) cell.alignment = JSON.parse(JSON.stringify(style.alignment));
+            if(style?.border) cell.border = JSON.parse(JSON.stringify(style.border));
+            if(style?.numFmt) cell.numFmt = style.numFmt;
+          }
+        }, { chunkSize: 40 });
+        await yieldToMainThread();
+        const templateBuffer = await promiseWithTimeout(
+          templateWorkbook.xlsx.writeBuffer(),
+          30000,
+          'Export audience template Excel'
+        );
+        const templateBlob = new Blob(
+          [templateBuffer],
+          { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+        );
+        await saveBlobDirectOrDownload(templateBlob, filename, {
+          preferredHandle: await directExportHandlePromise,
+          openAfterExport,
+          browserDownloadTarget,
+          preferredFileHandle
+        });
+        return;
+      }
+    }catch(err){
+      console.warn('Export audience via template impossible, fallback layout manuel', err);
+    }
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(sheetName);
+
+  if(useAudienceReferenceLayout && colCount === 7){
+    try{
+      const referenceColWidths = [14.78, 20.66, 16.33, 13.78, 16.78, 23.22, 26.89];
+      const referenceColumnAlignments = ['left', 'left', 'left', 'center', 'center', 'left', 'center'];
+      const referenceColumnWrap = [true, true, false, false, false, false, false];
+      sheet.views = [{ showGridLines: false }];
+      sheet.columns = referenceColWidths.map(width=>({ width }));
+
+      sheet.mergeCells(`A5:${lastColLetter}5`);
+      sheet.mergeCells(`A6:${lastColLetter}6`);
+      sheet.getCell('A6').value = subtitleText;
+      sheet.getRow(1).height = 20;
+      sheet.getRow(2).height = 20;
+      sheet.getRow(3).height = 20;
+      sheet.getRow(4).height = 20;
+      sheet.getRow(5).height = 35.25;
+      sheet.getRow(6).height = 24;
+      sheet.getRow(7).height = 9.6;
+      sheet.getRow(8).height = 36.75;
+
+      headers.forEach((header, index)=>{
+        sheet.getRow(8).getCell(index + 1).value = header;
+      });
+      await runChunked(rows, async (row, index)=>{
+        const rowNumber = index + 9;
+        const sheetRow = sheet.getRow(rowNumber);
+        sheetRow.values = Array.isArray(row) ? row : [];
+        sheetRow.height = 35.25;
+      }, { chunkSize: 80 });
+
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FFBFC5CE' } },
+        left: { style: 'thin', color: { argb: 'FFBFC5CE' } },
+        bottom: { style: 'thin', color: { argb: 'FFBFC5CE' } },
+        right: { style: 'thin', color: { argb: 'FFBFC5CE' } }
+      };
+
+      for(let c = 1; c <= colCount; c++){
+        const topCell = sheet.getRow(5).getCell(c);
+        topCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFFFFF' }
+        };
+        topCell.border = {
+          bottom: { style: 'thin', color: { argb: 'FF2F6FB1' } }
+        };
+
+        const headerCell = sheet.getRow(8).getCell(c);
+        headerCell.font = { name: 'Calibri', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+        headerCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FF1A4590' }
+        };
+        headerCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        headerCell.border = thinBorder;
+      }
+
+      const subtitleCell = sheet.getCell('A6');
+      subtitleCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF1A4590' } };
+      subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      await runChunked(rows, async (row, index)=>{
+        const rowIndex = index + 9;
+        const sheetRow = sheet.getRow(rowIndex);
+        sheetRow.height = 35.25;
+        for(let c = 1; c <= colCount; c++){
+          const cell = sheetRow.getCell(c);
+          cell.value = Array.isArray(row) ? (row[c - 1] ?? '') : '';
+          cell.font = { name: 'Calibri', size: 12, color: { argb: 'FF111111' } };
+          cell.alignment = {
+            horizontal: referenceColumnAlignments[c - 1] || 'left',
+            vertical: 'middle',
+            wrapText: referenceColumnWrap[c - 1] === true
+          };
+          cell.border = thinBorder;
+        }
+      }, { chunkSize: 40 });
+
+      const headerImageDataUrl = await getAudienceExportHeaderImageDataUrl();
+      if(headerImageDataUrl){
+        const imageId = workbook.addImage({
+          base64: headerImageDataUrl,
+          extension: 'jpeg'
+        });
+        sheet.addImage(imageId, {
+          tl: { col: 1.502, row: 0.21 },
+          ext: { width: 604, height: 117 },
+          editAs: 'oneCell'
+        });
+      }
+
+      await yieldToMainThread();
+      const buffer = await promiseWithTimeout(
+        workbook.xlsx.writeBuffer(),
+        30000,
+        'Export audience Excel'
+      );
+      const blob = new Blob(
+        [buffer],
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+      );
+      await saveBlobDirectOrDownload(blob, filename, {
+        preferredHandle: await directExportHandlePromise,
+        openAfterExport,
+        browserDownloadTarget,
+        preferredFileHandle
+      });
+      return;
+    }catch(err){
+      console.warn('Export audience avec logo impossible', err);
+      alert("Export d'audience avec logo impossible. Rechargez l'application puis réessayez.");
+      return;
+    }
+  }
 
   sheet.getCell('A1').value = 'CABINET ARAQUI HOUSSAINI';
   sheet.getCell('A2').value = subtitleText;
@@ -4647,7 +5282,9 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
   );
   await saveBlobDirectOrDownload(blob, filename, {
     preferredHandle: await directExportHandlePromise,
-    openAfterExport
+    openAfterExport,
+    browserDownloadTarget,
+    preferredFileHandle
   });
 }
 
@@ -5143,6 +5780,101 @@ function fileToDataUrl(file){
     reader.onerror = ()=>reject(new Error('Lecture fichier impossible'));
     reader.readAsDataURL(file);
   });
+}
+
+function blobToDataUrl(blob){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(String(reader.result || ''));
+    reader.onerror = ()=>reject(new Error('Lecture blob impossible'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function imageElementUrlToDataUrl(url){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = ()=>{
+      try{
+        const width = Number(img.naturalWidth || img.width || 0);
+        const height = Number(img.naturalHeight || img.height || 0);
+        if(width <= 0 || height <= 0){
+          reject(new Error('Image export invalide'));
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if(!ctx){
+          reject(new Error('Canvas export indisponible'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.96));
+      }catch(err){
+        reject(err);
+      }
+    };
+    img.onerror = ()=>reject(new Error(`Chargement image impossible: ${url}`));
+    img.src = url;
+  });
+}
+
+function cloneArrayBuffer(buffer){
+  if(!buffer) return null;
+  return typeof buffer.slice === 'function' ? buffer.slice(0) : buffer;
+}
+
+function loadArrayBufferWithXhr(url){
+  return new Promise((resolve, reject)=>{
+    if(typeof XMLHttpRequest === 'undefined'){
+      reject(new Error('XHR indisponible'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.responseType = 'arraybuffer';
+    xhr.onload = ()=>{
+      const status = Number(xhr.status || 0);
+      if(status === 0 || (status >= 200 && status < 300)){
+        resolve(xhr.response);
+        return;
+      }
+      reject(new Error(`HTTP ${status}`));
+    };
+    xhr.onerror = ()=>reject(new Error(`Chargement impossible: ${url}`));
+    xhr.send();
+  });
+}
+
+async function getAudienceExportTemplateArrayBuffer(){
+  if(!audienceExportTemplateArrayBufferPromise){
+    audienceExportTemplateArrayBufferPromise = (async ()=>{
+      try{
+        const response = await fetch(AUDIENCE_EXPORT_TEMPLATE_URL, { cache: 'no-store' });
+        if(!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.arrayBuffer();
+      }catch(fetchErr){
+        console.warn('Chargement template audience via fetch indisponible', fetchErr);
+        try{
+          return await loadArrayBufferWithXhr(AUDIENCE_EXPORT_TEMPLATE_URL);
+        }catch(xhrErr){
+          console.warn('Chargement template audience via XHR indisponible', xhrErr);
+          return null;
+        }
+      }
+    })();
+  }
+  return cloneArrayBuffer(await audienceExportTemplateArrayBufferPromise);
+}
+
+async function getAudienceExportHeaderImageDataUrl(){
+  if(!audienceExportHeaderImageDataUrlPromise){
+    audienceExportHeaderImageDataUrlPromise = Promise.resolve(AUDIENCE_EXPORT_HEADER_IMAGE_DATA_URL);
+  }
+  return audienceExportHeaderImageDataUrlPromise;
 }
 
 async function serializeUploadedFiles(files){
@@ -6380,14 +7112,34 @@ function getRecycleEntryDetails(entry){
 
 function refreshAfterRecycleRestore(){
   queuePersistAppState();
-  refreshPrimaryViews({ includeSalle: true, includeRecycle: true });
+  refreshPrimaryViews({ includeSalle: true, includeRecycle: true, refreshClientDropdown: true });
+}
+
+function getPrimaryViewDeferredRenderDelay(key){
+  const safeKey = String(key || '').trim();
+  if(safeKey === 'dashboard') return 40;
+  if(safeKey === 'clients') return 50;
+  if(safeKey === 'suivi') return 70;
+  if(safeKey === 'audience') return 70;
+  if(safeKey === 'diligence') return 70;
+  if(safeKey === 'salle') return 80;
+  return 0;
 }
 
 function refreshDeferredSectionIfNeeded(key, renderFn, options = {}){
   if(typeof renderFn !== 'function') return;
   const force = options.force === true;
   const include = options.include === true;
+  const shouldDefer = !force
+    && (isLargeDatasetMode() || importInProgress || heavyUiOperationCount > 0)
+    && ['dashboard', 'clients', 'suivi', 'audience', 'diligence', 'salle'].includes(String(key || '').trim());
   if(force || include || isDeferredRenderSectionVisible(key)){
+    if(shouldDefer){
+      const scheduled = scheduleDeferredSectionRender(String(key || '').trim(), ()=>renderFn({}), {
+        delayMs: getPrimaryViewDeferredRenderDelay(key)
+      });
+      if(scheduled) return;
+    }
     renderFn(force ? { force: true } : {});
     return;
   }
@@ -6396,10 +7148,13 @@ function refreshDeferredSectionIfNeeded(key, renderFn, options = {}){
 
 function refreshPrimaryViews(options = {}){
   refreshDeferredSectionIfNeeded('clients', renderClients, { force: options.force === true });
-  if(options.force === true || isDeferredRenderSectionVisible('creation')){
-    updateClientDropdown(options.force === true ? { force: true } : {});
-  }else{
-    markDeferredRenderDirty('clientDropdown');
+  const shouldRefreshClientDropdown = options.refreshClientDropdown === true || options.force === true;
+  if(shouldRefreshClientDropdown){
+    if(options.force === true || isDeferredRenderSectionVisible('creation')){
+      updateClientDropdown(options.force === true ? { force: true } : {});
+    }else{
+      markDeferredRenderDirty('clientDropdown');
+    }
   }
   if(options.dashboardOptions){
     refreshDeferredSectionIfNeeded('dashboard', (renderOptions)=>renderDashboard({ ...renderOptions, ...options.dashboardOptions }), {
@@ -6712,14 +7467,25 @@ function getSalleTribunalCategory(value){
 
 function isSalleSessionMatchingDate(session){
   if(!filterSalleAudienceDate) return true;
-  const parsed = parseDateForAge(session?.date || '');
-  if(!parsed) return false;
-  return formatDateYYYYMMDD(parsed) === filterSalleAudienceDate;
+  return String(session?.dateKey || '').trim() === filterSalleAudienceDate;
 }
 
 function isSalleSessionMatchingTribunal(session){
   if(filterSalleTribunal === 'all') return true;
-  return getSalleTribunalCategory(session?.tribunal || '') === filterSalleTribunal;
+  return String(session?.tribunalCategory || '').trim() === filterSalleTribunal;
+}
+
+function getSalleSidebarSessionRenderLimit(){
+  if(filterSalleAudienceDate || filterSalleTribunal !== 'all'){
+    return Number.POSITIVE_INFINITY;
+  }
+  if(isVeryLargeLiveSyncMode()){
+    return SALLE_SIDEBAR_SESSION_RENDER_LIMIT_VERY_LARGE;
+  }
+  if(isLargeDatasetMode()){
+    return SALLE_SIDEBAR_SESSION_RENDER_LIMIT;
+  }
+  return Number.POSITIVE_INFINITY;
 }
 
 function renderSidebarSalleSessions(){
@@ -6733,6 +7499,7 @@ function renderSidebarSalleSessions(){
 
   const dayLabel = getSalleWeekdayLabel(selectedSalleDay);
   const bySalleAndJudge = buildSalleAudienceMap(selectedSalleDay);
+  const renderLimit = getSalleSidebarSessionRenderLimit();
   if(!bySalleAndJudge.size){
     container.style.display = 'none';
     container.innerHTML = '';
@@ -6750,11 +7517,20 @@ function renderSidebarSalleSessions(){
           const visibleSessions = sessions
             .filter(s=>isSalleSessionMatchingTribunal(s))
             .filter(s=>isSalleSessionMatchingDate(s))
-            .sort((a, b)=>(parseDateForAge(b.date)?.getTime() || 0) - (parseDateForAge(a.date)?.getTime() || 0));
-          const sessionHtml = visibleSessions.length
-            ? visibleSessions
+            .sort((a, b)=>(Number(b?.sortTime) || 0) - (Number(a?.sortTime) || 0));
+          const hiddenSessionCount = Number.isFinite(renderLimit) && visibleSessions.length > renderLimit
+            ? visibleSessions.length - renderLimit
+            : 0;
+          const renderedSessions = hiddenSessionCount > 0
+            ? visibleSessions.slice(0, renderLimit)
+            : visibleSessions;
+          const sessionHtml = renderedSessions.length
+            ? renderedSessions
               .map(s=>`<div class="sidebar-salle-session">${escapeHtml(s.date)} | ${escapeHtml(s.ref)} | ${escapeHtml(s.debiteur)}</div>`)
               .join('')
+              + (hiddenSessionCount > 0
+                ? `<div class="sidebar-salle-session">+${hiddenSessionCount} audience(s) supplementaire(s)</div>`
+                : '')
             : `<div class="sidebar-salle-session">Aucune audience</div>`;
           return `
             <div class="sidebar-salle-item">
@@ -6781,58 +7557,79 @@ function renderSidebarSalleSessions(){
 }
 
 async function exportSalleAudiences(salleEncoded, dayEncoded){
-  const salleLabel = decodeURIComponent(String(salleEncoded || ''));
-  const dayKey = normalizeSalleWeekday(decodeURIComponent(String(dayEncoded || selectedSalleDay)));
-  const bySalleAndJudge = buildSalleAudienceMap(dayKey);
-  const judgeMap = bySalleAndJudge.get(salleLabel);
-  if(!judgeMap){
-    alert('Salle introuvable.');
-    return;
-  }
+  return runWithHeavyUiOperation(async ()=>{
+    const salleLabel = decodeURIComponent(String(salleEncoded || ''));
+    const dayKey = normalizeSalleWeekday(decodeURIComponent(String(dayEncoded || selectedSalleDay)));
+    const bySalleAndJudge = buildSalleAudienceMap(dayKey);
+    const judgeMap = bySalleAndJudge.get(salleLabel);
+    if(!judgeMap){
+      alert('Salle introuvable.');
+      return;
+    }
 
-  const headers = ['Client', 'Adversaire', 'N° Dossier', 'Juge', 'Instruction', 'Sort'];
-  const rows = [];
-  let dateAudience = '';
-  const tribunalLabelsRaw = [];
-  [...judgeMap.entries()]
-    .sort((a, b)=>a[0].localeCompare(b[0], 'fr', { sensitivity: 'base' }))
-    .forEach(([judgeName, sessions])=>{
-      const visibleSessions = sessions
-        .filter(s=>isSalleSessionMatchingTribunal(s))
-        .filter(s=>isSalleSessionMatchingDate(s))
-        .sort((a, b)=>(parseDateForAge(b.date)?.getTime() || 0) - (parseDateForAge(a.date)?.getTime() || 0));
-      visibleSessions
-        .forEach(s=>{
-          const maybeDate = String(s?.date || '').trim();
-          if(!dateAudience && maybeDate && maybeDate !== '-') dateAudience = maybeDate;
-          const tribunalText = String(s?.tribunal || '').trim();
-          if(tribunalText && tribunalText !== '-') tribunalLabelsRaw.push(tribunalText);
-          rows.push([
-            s.client || '-',
-            s.debiteur || '-',
-            s.ref || '-',
-            judgeName || '-',
-            s.instruction || '-',
-            ''
-          ]);
-        });
+    const headers = ['Client', 'Adversaire', 'N° Dossier', 'Juge', 'Instruction', 'Sort'];
+    const rows = [];
+    let dateAudience = '';
+    const tribunalLabelsRaw = [];
+    [...judgeMap.entries()]
+      .sort((a, b)=>a[0].localeCompare(b[0], 'fr', { sensitivity: 'base' }))
+      .forEach(([judgeName, sessions])=>{
+        const visibleSessions = sessions
+          .filter(s=>isSalleSessionMatchingTribunal(s))
+          .filter(s=>isSalleSessionMatchingDate(s))
+          .sort((a, b)=>(parseDateForAge(b.date)?.getTime() || 0) - (parseDateForAge(a.date)?.getTime() || 0));
+        visibleSessions
+          .forEach(s=>{
+            const maybeDate = String(s?.date || '').trim();
+            if(!dateAudience && maybeDate && maybeDate !== '-') dateAudience = maybeDate;
+            const tribunalText = String(s?.tribunal || '').trim();
+            if(tribunalText && tribunalText !== '-') tribunalLabelsRaw.push(tribunalText);
+            rows.push([
+              s.client || '-',
+              s.debiteur || '-',
+              s.ref || '-',
+              judgeName || '-',
+              s.instruction || '-',
+              ''
+            ]);
+          });
+      });
+    if(!rows.length){
+      rows.push(['-', '-', '-', '-', '-', '-']);
+    }
+    const tribunalClusterState = buildTribunalClusterStateFromLabels(tribunalLabelsRaw);
+    const tribunalLabels = tribunalClusterState.options.map(v=>String(v?.label || '').trim()).filter(Boolean);
+    const tribunalLabel = tribunalLabels.length ? tribunalLabels.join(' / ') : '-';
+
+    const safeSalle = salleLabel.replace(/[^\w\-]+/g, '_');
+    const safeDay = dayKey.replace(/[^\w\-]+/g, '_');
+    if(rows.length >= SALLE_EXPORT_CSV_THRESHOLD){
+      const csvHeaders = ['Salle', 'Jour', 'Date audience', 'Tribunal', ...headers];
+      const csvBlob = await createMappedCsvBlobChunked({
+        headers: csvHeaders,
+        items: rows,
+        mapRow: (row)=>[
+          salleLabel || '-',
+          dayKey || '-',
+          dateAudience || '-',
+          tribunalLabel || '-',
+          ...(Array.isArray(row) ? row : [])
+        ],
+        progressLabel: 'Export salle CSV',
+        chunkSize: 120
+      });
+      await saveBlobDirectOrDownload(csvBlob, `audiences_${safeSalle || 'salle'}_${safeDay || 'jour'}.csv`);
+      return;
+    }
+
+    await exportAudienceWorkbookXlsxStyled({
+      headers,
+      rows,
+      subtitle: `Date d'audience : ${String(dateAudience || '-')} | Salle : ${salleLabel || '-'} | Tribunal : ${tribunalLabel || '-'}`,
+      sheetName: 'Audience',
+      colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 28 }, { wch: 22 }, { wch: 28 }, { wch: 34 }],
+      filename: `audiences_${safeSalle || 'salle'}_${safeDay || 'jour'}.xlsx`
     });
-  if(!rows.length){
-    rows.push(['-', '-', '-', '-', '-', '-']);
-  }
-  const tribunalClusterState = buildTribunalClusterStateFromLabels(tribunalLabelsRaw);
-  const tribunalLabels = tribunalClusterState.options.map(v=>String(v?.label || '').trim()).filter(Boolean);
-  const tribunalLabel = tribunalLabels.length ? tribunalLabels.join(' / ') : '-';
-
-  const safeSalle = salleLabel.replace(/[^\w\-]+/g, '_');
-  const safeDay = dayKey.replace(/[^\w\-]+/g, '_');
-  await exportAudienceWorkbookXlsxStyled({
-    headers,
-    rows,
-    subtitle: `Date d'audience : ${String(dateAudience || '-')} | Salle : ${salleLabel || '-'} | Tribunal : ${tribunalLabel || '-'}`,
-    sheetName: 'Audience',
-    colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 28 }, { wch: 22 }, { wch: 28 }, { wch: 34 }],
-    filename: `audiences_${safeSalle || 'salle'}_${safeDay || 'jour'}.xlsx`
   });
 }
 
@@ -7965,13 +8762,23 @@ async function persistRemoteRequestNow(pathname, body){
       saveResult = await persistChunkedRemoteStateNow(payload, serializedPayload);
       if(!saveResult) return false;
     }else{
-      const res = await fetchWithTimeout(`${API_BASE}${pathname}`, {
+      const requestOptions = {
         method: 'POST',
         headers: buildRemoteAuthHeaders({ 'Content-Type': 'application/json' }),
         body: serializedPayload
-      }, API_STATE_SAVE_TIMEOUT_MS);
-      saveResult = await handlePersistRemoteResponse(res);
-      if(!saveResult) return false;
+      };
+      const timeoutMs = getRemoteSaveTimeoutMs(pathname, body);
+      try{
+        const res = await fetchWithTimeout(`${API_BASE}${pathname}`, requestOptions, timeoutMs);
+        saveResult = await handlePersistRemoteResponse(res);
+        if(!saveResult) return false;
+      }catch(err){
+        if(!shouldRetryPersistRequest(pathname, body, err)) throw err;
+        await waitForMs(180);
+        const retryRes = await fetchWithTimeout(`${API_BASE}${pathname}`, requestOptions, timeoutMs);
+        saveResult = await handlePersistRemoteResponse(retryRes);
+        if(!saveResult) return false;
+      }
     }
     updateRemoteStateMetadata(saveResult);
     markApiBaseHealthy(API_BASE);
@@ -8130,7 +8937,7 @@ async function persistDossierPatchNow(patch, options = {}){
       flushQueuedDossierPatchesNow().catch((err)=>{
         console.warn('Impossible de sauvegarder les modifications dossier', err);
       });
-    }, DOSSIER_PATCH_DEBOUNCE_MS);
+    }, getDossierPatchPersistDelayMs());
   });
 }
 
@@ -8502,9 +9309,9 @@ async function refreshRemoteState(){
         'suivi',
         'audience',
         'diligence',
-        'salle',
-        'equipe',
-        'recycle'
+      'salle',
+      'equipe',
+      'recycle'
       ];
       markDeferredRenderDirty(...refreshSections, 'clientDropdown');
       queueRemoteSyncRender(refreshSections);
@@ -9167,6 +9974,7 @@ function closeExportPreviewModal(){
 }
 
 async function handleExportPreviewExcel(){
+  if(!canExportData()) return alert('Accès refusé');
   if(exportPreviewBusy || typeof exportPreviewAction !== 'function') return;
   const exportBtn = $('exportPreviewExcelBtn');
   exportPreviewBusy = true;
@@ -10182,11 +10990,16 @@ async function applyExcelImport(payload, options = {}){
 async function handleExcelImportFile(file, options = {}){
   if(importInProgress) return;
   if(!file) return;
+  if(!canImportData()){
+    alert('Accès refusé');
+    return;
+  }
   const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: false });
   if(!excelReady){
     return;
   }
   importInProgress = true;
+  beginHeavyUiOperation();
   try{
     openImportProgressModal('Import Excel');
     updateImportProgress('Lecture du fichier...', 0, 1);
@@ -10227,10 +11040,15 @@ async function handleExcelImportFile(file, options = {}){
   }finally{
     closeImportProgressModal(false);
     importInProgress = false;
+    endHeavyUiOperation();
   }
 }
 
 async function handleAudienceImportFile(file){
+  if(!canImportData()){
+    alert('Accès refusé');
+    return;
+  }
   await handleExcelImportFile(file, {
     importDossiers: false,
     importAudiences: true,
@@ -10242,6 +11060,10 @@ async function handleAudienceImportFile(file){
 }
 
 async function exportBackupExcelImportable(){
+  if(!canExportData()){
+    alert('Accès refusé');
+    return;
+  }
   const dossierHeaders = [
     'client',
     'affectation',
@@ -10768,7 +11590,7 @@ function setupEvents(){
 
   const renderClientsDebounced = debounce(renderClients, 120);
   const renderSuiviDebounced = debounce(renderSuivi, 120);
-  const renderAudienceDebounced = debounce(renderAudience, 120);
+  const renderAudienceDebounced = debounce(renderAudience, 220);
   const renderDiligenceDebounced = debounce(renderDiligence, 120);
   const filterTeamClientListDebounced = debounce(filterTeamClientList, 120);
   $('audienceTableContainer')?.addEventListener('scroll', queueAudienceVirtualRender, { passive: true });
@@ -10953,6 +11775,12 @@ function setupEvents(){
   $('teamRole')?.addEventListener('change', updateTeamClientSelectorState);
   $('teamSaveBtn')?.addEventListener('click', saveTeamUser);
   $('teamResetBtn')?.addEventListener('click', resetTeamForm);
+  $('teamProvisionStructureBtn')?.addEventListener('click', ()=>{
+    provisionStandardTeamStructure().catch(err=>{
+      console.error(err);
+      alert(`Création structure standard impossible.\nDétail: ${String(err?.message || err || 'Erreur inconnue')}`);
+    });
+  });
   $('teamClientSearchInput')?.addEventListener('input', filterTeamClientListDebounced);
   $('passwordSetupSaveBtn')?.addEventListener('click', submitForcedPasswordChange);
   $('passwordSetupLogoutBtn')?.addEventListener('click', logout);
@@ -11017,8 +11845,16 @@ function setupEvents(){
   $('selectAllPrintAudienceBtn')?.addEventListener('click', ()=>setAllVisibleAudienceRowsForPrint(true));
   $('clearAllPrintAudienceBtn')?.addEventListener('click', ()=>setAllVisibleAudienceRowsForPrint(false));
   $('audiencePageSelectionToggle')?.addEventListener('change', (e)=>setAllFilteredAudienceRowsForPrint(!!e.target?.checked));
-  $('exportAudienceBtn')?.addEventListener('click', exportAudienceRegularXLS);
-  $('exportAudienceDetailBtn')?.addEventListener('click', exportAudienceXLS);
+  $('exportAudienceBtn')?.addEventListener('click', ()=>exportAudienceRegularXLS());
+  $('exportAudienceDetailBtn')?.addEventListener('click', async ()=>{
+    const preferredFileHandle = await primeBrowserSaveFileHandle('audience_export.xlsx', {
+      description: "Export d'audience Excel"
+    });
+    if(preferredFileHandle === false) return;
+    return exportAudienceXLS({
+      preferredFileHandle: preferredFileHandle || null
+    });
+  });
   $('previewAudienceBtn')?.addEventListener('click', previewAudienceSelectedRows);
   $('calendarPrevBtn')?.addEventListener('click', ()=>{
     dashboardCalendarCursor = new Date(dashboardCalendarCursor.getFullYear(), dashboardCalendarCursor.getMonth() - 1, 1);
@@ -11068,6 +11904,11 @@ function setSelectedAudienceColor(color, syncFilter){
 
 // ================== NAV ==================
 function showView(v, options = {}){
+  const nextView = resolveAccessibleView(v);
+  const isSameView = nextView && nextView === currentView;
+  const isKnownDeferredView = Object.prototype.hasOwnProperty.call(DEFERRED_RENDER_SECTION_IDS, nextView);
+  const viewIsDirty = isKnownDeferredView ? deferredRenderDirtyState[nextView] === true : false;
+  const shouldRefreshView = options.force === true || !isSameView || viewIsDirty;
   const setVisible = (id, visible)=>{
     const el = $(id);
     if(!el) return;
@@ -11080,30 +11921,42 @@ function showView(v, options = {}){
       el.classList.remove('section-enter');
     }
   };
-  setVisible('dashboardSection', v==='dashboard');
-  setVisible('clientSection', v==='clients');
-  setVisible('creationSection', v==='creation');
-  setVisible('suiviSection', v==='suivi');
-  setVisible('audienceSection', v==='audience');
-  setVisible('diligenceSection', v==='diligence');
-  setVisible('salleSection', v==='salle');
-  setVisible('equipeSection', v==='equipe');
-  setVisible('recycleSection', v==='recycle');
+  if(!isSameView){
+    setVisible('dashboardSection', nextView==='dashboard');
+    setVisible('clientSection', nextView==='clients');
+    setVisible('creationSection', nextView==='creation');
+    setVisible('suiviSection', nextView==='suivi');
+    setVisible('audienceSection', nextView==='audience');
+    setVisible('diligenceSection', nextView==='diligence');
+    setVisible('salleSection', nextView==='salle');
+    setVisible('equipeSection', nextView==='equipe');
+    setVisible('recycleSection', nextView==='recycle');
 
-  document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
-  const target = $(v+'Link');
-  if(target) target.classList.add('active');
-  if(v === 'dashboard') renderDashboard({ force: true });
-  if(v === 'clients') renderClients({ force: true });
-  if(v === 'creation') updateClientDropdown({ force: true });
-  if(v === 'suivi') renderSuivi({ force: true });
-  if(v === 'audience') renderAudience({ force: true });
-  if(v === 'diligence') renderDiligence({ force: true });
-  if(v === 'salle') renderSalle({ force: true });
-  if(v === 'equipe') renderEquipe({ force: true });
-  if(v === 'recycle') renderRecycleBin({ force: true });
-  if(v === 'dashboard' && options.warmup !== false) scheduleBackgroundDataWarmup(1800);
-  if(isMobileViewport()){
+    document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
+    const target = $(nextView+'Link');
+    if(target) target.classList.add('active');
+  }
+  if(shouldRefreshView){
+    const forceRenderOptions = { force: true };
+    if(nextView === 'dashboard') renderDashboard(forceRenderOptions);
+    if(nextView === 'clients') renderClients(forceRenderOptions);
+    if(nextView === 'creation') updateClientDropdown(forceRenderOptions);
+    if(nextView === 'suivi'){
+      renderSuivi(options.force === true ? forceRenderOptions : {});
+    }
+    if(nextView === 'audience'){
+      renderAudience(options.force === true ? forceRenderOptions : {});
+    }
+    if(nextView === 'diligence') renderDiligence(forceRenderOptions);
+    if(nextView === 'salle') renderSalle(forceRenderOptions);
+    if(nextView === 'equipe') renderEquipe(forceRenderOptions);
+    if(nextView === 'recycle') renderRecycleBin(forceRenderOptions);
+  }
+  currentView = nextView;
+  if(nextView === 'dashboard' && options.warmup !== false && !isSameView){
+    scheduleBackgroundDataWarmup(1800);
+  }
+  if(isMobileViewport() && !isSameView){
     setSidebarCollapsed(true);
   }
 }
@@ -11201,7 +12054,19 @@ async function login(){
     clientListSummaryCacheVersion = -1;
     clientListSummaryCacheUserKey = '';
     clearLoginError();
-    const forceDashboardVisible = ()=>{
+    const initialView = resolveAccessibleView(getFallbackViewForCurrentUser());
+    const initialSectionIdByView = {
+      dashboard: 'dashboardSection',
+      clients: 'clientSection',
+      creation: 'creationSection',
+      suivi: 'suiviSection',
+      audience: 'audienceSection',
+      diligence: 'diligenceSection',
+      salle: 'salleSection',
+      equipe: 'equipeSection',
+      recycle: 'recycleSection'
+    };
+    const forceInitialViewVisible = ()=>{
       if($('loginScreen')) $('loginScreen').style.display = 'none';
       if($('appContent')) $('appContent').style.display = 'flex';
       const sectionIds = [
@@ -11215,14 +12080,15 @@ async function login(){
         'equipeSection',
         'recycleSection'
       ];
+      const targetSectionId = initialSectionIdByView[initialView] || 'dashboardSection';
       sectionIds.forEach(id=>{
         const el = $(id);
         if(!el) return;
-        el.style.display = (id === 'dashboardSection') ? 'block' : 'none';
+        el.style.display = (id === targetSectionId) ? 'block' : 'none';
       });
       document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
-      const dash = $('dashboardLink');
-      if(dash) dash.classList.add('active');
+      const activeLink = $(`${initialView}Link`) || $('dashboardLink');
+      if(activeLink) activeLink.classList.add('active');
       if(isMobileViewport()) setSidebarCollapsed(true);
     };
 
@@ -11241,17 +12107,21 @@ async function login(){
       }
       loginPostBootTimer = setTimeout(()=>{
         loginPostBootTimer = null;
-        safeRun('renderDashboard(immediate)', ()=>renderDashboard({ force: true, immediate: true, deferHeavy: true, includeAudienceMetrics: false }));
-        if(isLargeDatasetMode()){
-          safeRun('queueLargeDatasetDashboardWarmup', ()=>queueLargeDatasetDashboardWarmup(120));
+        if(initialView === 'dashboard'){
+          safeRun('renderDashboard(immediate)', ()=>renderDashboard({ force: true, immediate: true, deferHeavy: true, includeAudienceMetrics: false }));
+          if(isLargeDatasetMode()){
+            safeRun('queueLargeDatasetDashboardWarmup', ()=>queueLargeDatasetDashboardWarmup(120));
+          }else{
+            safeRun('queueSidebarSalleSessionsRender', ()=>queueSidebarSalleSessionsRender(2800));
+            safeRun('scheduleBackgroundDataWarmup', ()=>scheduleBackgroundDataWarmup(2200));
+          }
         }else{
-          safeRun('queueSidebarSalleSessionsRender', ()=>queueSidebarSalleSessionsRender(2800));
-          safeRun('scheduleBackgroundDataWarmup', ()=>scheduleBackgroundDataWarmup(2200));
+          safeRun('showView(initial)', ()=>showView(initialView, { force: true, warmup: false }));
         }
       }, 0);
     };
 
-    forceDashboardVisible();
+    forceInitialViewVisible();
     markDeferredRenderDirty(
       'dashboard',
       'clients',
@@ -11287,8 +12157,9 @@ async function login(){
       const el = $(id);
       return !!el && el.style.display !== 'none';
     });
-    if(!hasVisibleSection || $('dashboardSection')?.style.display === 'none'){
-      forceDashboardVisible();
+    const initialSectionId = initialSectionIdByView[initialView] || 'dashboardSection';
+    if(!hasVisibleSection || $(initialSectionId)?.style.display === 'none'){
+      forceInitialViewVisible();
     }
     closePasswordSetupModal();
   }finally{
@@ -11336,25 +12207,47 @@ function applyRoleUI(options = {}){
   const viewer = isViewer();
   const manager = isManager();
   const canCreateClient = canEditData();
+  const canImport = canImportData();
+  const canExport = canExportData();
 
   if($('creationLink')) $('creationLink').style.display = viewer ? 'none' : '';
   if($('clientsLink')) $('clientsLink').style.display = viewer ? 'none' : '';
+  if($('suiviLink')) $('suiviLink').style.display = '';
+  if($('audienceLink')) $('audienceLink').style.display = viewer ? 'none' : '';
+  if($('diligenceLink')) $('diligenceLink').style.display = viewer ? 'none' : '';
+  if($('salleLink')) $('salleLink').style.display = viewer ? 'none' : '';
   if($('equipeLink')) $('equipeLink').style.display = manager ? '' : 'none';
   if($('recycleLink')) $('recycleLink').style.display = manager ? '' : 'none';
+  if($('openDesktopStateFileBtn')) $('openDesktopStateFileBtn').style.display = canImport ? '' : 'none';
+  if($('importAppsavocatBtn')) $('importAppsavocatBtn').style.display = canImport ? '' : 'none';
   if($('addClientBtn')) $('addClientBtn').style.display = canCreateClient ? '' : 'none';
   if($('deleteAllClientsBtn')) $('deleteAllClientsBtn').style.display = canDeleteData() ? '' : 'none';
   if($('totalClientsCard')) $('totalClientsCard').style.display = viewer ? 'none' : '';
+  setRoleControlledVisibility(['importExcelBtn', 'importAudienceExcelBtn', 'exportBackupExcelBtn'], canImport);
+  setRoleControlledVisibility([
+    'selectAllSuiviBtn',
+    'clearAllSuiviBtn',
+    'exportSuiviBtn',
+    'previewSuiviBtn',
+    'printAudienceBtn',
+    'selectAllPrintAudienceBtn',
+    'clearAllPrintAudienceBtn',
+    'exportAudienceBtn',
+    'exportAudienceDetailBtn',
+    'previewAudienceBtn',
+    'selectAllDiligenceBtn',
+    'clearAllDiligenceBtn',
+    'exportDiligenceBtn',
+    'previewDiligenceBtn'
+  ], canExport);
 
   const audienceEditable = canEditData();
   document.querySelectorAll('.color-btn').forEach(btn=> btn.disabled = !audienceEditable);
   if($('saveAudienceBtn')) $('saveAudienceBtn').style.display = audienceEditable ? '' : 'none';
 
   if(skipNavigation) return;
-
-  if(!manager){
-    showView('dashboard');
-  }else if(viewer && $('creationSection')?.style.display !== 'none'){
-    showView('dashboard');
+  if(!getAccessibleViewsForCurrentUser().has(String(currentView || '').trim())){
+    showView(getFallbackViewForCurrentUser());
   }
 }
 
@@ -11379,7 +12272,7 @@ async function addClient(name){
     console.warn('Impossible de sauvegarder le client', err);
   });
   $('clientName').value='';
-  refreshPrimaryViews({ force: true });
+  refreshPrimaryViews({ force: true, refreshClientDropdown: true });
   goToCreation(newClient.id);
 }
 
@@ -11393,7 +12286,15 @@ function updateClientDropdown(options = {}){
   const optionsHtml = getEditableClients()
     .map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`)
     .join('');
-  selectClient.innerHTML = `<option value="">Client</option>${optionsHtml}`;
+  const markup = `<option value="">Client</option>${optionsHtml}`;
+  const renderKey = [
+    'client-dropdown',
+    editableClientsCacheVersion,
+    editableClientsCacheUserKey,
+    creationPinnedClientId ? String(creationPinnedClientId) : 'none',
+    optionsHtml.length
+  ].join('::');
+  setElementHtmlWithRenderKey(selectClient, markup, renderKey, { trustRenderKey: true });
   if(currentValue) selectClient.value = currentValue;
   selectClient.disabled = !!creationPinnedClientId;
 }
@@ -11411,7 +12312,12 @@ function renderClients(options = {}){
   const renderRows = (rows)=>{
     const pageData = paginateRows(rows, 'clients');
     if(!pageData.rows.length){
-      clientsBody.innerHTML = '<tr><td colspan="3" class="diligence-empty">Aucun client trouvé.</td></tr>';
+      setElementHtmlWithRenderKey(
+        clientsBody,
+        '<tr><td colspan="3" class="diligence-empty">Aucun client trouvé.</td></tr>',
+        ['clients-empty', q, pageData.page].join('::'),
+        { trustRenderKey: true }
+      );
       renderPagination('clients', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
       return;
     }
@@ -11433,7 +12339,19 @@ function renderClients(options = {}){
         </tr>
       `;
     }).join('');
-    clientsBody.innerHTML = rowsHtml;
+    setElementHtmlWithRenderKey(
+      clientsBody,
+      rowsHtml,
+      [
+        'clients-rows',
+        audienceRowsRawDataVersion,
+        pageData.page,
+        pageData.rows.length,
+        q,
+        allVisibleClients.length
+      ].join('::'),
+      { trustRenderKey: true }
+    );
     renderPagination('clients', pageData);
   };
 
@@ -11518,7 +12436,7 @@ function deleteClient(clientId){
   }, { source: 'clients' }).catch((err)=>{
     console.warn('Impossible de supprimer le client sur le serveur', err);
   });
-  refreshPrimaryViews({ includeRecycle: true });
+  refreshPrimaryViews({ includeRecycle: true, refreshClientDropdown: true });
 }
 
 function deleteAllClients(){
@@ -11555,7 +12473,7 @@ function deleteAllClients(){
   }, { source: 'clients' }).catch((err)=>{
     console.warn('Impossible de supprimer tous les clients sur le serveur', err);
   });
-  refreshPrimaryViews({ includeSalle: true, includeRecycle: true });
+  refreshPrimaryViews({ includeSalle: true, includeRecycle: true, refreshClientDropdown: true });
 }
 
 function goToCreation(clientId){
@@ -11580,9 +12498,7 @@ async function addDossier(){
       .map(l=>l.dataset.proc)
       .filter(Boolean);
     const customList = customProcedures.slice();
-    const cardProcs = [...document.querySelectorAll('#procedureDetails .proc-card h4')]
-      .map(h=>h.innerText.trim())
-      .filter(Boolean);
+    const cardProcs = getProcedureCardNames();
     selected.push(...activeLabels, ...customList, ...cardProcs);
     if(editingDossier){
       const prev = AppState.clients
@@ -11603,16 +12519,7 @@ async function addDossier(){
     }
     if(selected.length === 0) return alert('Choisir au moins une procédure');
 
-    const details = {};
-    const cards = [...document.querySelectorAll('#procedureDetails .proc-card')];
-    cards.forEach(card=>{
-      const procName = card.querySelector('h4')?.innerText.trim();
-      if(!procName) return;
-      details[procName] = {};
-      card.querySelectorAll('input, select').forEach(fieldEl=>{
-        details[procName][fieldEl.dataset.field] = fieldEl.value.trim();
-      });
-    });
+    const details = collectProcedureDraftFromCards({ trimValues: true });
 
     const rawDateAffectation = String($('dateAffectation')?.value || '').trim();
     if(!rawDateAffectation){
@@ -12245,36 +13152,15 @@ function editDossier(clientId, index){
   $('procedureCustom').value = '';
   renderCustomProcedures();
 
-  procs.forEach(p=>{
-    const cb = document.querySelector(`.proc-check[value="${p}"]`);
-    if(cb){
-      cb.checked = true;
-      const label = cb.closest('label');
-      if(label) label.classList.add('active');
-    }
-  });
+  activateProcedureCheckboxes(procs);
 
   const details = d.procedureDetails || {};
   const detailsKeys = Object.keys(details);
   renderProcedureDetails(procs);
-  if(!document.querySelectorAll('#procedureDetails .proc-card').length && detailsKeys.length){
+  if(!getProcedureCardElements().length && detailsKeys.length){
     renderProcedureDetails(detailsKeys);
   }
-
-  const detailsMap = {};
-  Object.entries(details).forEach(([k, v])=>{
-    const nk = String(k || '').trim().toLowerCase();
-    if(nk) detailsMap[nk] = v;
-  });
-
-  [...document.querySelectorAll('#procedureDetails .proc-card')].forEach(card=>{
-    const name = card.querySelector('h4')?.innerText.trim() || '';
-    const fields = details[name] || detailsMap[name.toLowerCase()] || {};
-    card.querySelectorAll('input, select').forEach(fieldEl=>{
-      const key = fieldEl.dataset.field;
-      if(key && fields[key] !== undefined) fieldEl.value = fields[key];
-    });
-  });
+  applyProcedureDraftToCards(details);
   const addBtn = $('addDossierBtn');
   if(addBtn) addBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Mettre à jour';
 }
@@ -12805,9 +13691,10 @@ function isDiligenceSelectedForPrint(row){
 }
 
 function getVisibleDiligencePageRowsForPrintSelection(){
+  const filteredRows = getFilteredDiligenceRows(getDiligenceRows());
   const orderedRows = typeof orderDiligenceRowsByCheckedSelection === 'function'
-    ? orderDiligenceRowsByCheckedSelection(getFilteredDiligenceRows(getDiligenceRows()))
-    : getFilteredDiligenceRows(getDiligenceRows());
+    ? orderDiligenceRowsByCheckedSelection(filteredRows)
+    : filteredRows;
   return getCurrentPageRows(orderedRows, 'diligence');
 }
 
@@ -12883,9 +13770,10 @@ function syncDiligencePrintSelection(allRows){
 }
 
 function setAllVisibleDiligenceRowsForPrint(checked){
+  const filteredRows = getFilteredDiligenceRows(getDiligenceRows());
   const orderedRows = typeof orderDiligenceRowsByCheckedSelection === 'function'
-    ? orderDiligenceRowsByCheckedSelection(getFilteredDiligenceRows(getDiligenceRows()))
-    : getFilteredDiligenceRows(getDiligenceRows());
+    ? orderDiligenceRowsByCheckedSelection(filteredRows)
+    : filteredRows;
   const rows = getCurrentPageRows(orderedRows, 'diligence');
   if(!rows.length){
     alert('Aucune ligne visible.');
@@ -13662,8 +14550,7 @@ function getFilteredDiligenceRows(allRows){
     filterDiligenceSort,
     filterDiligenceDelegation,
     filterDiligenceOrdonnance,
-    filterDiligenceTribunal,
-    filterDiligenceCheckedFirst ? `checked-first:${diligencePrintSelectionVersion}` : 'default'
+    filterDiligenceTribunal
   ].join('||');
   if(allRows === diligenceFilteredRowsCacheInput && filterKey === diligenceFilteredRowsCacheKey){
     return diligenceFilteredRowsCacheOutput;
@@ -13682,28 +14569,31 @@ function getFilteredDiligenceRows(allRows){
     const searchValues = row.__diligenceSearchValues || (row.__diligenceSearchValues = getDiligenceSearchValues(row));
     return searchValues.some(value=>value.includes(q));
   });
-  const out = filterDiligenceCheckedFirst
-    ? filteredRows.reduce((acc, row)=>{
-      if(isDiligenceSelectedForPrint(row)){
-        acc.checked.push(row);
-      }else{
-        acc.other.push(row);
-      }
-      return acc;
-    }, { checked: [], other: [] })
-    : null;
-  const orderedRows = out ? out.checked.concat(out.other) : filteredRows;
   diligenceFilteredRowsCacheInput = allRows;
   diligenceFilteredRowsCacheKey = filterKey;
-  diligenceFilteredRowsCacheOutput = orderedRows;
-  return orderedRows;
+  diligenceFilteredRowsCacheOutput = filteredRows;
+  return filteredRows;
 }
 
 function exportDiligenceXLS(options = {}){
+  if(!canExportData()) return alert('Accès refusé');
   return runWithHeavyUiOperation(async ()=>{
     const dataset = await buildDiligenceSelectedExportDatasetAsync();
     if(!dataset.rows.length){
       alert('Cochez au moins une ligne pour exporter.');
+      return;
+    }
+    if(shouldPreferSelectedExportCsvPath(dataset.rows.length)){
+      const csvBlob = await createMappedCsvBlobChunked({
+        headers: dataset.headers,
+        items: dataset.tableRows,
+        mapRow: (row)=>row,
+        progressLabel: 'Export diligence CSV',
+        chunkSize: 120
+      });
+      await saveBlobDirectOrDownload(csvBlob, 'diligence_export.csv', {
+        openAfterExport: options?.openAfterExport === true
+      });
       return;
     }
     await exportAudienceWorkbookXlsxStyled({
@@ -14050,6 +14940,120 @@ function resetTeamForm(){
   if($('teamSaveBtn')) $('teamSaveBtn').innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Enregistrer';
 }
 
+function buildStandardTeamClientAssignments(totalClients){
+  const clientIds = Array.isArray(AppState?.clients)
+    ? AppState.clients
+      .map((client)=>Number(client?.id))
+      .filter((id)=>Number.isFinite(id))
+    : [];
+  return Array.from({ length: totalClients }, (_, index)=>{
+    if(!clientIds.length) return [];
+    return [clientIds[index % clientIds.length]];
+  });
+}
+
+async function upsertProvisionedUser(nextUsers, config, nextIdRef){
+  const username = String(config?.username || '').trim();
+  if(!username) return { created: false, updated: false };
+  const role = normalizeUserRole(config?.role || 'client');
+  const clientIds = role === 'client'
+    ? [...new Set((Array.isArray(config?.clientIds) ? config.clientIds : []).map((id)=>Number(id)).filter((id)=>Number.isFinite(id)))]
+    : [];
+  const existingIndex = nextUsers.findIndex(
+    (user)=>String(user?.username || '').trim().toLowerCase() === username.toLowerCase()
+  );
+  const existingUser = existingIndex >= 0 ? nextUsers[existingIndex] : null;
+  let nextUser = {
+    ...(existingUser && typeof existingUser === 'object' ? existingUser : {}),
+    id: existingUser ? Number(existingUser.id) : nextIdRef.value++,
+    username,
+    role,
+    clientIds,
+    requirePasswordChange: false
+  };
+  if(existingUser){
+    nextUser.id = Number.isFinite(Number(existingUser.id)) ? Number(existingUser.id) : nextIdRef.value++;
+  }
+  const hasCredentials = existingUser
+    ? (hasStoredPasswordHash(existingUser) || !!normalizeLoginPassword(existingUser.password || ''))
+    : false;
+  if(!hasCredentials){
+    nextUser = await secureUserPassword(nextUser, STANDARD_TEAM_DEFAULT_PASSWORD, {
+      requirePasswordChange: false
+    });
+  }
+  if(existingIndex >= 0){
+    const changed = JSON.stringify(normalizeUser(existingUser)) !== JSON.stringify(normalizeUser(nextUser));
+    nextUsers[existingIndex] = nextUser;
+    return { created: false, updated: changed };
+  }
+  nextUsers.push(nextUser);
+  return { created: true, updated: false };
+}
+
+async function provisionStandardTeamStructure(){
+  if(!canManageTeam()) return alert('Accès refusé');
+  const confirmation = window.confirm(
+    `Créer / mettre à jour la structure standard ?\n\n`
+    + `- ${STANDARD_TEAM_TOTAL_MANAGERS} gestionnaires\n`
+    + `- ${STANDARD_TEAM_TOTAL_ADMINS} admins\n`
+    + `- ${STANDARD_TEAM_TOTAL_CLIENTS} clients\n\n`
+    + `Les comptes existants non standards ne seront pas supprimés.`
+  );
+  if(!confirmation) return;
+
+  USERS = ensureManagerUser(Array.isArray(USERS) ? USERS : []);
+  const nextUsers = USERS.map((user)=>({ ...user }));
+  const nextIdRef = {
+    value: nextUsers.reduce((max, user)=>Math.max(max, Number(user?.id) || 0), 0) + 1
+  };
+  const clientAssignments = buildStandardTeamClientAssignments(STANDARD_TEAM_TOTAL_CLIENTS);
+  let createdCount = 0;
+  let updatedCount = 0;
+
+  const accounts = [
+    { username: DEFAULT_MANAGER_USERNAME, role: 'manager', clientIds: [] },
+    ...Array.from({ length: Math.max(0, STANDARD_TEAM_TOTAL_MANAGERS - 1) }, (_, index)=>({
+      username: `manager${index + 2}`,
+      role: 'manager',
+      clientIds: []
+    })),
+    ...Array.from({ length: STANDARD_TEAM_TOTAL_ADMINS }, (_, index)=>({
+      username: `admin${String(index + 1).padStart(2, '0')}`,
+      role: 'admin',
+      clientIds: []
+    })),
+    ...Array.from({ length: STANDARD_TEAM_TOTAL_CLIENTS }, (_, index)=>({
+      username: `client${String(index + 1).padStart(2, '0')}`,
+      role: 'client',
+      clientIds: clientAssignments[index] || []
+    }))
+  ];
+
+  for(const account of accounts){
+    const result = await upsertProvisionedUser(nextUsers, account, nextIdRef);
+    if(result.created) createdCount += 1;
+    if(result.updated) updatedCount += 1;
+  }
+
+  USERS = ensureManagerUser(nextUsers);
+  await persistStateSliceNow('users', USERS, { source: 'team-standard-structure' });
+  syncCurrentUserFromUsers();
+  renderEquipe({ force: true });
+  resetTeamForm();
+
+  const unassignedClients = clientAssignments.filter((ids)=>!ids.length).length;
+  const summary = [
+    `Structure standard prête: ${STANDARD_TEAM_TOTAL_MANAGERS} gestionnaires, ${STANDARD_TEAM_TOTAL_ADMINS} admins, ${STANDARD_TEAM_TOTAL_CLIENTS} clients.`,
+    `Comptes créés: ${createdCount}.`,
+    `Comptes mis à jour: ${updatedCount}.`
+  ];
+  if(unassignedClients > 0){
+    summary.push(`Attention: ${unassignedClients} compte(s) client créés sans client lié, car aucun client n'existe encore dans la base.`);
+  }
+  alert(summary.join('\n'));
+}
+
 async function saveTeamUser(){
   if(!canManageTeam()) return alert('Accès refusé');
   const username = $('teamUsername')?.value?.trim() || '';
@@ -14372,9 +15376,7 @@ function syncProcedureCheckboxes(procList){
 }
 
 function resyncProcedureSelectionFromUI(fallbackList){
-  const fromCards = [...document.querySelectorAll('#procedureDetails .proc-card h4')]
-    .map(el=>String(el.innerText || '').trim())
-    .filter(Boolean);
+  const fromCards = getProcedureCardNames();
   const source = fromCards.length ? fromCards : (fallbackList || []);
   suppressProcedureChange = true;
   syncProcedureCheckboxes(source);
@@ -14552,15 +15554,52 @@ function makeAudiencePrintKey(ci, di, procKey){
   return `${Number(ci)}::${Number(di)}::${String(procKey || '')}`;
 }
 
+function getAudienceFilterStateKey(){
+  return [
+    $('filterAudience')?.value?.toLowerCase() || '',
+    filterAudienceColor,
+    filterAudienceProcedure,
+    filterAudienceTribunal,
+    filterAudienceDate,
+    filterAudienceErrorsOnly ? '1' : '0',
+    filterAudienceCheckedFirst ? 'checked-first' : 'default',
+    selectedAudienceColor
+  ].join('||');
+}
+
+function countSelectedAudienceRows(rows){
+  const list = Array.isArray(rows) ? rows : [];
+  if(
+    list === audienceSelectionCountRowsRef
+    && audienceSelectionCountVersion === audiencePrintSelectionVersion
+  ){
+    return audienceSelectionCountValue;
+  }
+  const out = list.reduce((count, row)=>count + (isAudienceSelectedForPrint(row?.ci, row?.di, row?.procKey) ? 1 : 0), 0);
+  audienceSelectionCountRowsRef = list;
+  audienceSelectionCountVersion = audiencePrintSelectionVersion;
+  audienceSelectionCountValue = out;
+  return out;
+}
+
+function syncAudienceRenderedSelectionCache(rows, pageRows, stateKey, page){
+  const filteredRows = Array.isArray(rows) ? rows : [];
+  const visibleRows = Array.isArray(pageRows) ? pageRows : [];
+  lastAudienceRenderedRows = filteredRows;
+  lastAudienceRenderedPageRows = visibleRows;
+  lastAudienceRenderedStateKey = String(stateKey || '');
+  lastAudienceRenderedPage = Math.max(1, Number(page) || 1);
+  lastAudienceRenderedRowKeySet = new Set(filteredRows.map((row)=>makeAudiencePrintKey(row?.ci, row?.di, row?.procKey)));
+  lastAudienceRenderedSelectedCount = countSelectedAudienceRows(filteredRows);
+}
+
 function isAudienceSelectedForPrint(ci, di, procKey){
   return audiencePrintSelection.has(makeAudiencePrintKey(ci, di, procKey));
 }
 
 function getSelectedAudienceRowsCount(){
   const sourceRows = getFilteredAudienceRows(getAudienceRows({ ignoreSearch: true, ignoreColor: true }));
-  return sourceRows
-    .filter(row=>isAudienceSelectedForPrint(row.ci, row.di, row.procKey))
-    .length;
+  return countSelectedAudienceRows(sourceRows);
 }
 
 function queueAudienceCheckedCountRender(){
@@ -14591,7 +15630,10 @@ function pruneAudiencePrintSelection(rows = null){
     changed = true;
   });
   audiencePrintSelectionPruneDataVersion = currentDataVersion;
-  if(changed) audiencePrintSelectionVersion += 1;
+  if(changed){
+    audiencePrintSelectionVersion += 1;
+    lastAudienceRenderedSelectedCount = countSelectedAudienceRows(lastAudienceRenderedRows);
+  }
   return changed;
 }
 
@@ -14609,12 +15651,21 @@ function toggleAudiencePrintSelection(ci, di, procKey, checked){
     audiencePrintSelection.add(key);
     if(audiencePrintSelection.size !== sizeBefore){
       audiencePrintSelectionVersion += 1;
+      if(lastAudienceRenderedRowKeySet.has(key)){
+        lastAudienceRenderedSelectedCount = Math.min(
+          lastAudienceRenderedRows.length,
+          lastAudienceRenderedSelectedCount + 1
+        );
+      }
       queueAudienceCheckedCountRender();
     }
     return;
   }
   if(audiencePrintSelection.delete(key)){
     audiencePrintSelectionVersion += 1;
+    if(lastAudienceRenderedRowKeySet.has(key)){
+      lastAudienceRenderedSelectedCount = Math.max(0, lastAudienceRenderedSelectedCount - 1);
+    }
     queueAudienceCheckedCountRender();
   }
 }
@@ -14834,7 +15885,7 @@ function applyColorToSelectedAudienceRows(color){
 }
 
 function setAllVisibleAudienceRowsForPrint(checked){
-  const rows = getCurrentPageRows(getFilteredAudienceRows(), 'audience');
+  const rows = getVisibleAudiencePageRowsForPrintSelection();
   if(!rows.length){
     alert('Aucune ligne visible.');
     return;
@@ -14854,22 +15905,40 @@ function setAllVisibleAudienceRowsForPrint(checked){
     });
   }
   if(changed) audiencePrintSelectionVersion += 1;
+  if(changed && getAudienceFilterStateKey() === lastAudienceRenderedStateKey){
+    lastAudienceRenderedSelectedCount = countSelectedAudienceRows(lastAudienceRenderedRows);
+  }
   queueAudienceCheckedCountRender();
   if(filterAudienceCheckedFirst) paginationState.audience = 1;
   renderAudience();
 }
 
 function getVisibleAudiencePageRowsForPrintSelection(){
+  const currentStateKey = getAudienceFilterStateKey();
+  if(
+    currentStateKey === lastAudienceRenderedStateKey
+    && lastAudienceRenderedPage === (Number(paginationState.audience) || 1)
+  ){
+    return lastAudienceRenderedPageRows;
+  }
   return getCurrentPageRows(getFilteredAudienceRows(), 'audience');
 }
 
 function getAllFilteredAudienceRowsForPrintSelection(){
+  if(getAudienceFilterStateKey() === lastAudienceRenderedStateKey){
+    return lastAudienceRenderedRows;
+  }
   return getFilteredAudienceRows();
 }
 
 function syncAudiencePageSelectionToggle(){
   const rows = getAllFilteredAudienceRowsForPrintSelection();
-  const selected = rows.reduce((count, row)=>count + (isAudienceSelectedForPrint(row.ci, row.di, row.procKey) ? 1 : 0), 0);
+  const selected = (
+    rows === lastAudienceRenderedRows
+    && getAudienceFilterStateKey() === lastAudienceRenderedStateKey
+  )
+    ? lastAudienceRenderedSelectedCount
+    : countSelectedAudienceRows(rows);
   syncPageSelectionToggleControl('audiencePageSelectionToggle', 'audienceCheckedCount', rows.length, selected);
 }
 
@@ -14891,6 +15960,9 @@ function setAllFilteredAudienceRowsForPrint(checked){
     }
   });
   if(changed) audiencePrintSelectionVersion += 1;
+  if(changed && rows === lastAudienceRenderedRows){
+    lastAudienceRenderedSelectedCount = checked ? rows.length : 0;
+  }
   queueAudienceCheckedCountRender();
   if(filterAudienceCheckedFirst) paginationState.audience = 1;
   renderAudience();
@@ -15175,6 +16247,8 @@ function getAudienceDuplicateKeySet(rows){
 }
 
 function queueSidebarSalleSessionsRender(delayMs = 80){
+  sidebarSalleRenderSeq += 1;
+  const renderToken = sidebarSalleRenderSeq;
   if(sidebarSalleRenderTimer){
     clearTimeout(sidebarSalleRenderTimer);
     sidebarSalleRenderTimer = null;
@@ -15187,9 +16261,13 @@ function queueSidebarSalleSessionsRender(delayMs = 80){
   sidebarSalleRenderTimer = setTimeout(()=>{
     sidebarSalleRenderTimer = null;
     if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-      window.requestIdleCallback(()=>renderSidebarSalleSessions(), { timeout: 1800 });
+      window.requestIdleCallback(()=>{
+        if(renderToken !== sidebarSalleRenderSeq) return;
+        renderSidebarSalleSessions();
+      }, { timeout: 1800 });
       return;
     }
+    if(renderToken !== sidebarSalleRenderSeq) return;
     renderSidebarSalleSessions();
   }, nextDelayMs);
 }
@@ -15689,6 +16767,11 @@ function getAudienceRowsForSidebarProjectedCached(){
   const projectedRows = getAudienceRowsDedupedCached().map((row)=>{
     const audienceDateRaw = row?.draft?.dateAudience || row?.p?.audience || '';
     const parsedAudienceDate = parseDateForAge(audienceDateRaw);
+    const calendarDateKey = parsedAudienceDate ? formatDateYYYYMMDD(parsedAudienceDate) : '';
+    const sortTime = parsedAudienceDate instanceof Date && !Number.isNaN(parsedAudienceDate.getTime())
+      ? parsedAudienceDate.getTime()
+      : 0;
+    const tribunalValue = String(row?.p?.tribunal || '').trim();
     const judgeValue = normalizeJudgeName(row?.draft?.juge || row?.p?.juge || '');
     const judgeKeys = judgeValue
       ? [...new Set(splitJudgeCandidates(judgeValue).map(v=>makeJudgeMatchKey(v)).filter(Boolean))]
@@ -15701,7 +16784,7 @@ function getAudienceRowsForSidebarProjectedCached(){
     ).trim();
     return {
       color: String(row?.p?.color || '').trim(),
-      calendarDateKey: parsedAudienceDate ? formatDateYYYYMMDD(parsedAudienceDate) : '',
+      calendarDateKey,
       calendarEvent: {
         client: row?.c?.name || '-',
         procedure: row?.procKey || '-',
@@ -15710,9 +16793,12 @@ function getAudienceRowsForSidebarProjectedCached(){
       judgeKeys,
       session: judgeKeys.length ? {
         date: normalizeDateDDMMYYYY(audienceDateRaw) || String(audienceDateRaw || '').trim() || '-',
+        dateKey: calendarDateKey,
+        sortTime,
         ref: String(row?.draft?.refDossier || row?.p?.referenceClient || row?.d?.referenceClient || '').trim() || '-',
         debiteur: String(row?.d?.debiteur || '').trim() || '-',
-        tribunal: String(row?.p?.tribunal || '').trim() || '-',
+        tribunal: tribunalValue || '-',
+        tribunalCategory: getSalleTribunalCategory(tribunalValue),
         client: String(row?.c?.name || '').trim() || '-',
         dateDepot: getAudienceDateDepotDisplayValue(row),
         instruction: instructionValue || '-',
@@ -15735,6 +16821,7 @@ function getAudienceRowsForRegularExport(){
 }
 
 async function exportAudienceRegularXLS(){
+  if(!canExportData()) return alert('Accès refusé');
   return runWithHeavyUiOperation(async ()=>{
     const audienceRows = getAudienceRowsForRegularExport();
     if(!audienceRows.length){
@@ -15753,7 +16840,7 @@ async function exportAudienceRegularXLS(){
     'Tribunal'
   ];
 
-  const rows = await mapChunked(audienceRows, async (r)=>{
+  const mapAudienceRegularExportRow = (r)=>{
     const p = r.p;
     const d = r.d;
     const draft = r.draft;
@@ -15772,7 +16859,23 @@ async function exportAudienceRegularXLS(){
       sortValue,
       p.tribunal || ''
     ];
-  }, {
+  };
+  const colWidths = [{ wch: 22 }, { wch: 28 }, { wch: 18 }, { wch: 24 }, { wch: 24 }, { wch: 18 }, { wch: 28 }, { wch: 46 }];
+  const useCsvFastPath = audienceRows.length >= AUDIENCE_REGULAR_EXPORT_CSV_THRESHOLD;
+
+    if(useCsvFastPath){
+      const csvBlob = await createMappedCsvBlobChunked({
+      headers,
+      items: audienceRows,
+      mapRow: mapAudienceRegularExportRow,
+      progressLabel: 'Export audience CSV',
+      chunkSize: 240
+      });
+    await saveBlobDirectOrDownload(csvBlob, 'export_audience_standard.csv');
+    return;
+  }
+
+  const rows = await mapChunked(audienceRows, async (r)=>mapAudienceRegularExportRow(r), {
     chunkSize: 120,
     onProgress: makeProgressReporter('Export audience')
   });
@@ -15782,13 +16885,14 @@ async function exportAudienceRegularXLS(){
       rows,
       subtitle: 'Export standard',
       sheetName: 'Export',
-      colWidths: [{ wch: 22 }, { wch: 28 }, { wch: 18 }, { wch: 24 }, { wch: 24 }, { wch: 18 }, { wch: 28 }, { wch: 46 }],
+      colWidths,
       filename: 'export_audience_standard.xlsx'
     });
   });
 }
 
 async function exportAudienceXLS(options = {}){
+  if(!canExportData()) return alert('Accès refusé');
   return runWithHeavyUiOperation(async ()=>{
     const dataset = await buildAudienceSelectedExportDatasetAsync();
     if(!dataset.rows.length){
@@ -15803,7 +16907,10 @@ async function exportAudienceXLS(options = {}){
       sheetName: 'Audience',
       colWidths: dataset.colWidths,
       filename: 'audience_export.xlsx',
-      openAfterExport: options?.openAfterExport === true
+      layoutPreset: 'audience-reference',
+      openAfterExport: options?.openAfterExport === true,
+      browserDownloadTarget: options?.browserDownloadTarget || null,
+      preferredFileHandle: options?.preferredFileHandle || null
     });
   });
 }
@@ -16078,17 +17185,145 @@ function queueAudienceAutoSave(){
 }
 
 // ================== PROCEDURE DETAILS ==================
-function collectProcedureDraft(){
+const PROCEDURE_CARD_SELECTOR = '#procedureDetails .proc-card';
+
+function getProcedureCardElements(root = document){
+  return [...root.querySelectorAll(PROCEDURE_CARD_SELECTOR)];
+}
+
+function getProcedureCardName(card){
+  return String(card?.querySelector('h4')?.innerText || '').trim();
+}
+
+function getProcedureCardNames(root = document){
+  return getProcedureCardElements(root)
+    .map(card=>getProcedureCardName(card))
+    .filter(Boolean);
+}
+
+function collectProcedureDraftFromCards({ root = document, trimValues = false } = {}){
   const draft = {};
-  document.querySelectorAll('#procedureDetails .proc-card').forEach(card=>{
-    const name = card.querySelector('h4')?.innerText.trim();
+  getProcedureCardElements(root).forEach(card=>{
+    const name = getProcedureCardName(card);
     if(!name) return;
     draft[name] = {};
     card.querySelectorAll('input, select').forEach(fieldEl=>{
-      draft[name][fieldEl.dataset.field] = fieldEl.value;
+      draft[name][fieldEl.dataset.field] = trimValues ? fieldEl.value.trim() : fieldEl.value;
     });
   });
   return draft;
+}
+
+function applyProcedureFieldValues(container, values){
+  if(!container || !values || typeof values !== 'object') return;
+  container.querySelectorAll('input, select').forEach(fieldEl=>{
+    const key = fieldEl.dataset.field;
+    if(key && values[key] !== undefined) fieldEl.value = values[key];
+  });
+}
+
+function applyProcedureDraftToCards(details, root = document){
+  const source = details && typeof details === 'object' ? details : {};
+  const normalizedMap = {};
+  Object.entries(source).forEach(([key, value])=>{
+    const normalizedKey = String(key || '').trim().toLowerCase();
+    if(normalizedKey) normalizedMap[normalizedKey] = value;
+  });
+  getProcedureCardElements(root).forEach(card=>{
+    const name = getProcedureCardName(card);
+    if(!name) return;
+    const fields = source[name] || normalizedMap[name.toLowerCase()] || {};
+    applyProcedureFieldValues(card, fields);
+  });
+}
+
+function activateProcedureCheckboxes(procList){
+  const values = new Set((procList || []).map(v=>String(v || '').trim()).filter(Boolean));
+  if(!values.size) return;
+  document.querySelectorAll('.proc-check').forEach(cb=>{
+    const rawValue = String(cb.value || '').trim();
+    if(!values.has(rawValue)) return;
+    cb.checked = true;
+    const label = cb.closest('label');
+    if(label) label.classList.add('active');
+  });
+}
+
+function buildProcedureCardFieldsHtml(baseProc, tribunalFieldHtml, addOnlyButtonHtml){
+  if(baseProc === 'SFDC' || baseProc === 'S/bien'){
+    return `
+      <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
+      <input type="text" data-field="depotLe" placeholder="Dépôt le">
+      <input type="text" data-field="referenceClient" placeholder="Référence dossier">
+      <input type="text" data-field="attOrdOrOrdOk" placeholder="att ord / ord ok">
+      <input type="text" data-field="executionNo" placeholder="Execution N°">
+      <input type="text" data-field="attDelegationOuDelegat" placeholder="att delegation ou delegat">
+      <input type="text" data-field="huissier" placeholder="Huissier">
+      <input type="text" data-field="sort" placeholder="Sort">
+      ${tribunalFieldHtml}
+    `;
+  }
+  if(baseProc === 'Injonction'){
+    return `
+      <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
+      <input type="text" data-field="depotLe" placeholder="Dépôt le">
+      <input type="text" data-field="referenceClient" placeholder="Référence dossier">
+      <input type="text" data-field="attOrdOrOrdOk" placeholder="att ord / ord ok">
+      <input type="text" data-field="notificationSort" placeholder="Sort notification">
+      <input type="text" data-field="notificationNo" placeholder="Notification N°">
+      <select data-field="notificationStatus">
+        <option value="att plie avec tr">att plie avec tr</option>
+        <option value="att notif">att notif</option>
+        <option value="notifier">notifier</option>
+        <option value="NB">NB</option>
+      </select>
+      <div class="notif-date-wrap">
+        <input type="date" data-field="dateNotification" placeholder="Date notification">
+      </div>
+      <select data-field="certificatNonAppelStatus">
+        <option value="att certificat non appel">att certificat non appel</option>
+        <option value="certificat non appel ok">certificat non appel ok</option>
+      </select>
+      <input type="text" data-field="executionNo" placeholder="Execution N°">
+      <input type="text" data-field="huissier" placeholder="Huissier">
+      <input type="text" data-field="sort" placeholder="Sort">
+      ${tribunalFieldHtml}
+    `;
+  }
+  if(baseProc === 'Redressement' || baseProc === 'Liquidation judiciaire'){
+    const fixedLabel = 'Declaration';
+    return `
+      <input type="text" data-field="declarationCreance" class="proc-fixed-input" value="${escapeAttr(fixedLabel)}" readonly>
+      <input type="text" data-field="syndicName" placeholder="Nom du syndic">
+      <input type="text" data-field="notificationStatus" placeholder="En cours ou notifié">
+      <input type="text" data-field="dateNotification" placeholder="Date notification">
+      <input type="text" data-field="villeProcedure" placeholder="Ville">
+      ${addOnlyButtonHtml}
+    `;
+  }
+  return `
+    <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
+    <input type="text" data-field="depotLe" placeholder="Dépôt le">
+    <input type="text" data-field="referenceClient" placeholder="Référence dossier">
+    <input type="text" data-field="audience" placeholder="Audience">
+    <input type="text" data-field="juge" placeholder="Juge">
+    <input type="text" data-field="sort" placeholder="Sort">
+    ${tribunalFieldHtml}
+  `;
+}
+
+function bindProcedureTribunalAutocomplete(input){
+  if(!input) return;
+  const syncAutocomplete = ()=>{
+    syncProcedureTribunalAutocompleteOptions(collectProcedureDraft());
+  };
+  ['focus', 'input', 'change'].forEach(eventName=>{
+    input.addEventListener(eventName, syncAutocomplete);
+  });
+}
+
+function collectProcedureDraft(){
+  return collectProcedureDraftFromCards();
 }
 
 function getProcedureBaseName(procName){
@@ -16146,9 +17381,7 @@ function getProcedureColorClass(procName){
 }
 
 function addProcedureVariant(sourceProc){
-  const currentOrder = [...document.querySelectorAll('#procedureDetails .proc-card h4')]
-    .map(el=>el.innerText.trim())
-    .filter(Boolean);
+  const currentOrder = getProcedureCardNames();
   if(!currentOrder.length) return;
   const sourceIndex = currentOrder.indexOf(sourceProc);
   if(sourceIndex === -1) return;
@@ -16163,9 +17396,7 @@ function addProcedureVariant(sourceProc){
 }
 
 function removeProcedureVariant(procName){
-  const currentOrder = [...document.querySelectorAll('#procedureDetails .proc-card h4')]
-    .map(el=>el.innerText.trim())
-    .filter(Boolean);
+  const currentOrder = getProcedureCardNames();
   if(!currentOrder.length) return;
   if(!isProcedureVariantName(procName)) return;
   const idx = currentOrder.indexOf(procName);
@@ -16294,66 +17525,7 @@ function renderProcedureDetails(forceList, forceDraft){
         </div>
       `
       : `<input type="text" data-field="tribunal" list="${PROCEDURE_TRIBUNAL_DATALIST_ID}" placeholder="Tribunal" autocomplete="off">`;
-    let fieldsHtml = `
-      <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
-      <input type="text" data-field="depotLe" placeholder="Dépôt le">
-      <input type="text" data-field="referenceClient" placeholder="Référence dossier">
-      <input type="text" data-field="audience" placeholder="Audience">
-      <input type="text" data-field="juge" placeholder="Juge">
-      <input type="text" data-field="sort" placeholder="Sort">
-      ${tribunalFieldHtml}
-    `;
-    if(baseProc === 'SFDC' || baseProc === 'S/bien'){
-      fieldsHtml = `
-        <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
-        <input type="text" data-field="depotLe" placeholder="Dépôt le">
-        <input type="text" data-field="referenceClient" placeholder="Référence dossier">
-        <input type="text" data-field="attOrdOrOrdOk" placeholder="att ord / ord ok">
-        <input type="text" data-field="executionNo" placeholder="Execution N°">
-        <input type="text" data-field="attDelegationOuDelegat" placeholder="att delegation ou delegat">
-        <input type="text" data-field="huissier" placeholder="Huissier">
-        <input type="text" data-field="sort" placeholder="Sort">
-        ${tribunalFieldHtml}
-      `;
-    }
-    if(baseProc === 'Injonction'){
-      fieldsHtml = `
-        <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
-        <input type="text" data-field="depotLe" placeholder="Dépôt le">
-        <input type="text" data-field="referenceClient" placeholder="Référence dossier">
-        <input type="text" data-field="attOrdOrOrdOk" placeholder="att ord / ord ok">
-        <input type="text" data-field="notificationSort" placeholder="Sort notification">
-        <input type="text" data-field="notificationNo" placeholder="Notification N°">
-        <select data-field="notificationStatus">
-          <option value="att plie avec tr">att plie avec tr</option>
-          <option value="att notif">att notif</option>
-          <option value="notifier">notifier</option>
-          <option value="NB">NB</option>
-        </select>
-        <div class="notif-date-wrap">
-          <input type="date" data-field="dateNotification" placeholder="Date notification">
-        </div>
-        <select data-field="certificatNonAppelStatus">
-          <option value="att certificat non appel">att certificat non appel</option>
-          <option value="certificat non appel ok">certificat non appel ok</option>
-        </select>
-        <input type="text" data-field="executionNo" placeholder="Execution N°">
-        <input type="text" data-field="huissier" placeholder="Huissier">
-        <input type="text" data-field="sort" placeholder="Sort">
-        ${tribunalFieldHtml}
-      `;
-    }
-    if(baseProc === 'Redressement' || baseProc === 'Liquidation judiciaire'){
-      const fixedLabel = 'Declaration';
-      fieldsHtml = `
-        <input type="text" data-field="declarationCreance" class="proc-fixed-input" value="${escapeAttr(fixedLabel)}" readonly>
-        <input type="text" data-field="syndicName" placeholder="Nom du syndic">
-        <input type="text" data-field="notificationStatus" placeholder="En cours ou notifié">
-        <input type="text" data-field="dateNotification" placeholder="Date notification">
-        <input type="text" data-field="villeProcedure" placeholder="Ville">
-        ${addOnlyButtonHtml}
-      `;
-    }
+    const fieldsHtml = buildProcedureCardFieldsHtml(baseProc, tribunalFieldHtml, addOnlyButtonHtml);
     const title = document.createElement('h4');
     title.textContent = proc;
     const head = document.createElement('div');
@@ -16374,12 +17546,7 @@ function renderProcedureDetails(forceList, forceDraft){
     div.appendChild(head);
     div.appendChild(grid);
     container.appendChild(div);
-    if(draft[proc]){
-      div.querySelectorAll('input, select').forEach(fieldEl=>{
-        const key = fieldEl.dataset.field;
-        if(key && draft[proc][key] !== undefined) fieldEl.value = draft[proc][key];
-      });
-    }
+    applyProcedureFieldValues(div, draft[proc]);
     const dateAffectationField = div.querySelector('input[data-field="dateDepot"]');
     if(dateAffectationField && !String(dateAffectationField.value || '').trim()){
       const formDateAffectation = getFormDateAffectationValue();
@@ -16396,25 +17563,14 @@ function renderProcedureDetails(forceList, forceDraft){
     if(addVariantBtn){
       addVariantBtn.addEventListener('click', ()=>addProcedureVariant(proc));
     }
-    div.querySelectorAll('input[data-field="tribunal"]').forEach(input=>{
-      input.addEventListener('focus', ()=>syncProcedureTribunalAutocompleteOptions(collectProcedureDraft()));
-      input.addEventListener('input', ()=>syncProcedureTribunalAutocompleteOptions(collectProcedureDraft()));
-      input.addEventListener('change', ()=>syncProcedureTribunalAutocompleteOptions(collectProcedureDraft()));
-    });
+    div.querySelectorAll('input[data-field="tribunal"]').forEach(bindProcedureTribunalAutocomplete);
   });
 
   syncProcedureMontantGroups(finalList);
 
   if(!forceList || !forceList.length){
     suppressProcedureChange = true;
-    finalList.forEach(p=>{
-      const cb = document.querySelector(`.proc-check[value="${p}"]`);
-      if(cb){
-        cb.checked = true;
-        const label = cb.closest('label');
-        if(label) label.classList.add('active');
-      }
-    });
+    activateProcedureCheckboxes(finalList);
     suppressProcedureChange = false;
   }
 }

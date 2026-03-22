@@ -1,5 +1,25 @@
 let queuedDashboardHeavyOptions = null;
 
+function toDashboardDateKey(year, monthIndex, day){
+  return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function getDashboardTodayKey(){
+  const today = new Date();
+  return toDashboardDateKey(today.getFullYear(), today.getMonth(), today.getDate());
+}
+
+function buildDashboardCalendarDayHtml(day, key, todayKey, eventCount, tooltip){
+  const classes = ['dashboard-calendar-day'];
+  if(key === todayKey) classes.push('is-today');
+  return `
+    <div class="${classes.join(' ')}" title="${escapeAttr(tooltip)}">
+      <span class="day-num">${day}</span>
+      ${key === todayKey && eventCount ? `<span class="day-count">${eventCount}</span>` : ''}
+    </div>
+  `;
+}
+
 function getDashboardCalendarEvents(){
   const userKey = getCurrentClientAccessCacheKey();
   if(
@@ -10,19 +30,15 @@ function getDashboardCalendarEvents(){
     return dashboardCalendarEventsCache;
   }
   const byDate = {};
-  const audienceRows = getAudienceRowsForSidebar();
+  const audienceRows = getAudienceRowsForSidebarProjectedCached();
   audienceRows.forEach(row=>{
-    const dt = parseDateForAge(row?.draft?.dateAudience || row?.p?.audience || '');
-    if(!dt) return;
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const day = String(dt.getDate()).padStart(2, '0');
-    const key = `${y}-${m}-${day}`;
+    const key = String(row?.calendarDateKey || '').trim();
+    if(!key) return;
     if(!byDate[key]) byDate[key] = [];
-    byDate[key].push({
-      client: row?.c?.name || '-',
-      procedure: row?.procKey || '-',
-      debiteur: row?.d?.debiteur || '-'
+    byDate[key].push(row.calendarEvent || {
+      client: '-',
+      procedure: '-',
+      debiteur: '-'
     });
   });
   dashboardCalendarEventsCache = byDate;
@@ -45,48 +61,64 @@ function renderDashboardCalendar(){
   const firstDay = new Date(year, month, 1);
   const firstWeekday = (firstDay.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const today = new Date();
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayKey = getDashboardTodayKey();
+  const cacheKey = [
+    dashboardCalendarEventsCacheVersion,
+    dashboardCalendarEventsCacheUserKey,
+    year,
+    month,
+    todayKey
+  ].join('||');
+  if(cacheKey === dashboardCalendarMarkupCacheKey && dashboardCalendarMarkupCacheHtml){
+    setElementHtmlWithRenderKey(grid, dashboardCalendarMarkupCacheHtml, cacheKey, { trustRenderKey: true });
+    return;
+  }
 
   let html = headers.map(h=>`<div class="dashboard-calendar-weekday">${h}</div>`).join('');
   for(let i = 0; i < firstWeekday; i++){
     html += '<div class="dashboard-calendar-day is-empty"></div>';
   }
   for(let day = 1; day <= daysInMonth; day++){
-    const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const key = toDashboardDateKey(year, month, day);
     const events = eventsByDate[key] || [];
-    const classes = ['dashboard-calendar-day'];
-    if(key === todayKey) classes.push('is-today');
+    const eventCount = events.length;
     const tooltip = events
       .map(e=>`${e.client} / ${e.procedure} / ${e.debiteur}`)
       .join(' | ');
-    html += `
-      <div class="${classes.join(' ')}" title="${escapeAttr(tooltip)}">
-        <span class="day-num">${day}</span>
-        ${key === todayKey && events.length ? `<span class="day-count">${events.length}</span>` : ''}
-      </div>
-    `;
+    html += buildDashboardCalendarDayHtml(day, key, todayKey, eventCount, tooltip);
   }
-  grid.innerHTML = html;
+  dashboardCalendarMarkupCacheKey = cacheKey;
+  dashboardCalendarMarkupCacheHtml = html;
+  setElementHtmlWithRenderKey(grid, html, cacheKey, { trustRenderKey: true });
 }
 
 function queueDashboardCalendarRender(){
   if(dashboardCalendarRenderTimer) return;
+  const heavyDelay = isVeryLargeLiveSyncMode()
+    ? getAdaptiveUiBatchDelay(1800, {
+      largeDatasetExtraMs: 400,
+      busyExtraMs: 700,
+      importExtraMs: 900
+    })
+    : 120;
   const render = ()=>{
     dashboardCalendarRenderTimer = null;
     renderDashboardCalendar();
   };
   if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-    dashboardCalendarRenderTimer = window.requestIdleCallback(render, { timeout: 1200 });
+    dashboardCalendarRenderTimer = window.requestIdleCallback(render, {
+      timeout: Math.max(1200, Number(heavyDelay) || 1200)
+    });
     return;
   }
-  dashboardCalendarRenderTimer = setTimeout(render, 120);
+  dashboardCalendarRenderTimer = setTimeout(render, Math.max(120, Number(heavyDelay) || 120));
 }
 
 function queueDashboardHeavyRender(options = {}){
   queuedDashboardHeavyOptions = {
     delayMs: Math.max(0, Number(options?.delayMs) || 0),
-    includeAudienceMetrics: options.includeAudienceMetrics
+    includeAudienceMetrics: options.includeAudienceMetrics,
+    immediate: options.immediate === true
   };
   if(dashboardHeavyRenderTimer) return;
   const render = ()=>{
@@ -97,15 +129,20 @@ function queueDashboardHeavyRender(options = {}){
     const audienceMetrics = nextOptions.includeAudienceMetrics === false
       ? null
       : getDashboardAudienceMetrics();
-    animateDashboardMetric('dossiersEnCours', snapshot.enCours);
-    animateDashboardMetric('dossiersTermines', snapshot.clotureCount);
-    if($('dossiersAttSort')) animateDashboardMetric('dossiersAttSort', audienceMetrics ? audienceMetrics.attSortCount : 0);
-    if($('audienceErrorsCount')) animateDashboardMetric('audienceErrorsCount', audienceMetrics ? audienceMetrics.audienceErrors : 0);
+    const metricOptions = { immediate: nextOptions.immediate === true };
+    animateDashboardMetric('dossiersEnCours', snapshot.enCours, metricOptions);
+    animateDashboardMetric('dossiersTermines', snapshot.clotureCount, metricOptions);
+    if($('dossiersAttSort')) animateDashboardMetric('dossiersAttSort', audienceMetrics ? audienceMetrics.attSortCount : 0, metricOptions);
+    if($('audienceErrorsCount')) animateDashboardMetric('audienceErrorsCount', audienceMetrics ? audienceMetrics.audienceErrors : 0, metricOptions);
     if(nextOptions.includeAudienceMetrics !== false){
       queueDashboardCalendarRender();
     }
   };
-  const delayMs = queuedDashboardHeavyOptions.delayMs;
+  const delayMs = getAdaptiveUiBatchDelay(queuedDashboardHeavyOptions.delayMs, {
+    largeDatasetExtraMs: 220,
+    busyExtraMs: 320,
+    importExtraMs: 420
+  });
   if(delayMs > 0){
     dashboardHeavyRenderTimer = setTimeout(()=>{
       dashboardHeavyRenderTimer = null;
@@ -126,9 +163,11 @@ function queueDashboardHeavyRender(options = {}){
 
 function renderDashboard(options = {}){
   if(!shouldRenderDeferredSection('dashboard', options)) return;
-  animateDashboardMetric('totalClients', getVisibleClients().length, options);
+  const immediateMetrics = options.immediate === true || isLargeDatasetMode() || heavyUiOperationCount > 0;
+  animateDashboardMetric('totalClients', getVisibleClients().length, { immediate: immediateMetrics });
   queueDashboardHeavyRender({
     delayMs: options.deferHeavy ? 1800 : 0,
-    includeAudienceMetrics: options.includeAudienceMetrics
+    includeAudienceMetrics: options.includeAudienceMetrics,
+    immediate: immediateMetrics
   });
 }

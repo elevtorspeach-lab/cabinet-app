@@ -1,5 +1,25 @@
 let queuedDashboardHeavyOptions = null;
 
+function toDashboardDateKey(year, monthIndex, day){
+  return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function getDashboardTodayKey(){
+  const today = new Date();
+  return toDashboardDateKey(today.getFullYear(), today.getMonth(), today.getDate());
+}
+
+function buildDashboardCalendarDayHtml(day, key, todayKey, eventCount, tooltip){
+  const classes = ['dashboard-calendar-day'];
+  if(key === todayKey) classes.push('is-today');
+  return `
+    <div class="${classes.join(' ')}" title="${escapeAttr(tooltip)}">
+      <span class="day-num">${day}</span>
+      ${key === todayKey && eventCount ? `<span class="day-count">${eventCount}</span>` : ''}
+    </div>
+  `;
+}
+
 function getDashboardCalendarEvents(){
   const userKey = getCurrentClientAccessCacheKey();
   if(
@@ -41,8 +61,7 @@ function renderDashboardCalendar(){
   const firstDay = new Date(year, month, 1);
   const firstWeekday = (firstDay.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const today = new Date();
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayKey = getDashboardTodayKey();
   const cacheKey = [
     dashboardCalendarEventsCacheVersion,
     dashboardCalendarEventsCacheUserKey,
@@ -60,19 +79,13 @@ function renderDashboardCalendar(){
     html += '<div class="dashboard-calendar-day is-empty"></div>';
   }
   for(let day = 1; day <= daysInMonth; day++){
-    const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const key = toDashboardDateKey(year, month, day);
     const events = eventsByDate[key] || [];
-    const classes = ['dashboard-calendar-day'];
-    if(key === todayKey) classes.push('is-today');
+    const eventCount = events.length;
     const tooltip = events
       .map(e=>`${e.client} / ${e.procedure} / ${e.debiteur}`)
       .join(' | ');
-    html += `
-      <div class="${classes.join(' ')}" title="${escapeAttr(tooltip)}">
-        <span class="day-num">${day}</span>
-        ${key === todayKey && events.length ? `<span class="day-count">${events.length}</span>` : ''}
-      </div>
-    `;
+    html += buildDashboardCalendarDayHtml(day, key, todayKey, eventCount, tooltip);
   }
   dashboardCalendarMarkupCacheKey = cacheKey;
   dashboardCalendarMarkupCacheHtml = html;
@@ -81,15 +94,24 @@ function renderDashboardCalendar(){
 
 function queueDashboardCalendarRender(){
   if(dashboardCalendarRenderTimer) return;
+  const heavyDelay = isVeryLargeLiveSyncMode()
+    ? getAdaptiveUiBatchDelay(1800, {
+      largeDatasetExtraMs: 400,
+      busyExtraMs: 700,
+      importExtraMs: 900
+    })
+    : 120;
   const render = ()=>{
     dashboardCalendarRenderTimer = null;
     renderDashboardCalendar();
   };
   if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
-    dashboardCalendarRenderTimer = window.requestIdleCallback(render, { timeout: 1200 });
+    dashboardCalendarRenderTimer = window.requestIdleCallback(render, {
+      timeout: Math.max(1200, Number(heavyDelay) || 1200)
+    });
     return;
   }
-  dashboardCalendarRenderTimer = setTimeout(render, 120);
+  dashboardCalendarRenderTimer = setTimeout(render, Math.max(120, Number(heavyDelay) || 120));
 }
 
 function queueDashboardHeavyRender(options = {}){

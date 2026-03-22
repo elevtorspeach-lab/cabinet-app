@@ -1,5 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron');
-const { ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 
@@ -20,6 +19,15 @@ function sanitizeExportFilename(value) {
 
 function getDesktopExportDirectoryPath() {
   return path.join(app.getPath('downloads'), EXPORTS_DIR_NAME);
+}
+
+function buildDefaultDesktopStatePayload() {
+  return {
+    clients: [],
+    salleAssignments: [],
+    users: [],
+    audienceDraft: {}
+  };
 }
 
 async function writeDesktopExportFile(payload) {
@@ -74,12 +82,21 @@ async function readDesktopState() {
 async function ensureDesktopStateFileExists() {
   const result = await readDesktopState();
   if (result && result.data) return result.filePath;
-  const filePath = await writeDesktopState({
-    clients: [],
-    salleAssignments: [],
-    users: [],
-    audienceDraft: {}
-  });
+  const filePath = await writeDesktopState(buildDefaultDesktopStatePayload());
+  return filePath;
+}
+
+async function ensureDesktopStateFileForOpen() {
+  const filePath = getDesktopStateFilePath();
+  try {
+    await fs.access(filePath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      await writeDesktopState(buildDefaultDesktopStatePayload());
+    } else {
+      throw err;
+    }
+  }
   return filePath;
 }
 
@@ -132,21 +149,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('desktop-state:open-file', async () => {
-    const filePath = getDesktopStateFilePath();
-    try {
-      await fs.access(filePath);
-    } catch (err) {
-      if (err && err.code === 'ENOENT') {
-        await writeDesktopState({
-          clients: [],
-          salleAssignments: [],
-          users: [],
-          audienceDraft: {}
-        });
-      } else {
-        throw err;
-      }
-    }
+    const filePath = await ensureDesktopStateFileForOpen();
     const openError = await shell.openPath(filePath);
     return { ok: !openError, filePath, error: openError || '' };
   });

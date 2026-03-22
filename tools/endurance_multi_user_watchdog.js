@@ -3,8 +3,9 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { pbkdf2Sync, randomBytes } = require('crypto');
+const { monitorEventLoopDelay } = require('perf_hooks');
 const { chromium } = require('playwright');
-const { buildPayload } = require('./benchmark_large_state');
+const { buildPayload, countDiligenceRows } = require('./benchmark_large_state');
 
 function readCountArg(flag, fallback, options = {}) {
   const arg = process.argv.find((value) => value.startsWith(`${flag}=`));
@@ -17,14 +18,16 @@ function readCountArg(flag, fallback, options = {}) {
 
 const SOURCE_ROOT = path.join(__dirname, '..');
 const CLIENT_COUNT = readCountArg('--clients', 600);
-const DOSSIER_COUNT = readCountArg('--dossiers', 40000);
-const AUDIENCE_COUNT = readCountArg('--audiences', 75000, { allowZero: true });
+const DOSSIER_COUNT = readCountArg('--dossiers', 50000);
+const AUDIENCE_COUNT = readCountArg('--audiences', 80000, { allowZero: true });
+const DILIGENCE_COUNT = readCountArg('--diligences', 0, { allowZero: true });
 const TOTAL_USER_COUNT = readCountArg('--users', 20);
 const VIEWER_COUNT = readCountArg('--client-users', 7, { allowZero: true });
-const ADMIN_COUNT = readCountArg('--admins', 10, { allowZero: true });
+const ADMIN_COUNT = readCountArg('--admins', 12, { allowZero: true });
 const MANAGER_COUNT = readCountArg('--managers', Math.max(1, TOTAL_USER_COUNT - VIEWER_COUNT - ADMIN_COUNT), { allowZero: true });
-const DURATION_MINUTES = readCountArg('--minutes', 20);
+const DURATION_MINUTES = readCountArg('--minutes', 720);
 const PORT = readCountArg('--port', 3600);
+const HTTPS_PORT = readCountArg('--https-port', PORT + 443);
 const HOST = process.env.HOST || '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
 const DURATION_MS = DURATION_MINUTES * 60 * 1000;
@@ -35,19 +38,32 @@ const SESSION_BOOT_TIMEOUT_MS = readCountArg('--session-boot-timeout-ms', 180000
 const SESSION_BATCH_SIZE = readCountArg('--session-batch-size', 4);
 const SESSION_BATCH_PAUSE_MS = readCountArg('--session-batch-pause-ms', 1200);
 const PAGE_EVAL_TIMEOUT_MS = readCountArg('--page-eval-timeout-ms', 10000);
+const PAGE_EVAL_SLOW_THRESHOLD_MS = readCountArg('--page-eval-slow-threshold-ms', 2500);
 const FREEZE_THRESHOLD_MS = readCountArg('--freeze-threshold-ms', 8000);
 const LONG_GAP_THRESHOLD_MS = readCountArg('--long-gap-threshold-ms', 2500);
 const WATCHDOG_WARMUP_MS = readCountArg('--watchdog-warmup-ms', 20000);
 const TARGET_CLIENT_ID = readCountArg('--target-client-id', 1);
 const DATA_READY_TIMEOUT_MS = readCountArg('--data-ready-timeout-ms', 900000);
 const DOWNLOAD_TIMEOUT_MS = readCountArg('--download-timeout-ms', 900000);
+const PROGRESS_WRITE_INTERVAL_MS = readCountArg('--progress-write-interval-ms', 60000);
 const EXPORT_SELECTION_ROWS = readCountArg('--export-selection-rows', 250);
 const IMPORT_EVERY_CYCLES = readCountArg('--import-every-cycles', 2);
 const IMPORTERS_PER_CYCLE = readCountArg('--importers-per-cycle', 1, { allowZero: true });
+const MANAGER_DELETES_PER_CYCLE = readCountArg('--manager-deletes-per-cycle', 0, { allowZero: true });
 const MODIFIERS_PER_CYCLE = readCountArg('--modifiers-per-cycle', 2, { allowZero: true });
+const CLIENT_CREATORS_PER_CYCLE = readCountArg('--client-creators-per-cycle', 0, { allowZero: true });
+const DOSSIER_CREATORS_PER_CYCLE = readCountArg('--dossier-creators-per-cycle', 0, { allowZero: true });
 const EXPORTERS_PER_CYCLE = readCountArg('--exporters-per-cycle', 4, { allowZero: true });
 const BROWSERS_PER_CYCLE = readCountArg('--browsers-per-cycle', 6, { allowZero: true });
-const MAX_EVENT_SAMPLES = 250;
+const MAX_EVENT_SAMPLES = 1000;
+const MAX_PAGE_SNAPSHOT_SAMPLES = 20000;
+const MAX_SYSTEM_SAMPLES = 4000;
+const MAX_SERVER_LOG_SAMPLES = 2000;
+const MAX_SESSION_SAMPLE_SAMPLES = 500;
+const DEFAULT_TEST_PASSWORD = '1234';
+const EVENT_LOOP_DELAY_MONITOR = typeof monitorEventLoopDelay === 'function'
+  ? monitorEventLoopDelay({ resolution: 20 })
+  : null;
 const ROUTE_SELECTOR = {
   dashboard: '#dashboardSection',
   clients: '#clientSection',
@@ -59,11 +75,20 @@ const ROUTE_SELECTOR = {
   equipe: '#equipeSection',
   recycle: '#recycleSection'
 };
+const ROLE_ACCESSIBLE_ROUTES = {
+  manager: new Set(['dashboard', 'clients', 'creation', 'suivi', 'audience', 'diligence', 'salle', 'equipe', 'recycle']),
+  admin: new Set(['dashboard', 'clients', 'creation', 'suivi', 'audience', 'diligence', 'salle']),
+  client: new Set(['dashboard', 'suivi'])
+};
 const ROUTE_PLANS = {
   manager: ['dashboard', 'clients', 'suivi', 'audience', 'diligence', 'salle', 'equipe', 'creation', 'recycle'],
   admin: ['dashboard', 'clients', 'suivi', 'audience', 'diligence', 'salle', 'creation'],
-  client: ['dashboard', 'suivi', 'audience', 'diligence', 'salle']
+  client: ['dashboard', 'suivi']
 };
+
+if (EVENT_LOOP_DELAY_MONITOR) {
+  EVENT_LOOP_DELAY_MONITOR.enable();
+}
 
 if ((VIEWER_COUNT + ADMIN_COUNT + MANAGER_COUNT) !== TOTAL_USER_COUNT) {
   throw new Error(
@@ -84,39 +109,52 @@ function normalizeRoleLabel(role, username) {
   return role;
 }
 
+function resolveRouteForRole(role, requestedRoute) {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  const allowedRoutes = ROLE_ACCESSIBLE_ROUTES[normalizedRole] || ROLE_ACCESSIBLE_ROUTES.manager;
+  const requested = String(requestedRoute || '').trim().toLowerCase();
+  if (requested && allowedRoutes.has(requested)) return requested;
+  return allowedRoutes.has('dashboard') ? 'dashboard' : [...allowedRoutes][0] || 'dashboard';
+}
+
 function makeRoutePlan(role, index) {
   const routes = ROUTE_PLANS[role] || ROUTE_PLANS.manager;
-  return routes[index % routes.length] || 'dashboard';
+  return resolveRouteForRole(role, routes[index % routes.length] || 'dashboard');
+}
+
+function buildWatchdogUser(id, username, role, clientIds = []) {
+  return {
+    id,
+    username,
+    password: DEFAULT_TEST_PASSWORD,
+    role,
+    clientIds: Array.isArray(clientIds) ? clientIds.slice() : []
+  };
 }
 
 function buildUsers() {
   const users = [];
   for (let i = 1; i <= MANAGER_COUNT; i += 1) {
-    users.push({
-      id: i,
-      username: i === 1 ? 'manager' : `manager${i}`,
-      password: '1234',
-      role: 'manager',
-      clientIds: []
-    });
+    users.push(buildWatchdogUser(
+      i,
+      i === 1 ? 'manager' : `manager${i}`,
+      'manager'
+    ));
   }
   for (let i = 1; i <= ADMIN_COUNT; i += 1) {
-    users.push({
-      id: MANAGER_COUNT + i,
-      username: `admin${i}`,
-      password: '1234',
-      role: 'admin',
-      clientIds: []
-    });
+    users.push(buildWatchdogUser(
+      MANAGER_COUNT + i,
+      `admin${i}`,
+      'admin'
+    ));
   }
   for (let i = 1; i <= VIEWER_COUNT; i += 1) {
-    users.push({
-      id: MANAGER_COUNT + ADMIN_COUNT + i,
-      username: `client${i}`,
-      password: '1234',
-      role: 'client',
-      clientIds: [i]
-    });
+    users.push(buildWatchdogUser(
+      MANAGER_COUNT + ADMIN_COUNT + i,
+      `client${i}`,
+      'client',
+      [i]
+    ));
   }
   return users;
 }
@@ -145,9 +183,9 @@ function buildPersistedUsers(users) {
   });
 }
 
-function keepLast(items, nextItem) {
+function keepLast(items, nextItem, maxItems = MAX_EVENT_SAMPLES) {
   items.push(nextItem);
-  if (items.length > MAX_EVENT_SAMPLES) items.splice(0, items.length - MAX_EVENT_SAMPLES);
+  if (items.length > maxItems) items.splice(0, items.length - maxItems);
 }
 
 function percentile(values, p) {
@@ -155,6 +193,103 @@ function percentile(values, p) {
   const sorted = values.slice().sort((a, b) => a - b);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[index];
+}
+
+function summarizeNumbers(values) {
+  const valid = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite);
+  return {
+    count: valid.length,
+    min: valid.length ? Math.min(...valid) : null,
+    max: valid.length ? Math.max(...valid) : null,
+    p95: valid.length ? percentile(valid, 95) : null,
+    avg: valid.length ? Number((valid.reduce((sum, value) => sum + value, 0) / valid.length).toFixed(1)) : null
+  };
+}
+
+function summarizeBytes(values) {
+  return summarizeNumbers(values);
+}
+
+function getEventLoopDelaySnapshot() {
+  if (!EVENT_LOOP_DELAY_MONITOR) return null;
+  const toMs = (value) => Number((Number(value || 0) / 1e6).toFixed(1));
+  return {
+    maxMs: toMs(EVENT_LOOP_DELAY_MONITOR.max),
+    meanMs: toMs(EVENT_LOOP_DELAY_MONITOR.mean),
+    p95Ms: toMs(typeof EVENT_LOOP_DELAY_MONITOR.percentile === 'function' ? EVENT_LOOP_DELAY_MONITOR.percentile(95) : 0),
+    stddevMs: toMs(EVENT_LOOP_DELAY_MONITOR.stddev)
+  };
+}
+
+function getPageMemorySnapshot(snapshot) {
+  const memory = snapshot?.memory;
+  if (!memory || typeof memory !== 'object') return null;
+  const usedBytes = Number(memory.usedJSHeapSize);
+  const totalBytes = Number(memory.totalJSHeapSize);
+  const limitBytes = Number(memory.jsHeapSizeLimit);
+  const ratio = Number.isFinite(usedBytes) && Number.isFinite(limitBytes) && limitBytes > 0
+    ? Number((usedBytes / limitBytes).toFixed(4))
+    : null;
+  return {
+    usedBytes: Number.isFinite(usedBytes) ? usedBytes : null,
+    totalBytes: Number.isFinite(totalBytes) ? totalBytes : null,
+    limitBytes: Number.isFinite(limitBytes) ? limitBytes : null,
+    ratio
+  };
+}
+
+function createSessionStats(session) {
+  return {
+    user: session.user.username,
+    role: session.user.role,
+    route: session.route,
+    polls: 0,
+    failures: 0,
+    missingSnapshots: 0,
+    slowPolls: 0,
+    freezeWarnings: 0,
+    gapWarnings: 0,
+    memoryWarnings: 0,
+    maxLatencyMs: 0,
+    maxIntervalGapMs: 0,
+    maxRafGapMs: 0,
+    maxHeapRatio: 0,
+    lastSeenAt: null,
+    lastRoute: session.route,
+    latencySamples: [],
+    intervalGapSamples: [],
+    rafGapSamples: [],
+    heapUsedSamples: [],
+    heapLimitSamples: [],
+    heapRatioSamples: []
+  };
+}
+
+function summarizeSessionStats(stats) {
+  return {
+    user: stats.user,
+    role: stats.role,
+    route: stats.route,
+    polls: stats.polls,
+    failures: stats.failures,
+    missingSnapshots: stats.missingSnapshots,
+    slowPolls: stats.slowPolls,
+    freezeWarnings: stats.freezeWarnings,
+    gapWarnings: stats.gapWarnings,
+    memoryWarnings: stats.memoryWarnings,
+    maxLatencyMs: stats.maxLatencyMs || null,
+    maxIntervalGapMs: stats.maxIntervalGapMs || null,
+    maxRafGapMs: stats.maxRafGapMs || null,
+    maxHeapRatio: stats.maxHeapRatio || null,
+    lastSeenAt: stats.lastSeenAt,
+    lastRoute: stats.lastRoute,
+    latencySummary: summarizeNumbers(stats.latencySamples),
+    intervalGapSummary: summarizeNumbers(stats.intervalGapSamples),
+    rafGapSummary: summarizeNumbers(stats.rafGapSamples),
+    heapUsedSummary: summarizeBytes(stats.heapUsedSamples),
+    heapLimitSummary: summarizeBytes(stats.heapLimitSamples),
+    heapRatioSummary: summarizeNumbers(stats.heapRatioSamples)
+  };
 }
 
 function summarizePropagation(delays) {
@@ -208,6 +343,23 @@ function buildStressDossier(referenceClient, cycleIndex) {
   };
 }
 
+function buildStressClientName(cycleIndex, variantIndex = 0) {
+  return `END-CLIENT-${cycleIndex}-${variantIndex}-${Date.now().toString(36)}`;
+}
+
+function buildDefaultSalleAssignments() {
+  const out = [];
+  for (let index = 0; index < 12; index += 1) {
+    out.push({
+      id: 100000 + index,
+      salle: `Salle ${Math.floor(index / 3) + 1}`,
+      juge: `Juge ${index}`,
+      day: 'lundi'
+    });
+  }
+  return out;
+}
+
 async function copyProjectSubset(runRoot) {
   await fs.mkdir(runRoot, { recursive: true });
   for (const entry of [
@@ -220,20 +372,39 @@ async function copyProjectSubset(runRoot) {
     'render-diligence.js',
     'audience-ui-helpers.js',
     'vendor',
-    'workers',
-    'server'
+    'workers'
   ]) {
     await fs.cp(path.join(SOURCE_ROOT, entry), path.join(runRoot, entry), { recursive: true });
   }
+
+  const serverRoot = path.join(runRoot, 'server');
+  await fs.mkdir(serverRoot, { recursive: true });
+  for (const entry of [
+    'index.js',
+    'package.json',
+    'node_modules',
+    'ssl',
+    'create-local-ssl.sh',
+    'trust-local-ssl-mac.sh',
+    'trust-local-ssl-windows.ps1'
+  ]) {
+    await fs.cp(path.join(SOURCE_ROOT, 'server', entry), path.join(serverRoot, entry), { recursive: true });
+  }
+  await fs.mkdir(path.join(serverRoot, 'data', 'backups'), { recursive: true });
 }
 
 async function writeFixtureState(runRoot, users) {
   const payload = buildPayload({
     clients: CLIENT_COUNT,
     dossiers: DOSSIER_COUNT,
-    audiences: AUDIENCE_COUNT
+    audiences: AUDIENCE_COUNT,
+    diligences: DILIGENCE_COUNT
   });
+  const estimatedDiligenceRows = countDiligenceRows(payload);
   payload.users = buildPersistedUsers(users);
+  if (!Array.isArray(payload.salleAssignments) || !payload.salleAssignments.length) {
+    payload.salleAssignments = buildDefaultSalleAssignments();
+  }
   payload.updatedAt = nowIso();
   payload.version = 0;
   const statePath = path.join(runRoot, 'server', 'data', 'state.json');
@@ -244,12 +415,15 @@ async function writeFixtureState(runRoot, users) {
     `fixture_${CLIENT_COUNT}c_${DOSSIER_COUNT}d_${AUDIENCE_COUNT}a.appsavocat`
   );
   await fs.writeFile(fixturePath, JSON.stringify(payload), 'utf8');
-  return { statePath, fixturePath };
+  return { statePath, fixturePath, estimatedDiligenceRows };
 }
 
 async function waitForServer(timeoutMs = 30000) {
   const startedAt = Date.now();
   for (;;) {
+    if (globalThis.__enduranceServerProcess && globalThis.__enduranceServerProcess.exitCode !== null) {
+      throw new Error(`Server exited before becoming ready (exitCode=${globalThis.__enduranceServerProcess.exitCode}).`);
+    }
     try {
       const response = await fetch(`${BASE_URL}/api/health`);
       if (response.ok) return;
@@ -280,9 +454,11 @@ class ErrorSentinel {
     this.events = [];
     this.health = [];
     this.pageSnapshots = [];
+    this.systemSamples = [];
     this.serverStdout = [];
     this.serverStderr = [];
     this.cycleSummaries = [];
+    this.sessionStats = new Map();
   }
 
   record(type, payload = {}) {
@@ -298,7 +474,62 @@ class ErrorSentinel {
   }
 
   recordSnapshot(entry) {
-    keepLast(this.pageSnapshots, entry);
+    keepLast(this.pageSnapshots, entry, MAX_PAGE_SNAPSHOT_SAMPLES);
+  }
+
+  recordSystemSample(entry) {
+    keepLast(this.systemSamples, entry, MAX_SYSTEM_SAMPLES);
+  }
+
+  getSessionStats(session) {
+    const key = session.user.username;
+    if (!this.sessionStats.has(key)) {
+      this.sessionStats.set(key, createSessionStats(session));
+    }
+    return this.sessionStats.get(key);
+  }
+
+  recordSessionSnapshot(session, entry = {}) {
+    const stats = this.getSessionStats(session);
+    stats.polls += 1;
+    if (entry.failed === true) stats.failures += 1;
+    if (entry.missingSnapshot === true) stats.missingSnapshots += 1;
+    if (entry.slow === true) stats.slowPolls += 1;
+    if (entry.freezeWarning === true) stats.freezeWarnings += 1;
+    if (entry.gapWarning === true) stats.gapWarnings += 1;
+    if (entry.memoryWarning === true) stats.memoryWarnings += 1;
+    if (entry.at) stats.lastSeenAt = entry.at;
+    if (entry.route) stats.lastRoute = entry.route;
+
+    const latencyMs = Number(entry.latencyMs);
+    if (Number.isFinite(latencyMs)) {
+      stats.maxLatencyMs = Math.max(stats.maxLatencyMs, latencyMs);
+      keepLast(stats.latencySamples, latencyMs, MAX_SESSION_SAMPLE_SAMPLES);
+    }
+
+    const intervalMaxGapMs = Number(entry.intervalMaxGapMs);
+    if (Number.isFinite(intervalMaxGapMs)) {
+      stats.maxIntervalGapMs = Math.max(stats.maxIntervalGapMs, intervalMaxGapMs);
+      keepLast(stats.intervalGapSamples, intervalMaxGapMs, MAX_SESSION_SAMPLE_SAMPLES);
+    }
+
+    const rafMaxGapMs = Number(entry.rafMaxGapMs);
+    if (Number.isFinite(rafMaxGapMs)) {
+      stats.maxRafGapMs = Math.max(stats.maxRafGapMs, rafMaxGapMs);
+      keepLast(stats.rafGapSamples, rafMaxGapMs, MAX_SESSION_SAMPLE_SAMPLES);
+    }
+
+    const memory = entry.memory || null;
+    const usedBytes = Number(memory?.usedBytes);
+    const limitBytes = Number(memory?.limitBytes);
+    const ratio = Number(memory?.ratio);
+    if (Number.isFinite(usedBytes)) keepLast(stats.heapUsedSamples, usedBytes, MAX_SESSION_SAMPLE_SAMPLES);
+    if (Number.isFinite(limitBytes)) keepLast(stats.heapLimitSamples, limitBytes, MAX_SESSION_SAMPLE_SAMPLES);
+    if (Number.isFinite(ratio)) {
+      stats.maxHeapRatio = Math.max(stats.maxHeapRatio, ratio);
+      keepLast(stats.heapRatioSamples, ratio, MAX_SESSION_SAMPLE_SAMPLES);
+    }
+    return stats;
   }
 
   recordCycle(summary) {
@@ -310,15 +541,32 @@ class ErrorSentinel {
       keepLast(this.serverStdout, {
         at: nowIso(),
         line: String(chunk || '').trim()
-      });
+      }, MAX_SERVER_LOG_SAMPLES);
     });
     server.stderr.on('data', (chunk) => {
       const line = String(chunk || '').trim();
       keepLast(this.serverStderr, {
         at: nowIso(),
         line
-      });
+      }, MAX_SERVER_LOG_SAMPLES);
       if (line) this.record('server-stderr', { line });
+    });
+    server.on('error', (error) => {
+      this.record('server-process-error', {
+        error: String(error?.message || error)
+      });
+    });
+    server.on('exit', (code, signal) => {
+      this.record('server-exit', {
+        code: Number.isInteger(code) ? code : null,
+        signal: signal || null
+      });
+    });
+    server.on('close', (code, signal) => {
+      this.record('server-close', {
+        code: Number.isInteger(code) ? code : null,
+        signal: signal || null
+      });
     });
   }
 
@@ -350,6 +598,11 @@ class ErrorSentinel {
   }
 
   async pollSessions(sessions) {
+    const systemSample = {
+      at: nowIso(),
+      processMemory: process.memoryUsage(),
+      eventLoopDelay: getEventLoopDelaySnapshot()
+    };
     for (const session of sessions) {
       const startedAt = Date.now();
       try {
@@ -364,13 +617,15 @@ class ErrorSentinel {
           `watchdog poll for ${session.user.username}`
         );
         const latencyMs = Date.now() - startedAt;
+        const memory = getPageMemorySnapshot(snapshot);
         const entry = {
           at: nowIso(),
           user: session.user.username,
           role: session.user.role,
           route: session.route,
           latencyMs,
-          snapshot
+          snapshot,
+          memory
         };
         this.recordSnapshot(entry);
         if (!snapshot) {
@@ -379,9 +634,17 @@ class ErrorSentinel {
             role: session.user.role,
             route: session.route
           });
+          this.recordSessionSnapshot(session, {
+            at: entry.at,
+            route: session.route,
+            missingSnapshot: true,
+            slow: latencyMs > PAGE_EVAL_SLOW_THRESHOLD_MS,
+            latencyMs,
+            memory
+          });
           continue;
         }
-        if (latencyMs > PAGE_EVAL_TIMEOUT_MS) {
+        if (latencyMs > PAGE_EVAL_SLOW_THRESHOLD_MS) {
           this.record('page-eval-slow', {
             user: session.user.username,
             role: session.user.role,
@@ -390,23 +653,50 @@ class ErrorSentinel {
           });
         }
         const isWarmedUp = (Date.now() - Number(snapshot.installedAt || 0)) >= WATCHDOG_WARMUP_MS;
-        if (isWarmedUp && !snapshot.isHidden && (Number(snapshot.intervalMaxGapMs) > FREEZE_THRESHOLD_MS || Number(snapshot.rafMaxGapMs) > FREEZE_THRESHOLD_MS)) {
+        const intervalMaxGapMs = Number(snapshot.intervalMaxGapMs);
+        const rafMaxGapMs = Number(snapshot.rafMaxGapMs);
+        const freezeWarning = isWarmedUp && !snapshot.isHidden && (intervalMaxGapMs > FREEZE_THRESHOLD_MS || rafMaxGapMs > FREEZE_THRESHOLD_MS);
+        const gapWarning = isWarmedUp && !snapshot.isHidden && (intervalMaxGapMs > LONG_GAP_THRESHOLD_MS || rafMaxGapMs > LONG_GAP_THRESHOLD_MS);
+        const memoryWarning = Number.isFinite(memory?.ratio) && memory.ratio >= 0.85;
+        if (freezeWarning) {
           this.record('ui-freeze-suspected', {
             user: session.user.username,
             role: session.user.role,
             route: session.route,
-            intervalMaxGapMs: snapshot.intervalMaxGapMs,
-            rafMaxGapMs: snapshot.rafMaxGapMs
+            intervalMaxGapMs,
+            rafMaxGapMs
           });
-        } else if (isWarmedUp && !snapshot.isHidden && (Number(snapshot.intervalMaxGapMs) > LONG_GAP_THRESHOLD_MS || Number(snapshot.rafMaxGapMs) > LONG_GAP_THRESHOLD_MS)) {
+        } else if (gapWarning) {
           this.record('ui-gap-warning', {
             user: session.user.username,
             role: session.user.role,
             route: session.route,
-            intervalMaxGapMs: snapshot.intervalMaxGapMs,
-            rafMaxGapMs: snapshot.rafMaxGapMs
+            intervalMaxGapMs,
+            rafMaxGapMs
           });
         }
+        if (memoryWarning) {
+          this.record('page-memory-high', {
+            user: session.user.username,
+            role: session.user.role,
+            route: session.route,
+            ratio: memory.ratio,
+            usedBytes: memory.usedBytes,
+            limitBytes: memory.limitBytes
+          });
+        }
+        this.recordSessionSnapshot(session, {
+          at: entry.at,
+          route: session.route,
+          slow: latencyMs > PAGE_EVAL_SLOW_THRESHOLD_MS,
+          latencyMs,
+          intervalMaxGapMs,
+          rafMaxGapMs,
+          freezeWarning,
+          gapWarning,
+          memoryWarning,
+          memory
+        });
       } catch (error) {
         this.record('watchdog-poll-failed', {
           user: session.user.username,
@@ -414,8 +704,14 @@ class ErrorSentinel {
           route: session.route,
           error: String(error?.message || error)
         });
+        this.recordSessionSnapshot(session, {
+          at: nowIso(),
+          route: session.route,
+          failed: true
+        });
       }
     }
+    this.recordSystemSample(systemSample);
 
     const healthStartedAt = Date.now();
     try {
@@ -440,17 +736,54 @@ class ErrorSentinel {
 
   buildSummary() {
     const freezeEvents = this.events.filter((item) => item.type === 'ui-freeze-suspected');
+    const gapWarnings = this.events.filter((item) => item.type === 'ui-gap-warning');
+    const slowPolls = this.events.filter((item) => item.type === 'page-eval-slow');
+    const memoryWarnings = this.events.filter((item) => item.type === 'page-memory-high');
     const pageErrors = this.events.filter((item) => item.type === 'page-error' || item.type === 'console-error');
     const requestFailures = this.events.filter((item) => item.type === 'request-failed');
     const healthLatencies = this.health.map((item) => Number(item.latencyMs)).filter(Number.isFinite);
+    const pageLatencies = this.pageSnapshots.map((item) => Number(item.latencyMs)).filter(Number.isFinite);
+    const pageHeapUsed = this.pageSnapshots
+      .map((item) => Number(item?.memory?.usedBytes))
+      .filter(Number.isFinite);
+    const pageHeapLimit = this.pageSnapshots
+      .map((item) => Number(item?.memory?.limitBytes))
+      .filter(Number.isFinite);
+    const systemProcessRss = this.systemSamples.map((item) => Number(item?.processMemory?.rss)).filter(Number.isFinite);
+    const systemProcessHeapUsed = this.systemSamples.map((item) => Number(item?.processMemory?.heapUsed)).filter(Number.isFinite);
+    const systemProcessHeapTotal = this.systemSamples.map((item) => Number(item?.processMemory?.heapTotal)).filter(Number.isFinite);
+    const systemProcessExternal = this.systemSamples.map((item) => Number(item?.processMemory?.external)).filter(Number.isFinite);
+    const systemProcessArrayBuffers = this.systemSamples.map((item) => Number(item?.processMemory?.arrayBuffers)).filter(Number.isFinite);
+    const eventLoopDelayValues = this.systemSamples
+      .map((item) => item?.eventLoopDelay)
+      .filter((value) => value && typeof value === 'object');
     return {
       totalEvents: this.events.length,
       freezeEventCount: freezeEvents.length,
+      gapWarningCount: gapWarnings.length,
+      pageEvalSlowCount: slowPolls.length,
+      memoryHighEventCount: memoryWarnings.length,
       pageErrorCount: pageErrors.length,
       requestFailureCount: requestFailures.length,
       healthChecks: this.health.length,
       maxHealthLatencyMs: healthLatencies.length ? Math.max(...healthLatencies) : null,
-      p95HealthLatencyMs: healthLatencies.length ? percentile(healthLatencies, 95) : null
+      p95HealthLatencyMs: healthLatencies.length ? percentile(healthLatencies, 95) : null,
+      pageSnapshotCount: this.pageSnapshots.length,
+      pageLatencySummary: summarizeNumbers(pageLatencies),
+      pageHeapUsedSummary: summarizeBytes(pageHeapUsed),
+      pageHeapLimitSummary: summarizeBytes(pageHeapLimit),
+      systemSampleCount: this.systemSamples.length,
+      processMemory: {
+        rssSummary: summarizeBytes(systemProcessRss),
+        heapUsedSummary: summarizeBytes(systemProcessHeapUsed),
+        heapTotalSummary: summarizeBytes(systemProcessHeapTotal),
+        externalSummary: summarizeBytes(systemProcessExternal),
+        arrayBuffersSummary: summarizeBytes(systemProcessArrayBuffers)
+      },
+      eventLoopDelay: eventLoopDelayValues.length
+        ? eventLoopDelayValues[eventLoopDelayValues.length - 1]
+        : getEventLoopDelaySnapshot(),
+      sessionSummaries: Array.from(this.sessionStats.values()).map((stats) => summarizeSessionStats(stats))
     };
   }
 }
@@ -459,7 +792,8 @@ function assessStability(sentinelSummary, cycles) {
   const cycleErrors = cycles.filter((cycle) => Array.isArray(cycle.createFailures) && cycle.createFailures.length)
     .length
     + cycles.filter((cycle) => Array.isArray(cycle.updateFailures) && cycle.updateFailures.length).length
-    + cycles.filter((cycle) => Array.isArray(cycle.leakageFailures) && cycle.leakageFailures.length).length;
+    + cycles.filter((cycle) => Array.isArray(cycle.leakageFailures) && cycle.leakageFailures.length).length
+    + cycles.filter((cycle) => Array.isArray(cycle.viewerAccessFailures) && cycle.viewerAccessFailures.length).length;
   const loadActionFailures = cycles.reduce((sum, cycle) => (
     sum + (Array.isArray(cycle?.loadBurst?.failures) ? cycle.loadBurst.failures.length : 0)
   ), 0);
@@ -543,6 +877,14 @@ async function installWatchdog(page) {
     window.__enduranceWatchdog = {
       snapshot() {
         state.pollCount += 1;
+        const memory = typeof performance !== 'undefined' && performance.memory ? {
+          usedBytes: Number(performance.memory.usedJSHeapSize) || null,
+          totalBytes: Number(performance.memory.totalJSHeapSize) || null,
+          limitBytes: Number(performance.memory.jsHeapSizeLimit) || null,
+          ratio: Number(performance.memory.usedJSHeapSize) && Number(performance.memory.jsHeapSizeLimit)
+            ? Number((performance.memory.usedJSHeapSize / performance.memory.jsHeapSizeLimit).toFixed(4))
+            : null
+        } : null;
         const payload = {
           installedAt: state.installedAt,
           intervalMaxGapMs: Number(state.intervalMaxGapMs.toFixed(1)),
@@ -553,7 +895,8 @@ async function installWatchdog(page) {
           syncText: state.lastSyncText,
           visibleSectionId: state.lastVisibleSectionId,
           visibleClients: typeof getVisibleClients === 'function' ? getVisibleClients().length : null,
-          isHidden: typeof document !== 'undefined' ? document.hidden === true : false
+          isHidden: typeof document !== 'undefined' ? document.hidden === true : false,
+          memory
         };
         state.intervalMaxGapMs = 0;
         state.rafMaxGapMs = 0;
@@ -569,6 +912,11 @@ async function showRoute(page, route) {
   const selector = ROUTE_SELECTOR[route] || ROUTE_SELECTOR.dashboard;
   const linkSelector = `#${route}Link`;
   const link = page.locator(linkSelector);
+  const sectionAlreadyVisible = await page.locator(selector).isVisible().catch(() => false);
+  const linkAlreadyActive = await link.evaluate((node) => node.classList.contains('active')).catch(() => false);
+  if (sectionAlreadyVisible && linkAlreadyActive) {
+    return;
+  }
   if (await link.count()) {
     const visible = await link.isVisible().catch(() => false);
     if (visible) {
@@ -588,7 +936,14 @@ async function showRoute(page, route) {
 
 async function waitForDataReady(session) {
   const startedAt = Date.now();
-  let counts = { clients: 0, dossiers: 0 };
+  let counts = {
+    role: '',
+    totalClients: 0,
+    totalDossiers: 0,
+    visibleClients: 0,
+    visibleDossiers: 0,
+    assignedClientCount: 0
+  };
   for (;;) {
     counts = await session.page.evaluate(async () => {
       try {
@@ -596,15 +951,43 @@ async function waitForDataReady(session) {
           await refreshRemoteState();
         }
       } catch {}
-      const clients = Array.isArray(AppState?.clients) ? AppState.clients.length : 0;
-      const dossiers = (Array.isArray(AppState?.clients) ? AppState.clients : []).reduce((sum, client) => (
+      const allClients = Array.isArray(AppState?.clients) ? AppState.clients : [];
+      const visibleClientsList = typeof getVisibleClients === 'function'
+        ? getVisibleClients()
+        : allClients;
+      const totalClients = allClients.length;
+      const totalDossiers = allClients.reduce((sum, client) => (
         sum + (Array.isArray(client?.dossiers) ? client.dossiers.length : 0)
       ), 0);
-      return { clients, dossiers };
+      const visibleClients = Array.isArray(visibleClientsList) ? visibleClientsList.length : 0;
+      const visibleDossiers = (Array.isArray(visibleClientsList) ? visibleClientsList : []).reduce((sum, client) => (
+        sum + (Array.isArray(client?.dossiers) ? client.dossiers.length : 0)
+      ), 0);
+      const assignedClientCount = Array.isArray(currentUser?.clientIds)
+        ? currentUser.clientIds.map((value) => Number(value)).filter(Number.isFinite).length
+        : 0;
+      return {
+        role: String(currentUser?.role || '').trim().toLowerCase(),
+        totalClients,
+        totalDossiers,
+        visibleClients,
+        visibleDossiers,
+        assignedClientCount
+      };
     });
-    if (counts.clients >= CLIENT_COUNT && counts.dossiers >= DOSSIER_COUNT) return counts;
+    if (counts.role === 'client') {
+      const expectedVisibleClients = Math.max(1, Number(counts.assignedClientCount) || 0);
+      if (counts.visibleClients >= expectedVisibleClients && counts.visibleDossiers > 0) return counts;
+    } else if (counts.totalClients >= CLIENT_COUNT && counts.totalDossiers >= DOSSIER_COUNT) {
+      return counts;
+    }
     if ((Date.now() - startedAt) > DATA_READY_TIMEOUT_MS) {
-      throw new Error(`Timed out waiting for data sync. Last counts: ${counts.clients} clients / ${counts.dossiers} dossiers`);
+      throw new Error(
+        `Timed out waiting for data sync. `
+        + `Last counts: total=${counts.totalClients} clients / ${counts.totalDossiers} dossiers, `
+        + `visible=${counts.visibleClients} clients / ${counts.visibleDossiers} dossiers, `
+        + `role=${counts.role || 'unknown'}`
+      );
     }
     await sleep(1000);
   }
@@ -689,6 +1072,121 @@ async function runModifyExistingDossierAction(session, targetIndex, cycleIndex) 
   }, { globalTargetIndex: targetIndex, cycle: cycleIndex });
 }
 
+async function runCreateClientAction(session, cycleIndex, variantIndex) {
+  await waitForDataReady(session);
+  const clientName = buildStressClientName(cycleIndex, variantIndex);
+  return await session.page.evaluate(async ({ nextClientName }) => {
+    const name = String(nextClientName || '').trim();
+    if (!name) throw new Error('Missing client name.');
+    const existing = AppState.clients.find((client) => String(client?.name || '').trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      return {
+        type: 'create-client',
+        clientId: Number(existing.id),
+        clientName: name,
+        existed: true
+      };
+    }
+    const nextClient = {
+      id: typeof getNextClientId === 'function' ? getNextClientId(Date.now()) : Date.now(),
+      name,
+      dossiers: []
+    };
+    AppState.clients.push(nextClient);
+    if (typeof handleDossierDataChange === 'function') {
+      handleDossierDataChange({ audience: false });
+    }
+    if (typeof persistClientPatchNow === 'function') {
+      await persistClientPatchNow({
+        action: 'create',
+        client: nextClient
+      }, { source: 'endurance-watchdog-client-create' });
+    } else if (typeof persistAppStateNow === 'function') {
+      await persistAppStateNow();
+    }
+    return {
+      type: 'create-client',
+      clientId: Number(nextClient.id),
+      clientName: name,
+      existed: false
+    };
+  }, { nextClientName: clientName });
+}
+
+async function runCreateDossierAction(session, cycleIndex, variantIndex) {
+  await waitForDataReady(session);
+  const referenceClient = `END-BURST-${cycleIndex}-${variantIndex}-${Date.now().toString(36)}`;
+  return await session.page.evaluate(async ({ nextReferenceClient, cycle, targetClientId }) => {
+    const client = AppState.clients.find((item) => Number(item?.id) === Number(targetClientId));
+    if (!client) throw new Error(`Target client ${targetClientId} not found for create-dossier.`);
+    if (!Array.isArray(client.dossiers)) client.dossiers = [];
+    const dossier = {
+      debiteur: `Burst Debiteur ${cycle}`,
+      boiteNo: `BURST-${cycle}`,
+      referenceClient: nextReferenceClient,
+      dateAffectation: '16/03/2026',
+      procedure: 'Restitution',
+      procedureList: ['Restitution'],
+      procedureDetails: {
+        Restitution: {
+          referenceClient: nextReferenceClient,
+          audience: '17/03/2026',
+          juge: `Burst Juge ${cycle % 12}`,
+          sort: 'Renvoi',
+          tribunal: 'Casablanca',
+          depotLe: '16/03/2026',
+          dateDepot: '16/03/2026',
+          instruction: `Burst instruction ${cycle}`,
+          color: 'blue'
+        }
+      },
+      ville: 'Casablanca',
+      adresse: 'Adresse burst',
+      montant: String(20000 + cycle),
+      ww: `BURST-WW-${cycle}`,
+      marque: 'Renault',
+      type: 'Auto',
+      caution: '',
+      cautionAdresse: '',
+      cautionVille: '',
+      cautionCin: '',
+      cautionRc: '',
+      note: `burst-create-${cycle}`,
+      avancement: 'Créé en burst',
+      statut: 'En cours',
+      files: [],
+      history: [],
+      montantByProcedure: []
+    };
+    client.dossiers.push(dossier);
+    if (typeof handleDossierDataChange === 'function') {
+      const audienceImpact = typeof dossierHasAudienceImpact === 'function'
+        ? dossierHasAudienceImpact(dossier)
+        : true;
+      handleDossierDataChange({ audience: audienceImpact });
+    }
+    if (typeof persistDossierPatchNow === 'function') {
+      await persistDossierPatchNow({
+        action: 'create',
+        clientId: Number(client.id),
+        dossier
+      }, { source: 'endurance-watchdog-burst-create' });
+    } else if (typeof persistAppStateNow === 'function') {
+      await persistAppStateNow();
+    }
+    return {
+      type: 'create-dossier',
+      clientId: Number(client.id),
+      clientName: String(client?.name || '').trim(),
+      referenceClient: nextReferenceClient
+    };
+  }, {
+    nextReferenceClient: referenceClient,
+    cycle: cycleIndex,
+    targetClientId: TARGET_CLIENT_ID
+  });
+}
+
 async function selectAudienceRows(session, limit) {
   await session.page.evaluate((rowLimit) => {
     const rows = getAudienceRows({ ignoreSearch: true, ignoreColor: true }).slice(0, rowLimit);
@@ -757,9 +1255,89 @@ async function runDiligenceExport(session) {
   return { type: 'export', exportKind: 'diligence_selected', selectedRows: EXPORT_SELECTION_ROWS, ...download };
 }
 
+async function runSalleExport(session) {
+  await waitForDataReady(session);
+  await showRoute(session.page, 'salle');
+  const download = await saveDownload(session, async () => {
+    await session.page.evaluate(async () => {
+      const assignments = Array.isArray(AppState?.salleAssignments) ? AppState.salleAssignments : [];
+      if (!assignments.length) {
+        throw new Error('No salle assignments available for export.');
+      }
+      const target = assignments.find((row) => String(row?.day || '').trim() === 'lundi') || assignments[0];
+      selectedSalleDay = String(target?.day || 'lundi');
+      if (typeof renderSalle === 'function') renderSalle();
+      await exportSalleAudiences(
+        encodeURIComponent(String(target?.salle || '')),
+        encodeURIComponent(String(target?.day || selectedSalleDay || 'lundi'))
+      );
+    });
+  }, 'salle_export');
+  return { type: 'export', exportKind: 'salle_export', ...download };
+}
+
+async function runDeleteDossierAction(session, cycleIndex) {
+  await waitForDataReady(session);
+  return await session.page.evaluate(async ({ viewerClientLimit, cycle }) => {
+    const clients = Array.isArray(AppState?.clients) ? AppState.clients : [];
+    const preferred = clients.find((client) =>
+      Number(client?.id) > Number(viewerClientLimit)
+      && Array.isArray(client?.dossiers)
+      && client.dossiers.length > 0
+    );
+    const fallback = clients.find((client) => Array.isArray(client?.dossiers) && client.dossiers.length > 0);
+    const client = preferred || fallback;
+    if (!client) throw new Error(`No dossier available to delete for cycle ${cycle}.`);
+    const dossierIndex = Math.max(0, (Array.isArray(client.dossiers) ? client.dossiers.length : 1) - 1);
+    const dossier = client.dossiers[dossierIndex];
+    if (!dossier) throw new Error(`Delete target missing for cycle ${cycle}.`);
+    const referenceClient = String(dossier?.referenceClient || '').trim();
+    if (typeof pushRecycleBinEntry === 'function') {
+      pushRecycleBinEntry('dossier_delete', {
+        clientId: client.id,
+        clientName: client.name || '',
+        dossierIndex,
+        dossier: JSON.parse(JSON.stringify(dossier || {})),
+        importHistoryEntries: typeof collectRelevantImportHistoryEntries === 'function'
+          ? collectRelevantImportHistoryEntries({ clientId: client.id, dossiers: [dossier] })
+          : []
+      });
+    }
+    client.dossiers.splice(dossierIndex, 1);
+    if (typeof syncImportHistoryWithCurrentState === 'function') {
+      syncImportHistoryWithCurrentState();
+    }
+    if (typeof handleDossierDataChange === 'function') {
+      const audienceImpact = typeof dossierHasAudienceImpact === 'function'
+        ? dossierHasAudienceImpact(dossier)
+        : true;
+      handleDossierDataChange({ audience: audienceImpact });
+    }
+    if (typeof persistDossierPatchNow === 'function') {
+      await persistDossierPatchNow({
+        action: 'delete',
+        clientId: Number(client.id),
+        dossierIndex
+      }, { source: 'endurance-watchdog-delete' });
+    } else if (typeof persistAppStateNow === 'function') {
+      await persistAppStateNow();
+    }
+    return {
+      type: 'delete-dossier',
+      clientId: Number(client.id),
+      clientName: String(client?.name || '').trim(),
+      referenceClient
+    };
+  }, {
+    viewerClientLimit: VIEWER_COUNT,
+    cycle: cycleIndex
+  });
+}
+
 async function runBrowseAction(session, label) {
   await waitForDataReady(session);
-  const routes = ['dashboard', 'audience', 'suivi', 'diligence'];
+  const role = String(session?.user?.role || '').trim().toLowerCase() || 'manager';
+  const routes = (ROUTE_PLANS[role] || ROUTE_PLANS.manager).slice(0, 5);
   const visited = [];
   for (const route of routes) {
     await showRoute(session.page, route);
@@ -776,6 +1354,8 @@ async function runBrowseAction(session, label) {
       await session.page.fill('#diligenceSearchInput', 'att');
       await session.page.waitForTimeout(150);
       await session.page.fill('#diligenceSearchInput', '');
+    } else if (route === 'salle') {
+      await session.page.waitForTimeout(150);
     }
   }
   return {
@@ -793,6 +1373,10 @@ async function runConcurrentAction(session, action) {
       details = await runImportAction(session, action.fixturePath, action.label);
     } else if (action.kind === 'modify') {
       details = await runModifyExistingDossierAction(session, action.targetIndex, action.cycleIndex);
+    } else if (action.kind === 'create-client') {
+      details = await runCreateClientAction(session, action.cycleIndex, action.variantIndex);
+    } else if (action.kind === 'create-dossier') {
+      details = await runCreateDossierAction(session, action.cycleIndex, action.variantIndex);
     } else if (action.kind === 'audience-regular-export') {
       details = await runAudienceRegularExport(session);
     } else if (action.kind === 'audience-selected-export') {
@@ -801,6 +1385,10 @@ async function runConcurrentAction(session, action) {
       details = await runSuiviExport(session);
     } else if (action.kind === 'diligence-export') {
       details = await runDiligenceExport(session);
+    } else if (action.kind === 'salle-export') {
+      details = await runSalleExport(session);
+    } else if (action.kind === 'delete-dossier') {
+      details = await runDeleteDossierAction(session, action.cycleIndex);
     } else if (action.kind === 'browse') {
       details = await runBrowseAction(session, action.label || `cycle-${action.cycleIndex}`);
     } else {
@@ -854,6 +1442,9 @@ async function openSession(browser, user, route, sentinel, downloadRoot) {
   };
   sentinel.attachSession(session);
 
+  if (globalThis.__enduranceServerProcess && globalThis.__enduranceServerProcess.exitCode !== null) {
+    throw new Error(`Server already exited before opening ${user.username} (exitCode=${globalThis.__enduranceServerProcess.exitCode}).`);
+  }
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: SESSION_BOOT_TIMEOUT_MS });
   await page.fill('#username', user.username);
   await page.fill('#password', user.password);
@@ -885,6 +1476,9 @@ async function openSessions(browser, users, sentinel, downloadRoot) {
   await fs.mkdir(downloadRoot, { recursive: true });
 
   for (let index = 0; index < users.length; index += SESSION_BATCH_SIZE) {
+    if (globalThis.__enduranceServerProcess && globalThis.__enduranceServerProcess.exitCode !== null) {
+      throw new Error(`Server exited during session opening (exitCode=${globalThis.__enduranceServerProcess.exitCode}).`);
+    }
     const chunk = users.slice(index, index + SESSION_BATCH_SIZE);
     console.log(`Opening session batch ${Math.floor(index / SESSION_BATCH_SIZE) + 1}/${Math.ceil(users.length / SESSION_BATCH_SIZE)} (${chunk.map((user) => user.username).join(', ')})`);
     const opened = await Promise.all(chunk.map(async (user) => {
@@ -986,6 +1580,36 @@ async function waitForReference(session, referenceClient, shouldExist, timeoutMs
   return Date.now() - startedAt;
 }
 
+async function waitForClient(session, clientName, shouldExist, timeoutMs = ACTION_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  if (shouldExist) {
+    await session.page.waitForFunction((targetClientName) => {
+      try {
+        return getVisibleClients().some(
+          (client) => String(client?.name || '').trim() === targetClientName
+        );
+      } catch {
+        return false;
+      }
+    }, clientName, { timeout: timeoutMs });
+  } else {
+    await session.page.waitForTimeout(2500);
+    const leaked = await session.page.evaluate((targetClientName) => {
+      try {
+        return getVisibleClients().some(
+          (client) => String(client?.name || '').trim() === targetClientName
+        );
+      } catch {
+        return false;
+      }
+    }, clientName);
+    if (leaked) {
+      throw new Error(`Unauthorized client visibility for ${clientName}`);
+    }
+  }
+  return Date.now() - startedAt;
+}
+
 async function waitForUpdate(session, referenceClient, note, audienceSort, timeoutMs = ACTION_TIMEOUT_MS) {
   const startedAt = Date.now();
   await session.page.waitForFunction(({ targetReference, targetNote, targetSort }) => {
@@ -1002,6 +1626,28 @@ async function waitForUpdate(session, referenceClient, note, audienceSort, timeo
     }
   }, { targetReference: referenceClient, targetNote: note, targetSort: audienceSort }, { timeout: timeoutMs });
   return Date.now() - startedAt;
+}
+
+async function waitForClientName(session, clientName, timeoutMs = ACTION_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  await session.page.waitForFunction((targetName) => {
+    try {
+      return getVisibleClients().some((client) => String(client?.name || '').trim() === targetName);
+    } catch {
+      return false;
+    }
+  }, clientName, { timeout: timeoutMs });
+  return Date.now() - startedAt;
+}
+
+async function verifyClientsDom(session, clientName) {
+  await showRoute(session.page, 'clients');
+  await session.page.fill('#searchClientInput', clientName);
+  await session.page.waitForFunction((targetClientName) => {
+    const rows = Array.from(document.querySelectorAll('#clientsBody tr'));
+    return rows.some((row) => String(row.textContent || '').includes(targetClientName));
+  }, clientName, { timeout: ACTION_TIMEOUT_MS });
+  await session.page.fill('#searchClientInput', '');
 }
 
 async function verifySuiviDom(session, referenceClient) {
@@ -1031,6 +1677,41 @@ async function verifyAudienceDom(session, referenceClient, audienceSort) {
   await session.page.fill('#filterAudience', '');
 }
 
+async function verifyCreationDropdown(session, clientName) {
+  await showRoute(session.page, 'creation');
+  await session.page.waitForFunction((targetClientName) => {
+    const select = document.querySelector('#selectClient');
+    if (!select) return false;
+    return Array.from(select.options || []).some(
+      (option) => String(option.textContent || '').trim() === targetClientName
+    );
+  }, clientName, { timeout: ACTION_TIMEOUT_MS });
+}
+
+async function verifyViewerOwnDossiers(session) {
+  await waitForDataReady(session);
+  await showRoute(session.page, 'suivi');
+  return await session.page.evaluate(() => {
+    const assignedIds = Array.isArray(currentUser?.clientIds)
+      ? currentUser.clientIds.map((value) => Number(value)).filter(Number.isFinite)
+      : [];
+    const visibleClients = typeof getVisibleClients === 'function' ? getVisibleClients() : [];
+    const visibleIds = visibleClients.map((client) => Number(client?.id)).filter(Number.isFinite);
+    const totalDossiers = visibleClients.reduce((sum, client) => (
+      sum + (Array.isArray(client?.dossiers) ? client.dossiers.length : 0)
+    ), 0);
+    const ownClientVisible = assignedIds.length > 0 && visibleIds.some((id) => assignedIds.includes(id));
+    const foreignVisible = visibleIds.some((id) => !assignedIds.includes(id));
+    return {
+      assignedIds,
+      visibleIds,
+      visibleClientCount: visibleClients.length,
+      totalDossiers,
+      ok: ownClientVisible && !foreignVisible && totalDossiers > 0
+    };
+  });
+}
+
 async function fetchState(runRoot) {
   const statePath = path.join(runRoot, 'server', 'data', 'state.json');
   const raw = await fs.readFile(statePath, 'utf8');
@@ -1055,13 +1736,16 @@ function pickObserver(sessions, role, route, fallbackRoute) {
 async function runLoadBurst(cycleIndex, sessions, sentinel, fixturePath) {
   const results = [];
   const usedSessions = new Set();
+  const managerSessions = sessions.filter((session) => session.user.role === 'manager');
+  const adminSessions = sessions.filter((session) => session.user.role === 'admin');
   const editorSessions = sessions.filter((session) => session.user.role !== 'client');
   const viewerSessions = sessions.filter((session) => session.user.role === 'client');
   const exportKinds = [
     'audience-regular-export',
-    'audience-selected-export',
+    'salle-export',
     'suivi-export',
-    'diligence-export'
+    'diligence-export',
+    'audience-selected-export'
   ];
   let modifyIndex = (cycleIndex - 1) * Math.max(1, MODIFIERS_PER_CYCLE);
 
@@ -1075,7 +1759,7 @@ async function runLoadBurst(cycleIndex, sessions, sentinel, fixturePath) {
   const tasks = [];
   if (IMPORTERS_PER_CYCLE > 0 && IMPORT_EVERY_CYCLES > 0 && (cycleIndex % IMPORT_EVERY_CYCLES) === 1) {
     for (let i = 0; i < IMPORTERS_PER_CYCLE; i += 1) {
-      const session = takeNext(editorSessions);
+      const session = takeNext(managerSessions) || takeNext(editorSessions);
       if (!session) break;
       tasks.push(runConcurrentAction(session, {
         kind: 'import',
@@ -1086,8 +1770,17 @@ async function runLoadBurst(cycleIndex, sessions, sentinel, fixturePath) {
     }
   }
 
+  for (let i = 0; i < MANAGER_DELETES_PER_CYCLE; i += 1) {
+    const session = takeNext(managerSessions);
+    if (!session) break;
+    tasks.push(runConcurrentAction(session, {
+      kind: 'delete-dossier',
+      cycleIndex
+    }));
+  }
+
   for (let i = 0; i < MODIFIERS_PER_CYCLE; i += 1) {
-    const session = takeNext(editorSessions);
+    const session = takeNext(adminSessions) || takeNext(editorSessions);
     if (!session) break;
     tasks.push(runConcurrentAction(session, {
       kind: 'modify',
@@ -1097,8 +1790,28 @@ async function runLoadBurst(cycleIndex, sessions, sentinel, fixturePath) {
     modifyIndex += 1;
   }
 
+  for (let i = 0; i < CLIENT_CREATORS_PER_CYCLE; i += 1) {
+    const session = takeNext(adminSessions) || takeNext(editorSessions);
+    if (!session) break;
+    tasks.push(runConcurrentAction(session, {
+      kind: 'create-client',
+      cycleIndex,
+      variantIndex: i + 1
+    }));
+  }
+
+  for (let i = 0; i < DOSSIER_CREATORS_PER_CYCLE; i += 1) {
+    const session = takeNext(adminSessions) || takeNext(editorSessions);
+    if (!session) break;
+    tasks.push(runConcurrentAction(session, {
+      kind: 'create-dossier',
+      cycleIndex,
+      variantIndex: i + 1
+    }));
+  }
+
   for (let i = 0; i < EXPORTERS_PER_CYCLE; i += 1) {
-    const session = takeNext(editorSessions);
+    const session = takeNext(adminSessions) || takeNext(editorSessions);
     if (!session) break;
     tasks.push(runConcurrentAction(session, {
       kind: exportKinds[i % exportKinds.length],
@@ -1107,7 +1820,7 @@ async function runLoadBurst(cycleIndex, sessions, sentinel, fixturePath) {
   }
 
   for (let i = 0; i < BROWSERS_PER_CYCLE; i += 1) {
-    const session = takeNext(viewerSessions) || takeNext(sessions);
+    const session = takeNext(viewerSessions);
     if (!session) break;
     tasks.push(runConcurrentAction(session, {
       kind: 'browse',
@@ -1147,16 +1860,106 @@ async function runCycle(cycleIndex, sessions, sentinel, fixturePath) {
   const mutationAdmin = admins[cycleIndex % Math.max(1, admins.length)];
   const authorizedSessions = selectAuthorizedSessions(sessions);
   const unauthorizedViewers = selectUnauthorizedViewerSessions(sessions);
+  const allViewerSessions = sessions.filter((session) => session.user.role === 'client');
+  const clientsObserver = pickObserver(authorizedSessions, 'admin', 'clients', 'dashboard');
   const suiviObserver = pickObserver(authorizedSessions, 'admin', 'suivi', 'dashboard');
-  const audienceObserver = pickObserver(authorizedSessions, 'client', 'audience', 'suivi');
+  const audienceObserver = pickObserver(authorizedSessions, 'admin', 'audience', 'suivi');
+  const concurrentCreatedClients = loadBurst.results
+    .filter((item) => item.ok && item.action === 'create-client' && item.details?.clientName)
+    .map((item) => item.details);
+  const concurrentCreatedDossiers = loadBurst.results
+    .filter((item) => item.ok && item.action === 'create-dossier' && item.details?.referenceClient)
+    .map((item) => item.details);
+  const concurrentDeletedDossiers = loadBurst.results
+    .filter((item) => item.ok && item.action === 'delete-dossier' && item.details?.referenceClient)
+    .map((item) => item.details);
   const referenceClient = `END-${cycleIndex}-${Date.now().toString(36)}`;
   const dossier = buildStressDossier(referenceClient, cycleIndex);
   const createStartedAt = Date.now();
   const domChecks = {
+    clientsCreate: [],
+    concurrentDossierCreate: [],
     suiviCreate: null,
     audienceCreate: null,
     audienceUpdate: null
   };
+
+  const concurrentClientPropagations = [];
+  for (const createdClient of concurrentCreatedClients) {
+    const propagation = await Promise.all(authorizedSessions.map(async (session) => {
+      try {
+        return {
+          user: session.user.username,
+          role: session.user.role,
+          clientName: createdClient.clientName,
+          delayMs: await waitForClientName(session, createdClient.clientName)
+        };
+      } catch (error) {
+        return {
+          user: session.user.username,
+          role: session.user.role,
+          clientName: createdClient.clientName,
+          error: String(error?.message || error)
+        };
+      }
+    }));
+    concurrentClientPropagations.push({
+      clientName: createdClient.clientName,
+      by: createdClient.clientId,
+      propagation
+    });
+    try {
+      await verifyClientsDom(clientsObserver, createdClient.clientName);
+      domChecks.clientsCreate.push({ clientName: createdClient.clientName, ok: true });
+    } catch (error) {
+      const details = { clientName: createdClient.clientName, ok: false, error: String(error?.message || error) };
+      domChecks.clientsCreate.push(details);
+      sentinel.record('clients-dom-create-check-failed', {
+        cycle: cycleIndex,
+        observer: clientsObserver.user.username,
+        clientName: createdClient.clientName,
+        error: details.error
+      });
+    }
+  }
+
+  const concurrentDossierPropagations = [];
+  for (const createdDossier of concurrentCreatedDossiers) {
+    const propagation = await Promise.all(authorizedSessions.map(async (session) => {
+      try {
+        return {
+          user: session.user.username,
+          role: session.user.role,
+          referenceClient: createdDossier.referenceClient,
+          delayMs: await waitForReference(session, createdDossier.referenceClient, true)
+        };
+      } catch (error) {
+        return {
+          user: session.user.username,
+          role: session.user.role,
+          referenceClient: createdDossier.referenceClient,
+          error: String(error?.message || error)
+        };
+      }
+    }));
+    concurrentDossierPropagations.push({
+      referenceClient: createdDossier.referenceClient,
+      propagation
+    });
+    try {
+      await verifySuiviDom(suiviObserver, createdDossier.referenceClient);
+      await verifyAudienceDom(audienceObserver, createdDossier.referenceClient, 'Renvoi');
+      domChecks.concurrentDossierCreate.push({ referenceClient: createdDossier.referenceClient, ok: true });
+    } catch (error) {
+      const details = { referenceClient: createdDossier.referenceClient, ok: false, error: String(error?.message || error) };
+      domChecks.concurrentDossierCreate.push(details);
+      sentinel.record('concurrent-dossier-dom-check-failed', {
+        cycle: cycleIndex,
+        referenceClient: createdDossier.referenceClient,
+        error: details.error
+      });
+    }
+  }
 
   await runMutation(mutationManager, {
     type: 'create',
@@ -1270,6 +2073,26 @@ async function runCycle(cycleIndex, sessions, sentinel, fixturePath) {
   const createFailures = createPropagation.filter((item) => item.error);
   const updateFailures = updatePropagation.filter((item) => item.error);
   const leakageFailures = createLeaks.filter((item) => item.leaked);
+  const viewerAccessChecks = await Promise.all(
+    allViewerSessions.map(async (session) => {
+      try {
+        const details = await verifyViewerOwnDossiers(session);
+        return {
+          user: session.user.username,
+          role: session.user.role,
+          ...details
+        };
+      } catch (error) {
+        return {
+          user: session.user.username,
+          role: session.user.role,
+          ok: false,
+          error: String(error?.message || error)
+        };
+      }
+    })
+  );
+  const viewerAccessFailures = viewerAccessChecks.filter((item) => !item.ok);
   const summary = {
     cycle: cycleIndex,
     loadBurst: {
@@ -1277,6 +2100,11 @@ async function runCycle(cycleIndex, sessions, sentinel, fixturePath) {
       summary: loadBurst.summary,
       failures: loadBurst.failures
     },
+    concurrentClientCreates: concurrentCreatedClients,
+    concurrentClientPropagations,
+    concurrentDossierCreates: concurrentCreatedDossiers,
+    concurrentDossierPropagations,
+    concurrentDeletedDossiers,
     referenceClient,
     createStartedAt: new Date(createStartedAt).toISOString(),
     createBy: mutationManager.user.username,
@@ -1286,6 +2114,8 @@ async function runCycle(cycleIndex, sessions, sentinel, fixturePath) {
     createFailures,
     updateFailures,
     leakageFailures,
+    viewerAccessChecks,
+    viewerAccessFailures,
     domChecks,
     observers: {
       suivi: suiviObserver.user.username,
@@ -1302,6 +2132,12 @@ async function runCycle(cycleIndex, sessions, sentinel, fixturePath) {
   if (leakageFailures.length) {
     leakageFailures.forEach((failure) => sentinel.record('visibility-leak', failure));
   }
+  if (viewerAccessFailures.length) {
+    viewerAccessFailures.forEach((failure) => sentinel.record('viewer-access-failure', {
+      cycle: cycleIndex,
+      ...failure
+    }));
+  }
   return summary;
 }
 
@@ -1314,22 +2150,84 @@ async function closeSessions(sessions) {
 async function main() {
   const runRoot = path.join(os.tmpdir(), `applicationversion1-endurance-${Date.now()}`);
   const resultsPath = path.join(runRoot, 'results.json');
+  const progressPath = path.join(runRoot, 'progress.json');
   const downloadRoot = path.join(runRoot, 'downloads');
   const users = buildUsers();
   const sentinel = new ErrorSentinel();
   const runStartedAt = nowIso();
+  const startedAtMs = Date.now();
+  let progressWriteQueue = Promise.resolve();
 
-  console.log(`Preparing endurance watchdog with ${CLIENT_COUNT} clients / ${DOSSIER_COUNT} dossiers / ${AUDIENCE_COUNT} audience entries`);
+  console.log(`Preparing endurance watchdog with ${CLIENT_COUNT} clients / ${DOSSIER_COUNT} dossiers / ${AUDIENCE_COUNT} audience entries / ${DILIGENCE_COUNT || 'auto'} diligence target`);
   console.log(`Opening ${TOTAL_USER_COUNT} users for ${DURATION_MINUTES} minute(s) on ${BASE_URL}`);
 
   await copyProjectSubset(runRoot);
-  const { fixturePath } = await writeFixtureState(runRoot, users);
+  const { fixturePath, estimatedDiligenceRows } = await writeFixtureState(runRoot, users);
+  console.log(`Fixture estimated diligence rows: ${estimatedDiligenceRows}`);
+
+  const writeProgressReport = async (phase, latestCycle = null) => {
+    const sentinelSummary = sentinel.buildSummary();
+    const stability = assessStability(sentinelSummary, sentinel.cycleSummaries);
+    const recentCycle = latestCycle || sentinel.cycleSummaries[sentinel.cycleSummaries.length - 1] || null;
+    const payload = {
+      at: nowIso(),
+      phase,
+      startedAt: runStartedAt,
+      elapsedMs: Date.now() - startedAtMs,
+      baseUrl: BASE_URL,
+      runRoot,
+      config: {
+        clients: CLIENT_COUNT,
+        dossiers: DOSSIER_COUNT,
+        audiences: AUDIENCE_COUNT,
+        users: TOTAL_USER_COUNT,
+        clientUsers: VIEWER_COUNT,
+        admins: ADMIN_COUNT,
+        managers: MANAGER_COUNT,
+        minutes: DURATION_MINUTES,
+        actionIntervalMs: ACTION_INTERVAL_MS,
+        monitorIntervalMs: MONITOR_INTERVAL_MS,
+        targetClientId: TARGET_CLIENT_ID
+      },
+      cycleCount: sentinel.cycleSummaries.length,
+      latestCycle: recentCycle,
+      stability,
+      sentinel: {
+        summary: sentinelSummary,
+        recentEvents: sentinel.events.slice(-200),
+        healthSamples: sentinel.health.slice(-100),
+        recentPageSnapshots: sentinel.pageSnapshots.slice(-100),
+        systemSamples: sentinel.systemSamples.slice(-100),
+        sessionSummaries: Array.from(sentinel.sessionStats.values()).map((stats) => summarizeSessionStats(stats)),
+        serverStdout: sentinel.serverStdout.slice(-50),
+        serverStderr: sentinel.serverStderr.slice(-50)
+      }
+    };
+    await fs.writeFile(progressPath, JSON.stringify(payload, null, 2), 'utf8');
+    return payload;
+  };
+
+  const sleepWithCancel = async (totalMs) => {
+    const startedAt = Date.now();
+    while (monitorActive && (Date.now() - startedAt) < totalMs) {
+      const remainingMs = totalMs - (Date.now() - startedAt);
+      await sleep(Math.min(1000, remainingMs));
+    }
+  };
+
+  const queueProgressWrite = (phase, latestCycle = null) => {
+    progressWriteQueue = progressWriteQueue
+      .then(() => writeProgressReport(phase, latestCycle))
+      .catch(() => {});
+    return progressWriteQueue;
+  };
 
   const server = spawn('node', ['server/index.js'], {
     cwd: runRoot,
-    env: { ...process.env, HOST, PORT: String(PORT) },
+    env: { ...process.env, HOST, PORT: String(PORT), HTTPS_PORT: String(HTTPS_PORT) },
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  globalThis.__enduranceServerProcess = server;
   sentinel.attachServer(server);
 
   let browser = null;
@@ -1341,7 +2239,15 @@ async function main() {
       if (sessions.length) {
         await sentinel.pollSessions(sessions);
       }
-      await sleep(MONITOR_INTERVAL_MS);
+      await sleepWithCancel(MONITOR_INTERVAL_MS);
+    }
+  })();
+  const progressLoop = (async () => {
+    await queueProgressWrite('started');
+    while (monitorActive) {
+      await sleepWithCancel(PROGRESS_WRITE_INTERVAL_MS);
+      if (!monitorActive) break;
+      await queueProgressWrite('interval');
     }
   })();
 
@@ -1356,6 +2262,7 @@ async function main() {
       startedAt: runStartedAt,
       baseUrl: BASE_URL,
       runRoot,
+      progressPath,
       partial: true,
       error: String(error?.message || error),
       phase: options.phase || 'unknown',
@@ -1389,12 +2296,15 @@ async function main() {
         recentEvents: sentinel.events,
         healthSamples: sentinel.health,
         recentPageSnapshots: sentinel.pageSnapshots,
+        systemSamples: sentinel.systemSamples,
+        sessionSummaries: Array.from(sentinel.sessionStats.values()).map((stats) => summarizeSessionStats(stats)),
         serverStdout: sentinel.serverStdout,
         serverStderr: sentinel.serverStderr
       }
     };
     await fs.writeFile(resultsPath, JSON.stringify(fallbackResult, null, 2), 'utf8');
     finalResultWritten = true;
+    await queueProgressWrite('fallback');
   };
 
   try {
@@ -1413,6 +2323,7 @@ async function main() {
     sessions = await openSessions(browser, users, sentinel, downloadRoot);
     console.log(`Opened ${sessions.length} sessions successfully.`);
     await sentinel.pollSessions(sessions);
+    await queueProgressWrite('sessions-opened');
 
     const startedAt = Date.now();
     let cycleIndex = 0;
@@ -1423,12 +2334,14 @@ async function main() {
         console.log(
           `[cycle ${cycleSummary.cycle}] loadFailures=${cycleSummary.loadBurst.failures.length} | create max=${cycleSummary.createPropagation.maxMs}ms | update max=${cycleSummary.updatePropagation.maxMs}ms | leaks=${cycleSummary.leakageFailures.length}`
         );
+        await queueProgressWrite('cycle', cycleSummary);
       } catch (error) {
         sentinel.record('cycle-error', {
           cycle: cycleIndex,
           error: String(error?.message || error)
         });
         console.log(`[cycle ${cycleIndex}] error: ${String(error?.message || error)}`);
+        await queueProgressWrite('cycle-error');
       }
       const remainingMs = DURATION_MS - (Date.now() - startedAt);
       if (remainingMs <= 0) break;
@@ -1436,6 +2349,7 @@ async function main() {
     }
 
     await sentinel.pollSessions(sessions);
+    await queueProgressWrite('final-poll');
     const finalState = await fetchState(runRoot);
     const finalTargetClient = (Array.isArray(finalState.clients) ? finalState.clients : []).find(
       (client) => Number(client?.id) === TARGET_CLIENT_ID
@@ -1459,6 +2373,7 @@ async function main() {
       startedAt: runStartedAt,
       baseUrl: BASE_URL,
       runRoot,
+      progressPath,
       config: {
         clients: CLIENT_COUNT,
         dossiers: DOSSIER_COUNT,
@@ -1491,6 +2406,8 @@ async function main() {
         recentEvents: sentinel.events,
         healthSamples: sentinel.health,
         recentPageSnapshots: sentinel.pageSnapshots,
+        systemSamples: sentinel.systemSamples,
+        sessionSummaries: Array.from(sentinel.sessionStats.values()).map((stats) => summarizeSessionStats(stats)),
         serverStdout: sentinel.serverStdout,
         serverStderr: sentinel.serverStderr
       }
@@ -1498,8 +2415,10 @@ async function main() {
 
     await fs.writeFile(resultsPath, JSON.stringify(result, null, 2), 'utf8');
     finalResultWritten = true;
+    await queueProgressWrite('complete', sentinel.cycleSummaries[sentinel.cycleSummaries.length - 1] || null);
     console.log(JSON.stringify({
       resultsPath,
+      progressPath,
       stability: result.stability,
       sentinelSummary: result.sentinel.summary,
       cycleCount: result.cycles.length,
@@ -1516,6 +2435,8 @@ async function main() {
   } finally {
     monitorActive = false;
     await monitorLoop.catch(() => {});
+    await progressLoop.catch(() => {});
+    await progressWriteQueue.catch(() => {});
     await closeSessions(sessions).catch(() => {});
     if (browser) await browser.close().catch(() => {});
     server.kill('SIGINT');

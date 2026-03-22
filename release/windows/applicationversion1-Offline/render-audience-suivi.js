@@ -4,9 +4,65 @@ const AUDIENCE_NO_CLIENT_MESSAGE = 'Aucun client assigné à ce compte. Contacte
 const SUIVI_EMPTY_MESSAGE = 'Aucun dossier trouvé avec ces filtres.';
 const SUIVI_LOADING_MESSAGE = 'Recherche dossier en cours...';
 const SUIVI_NO_CLIENT_MESSAGE = 'Aucun client assigné à ce compte. Contactez le gestionnaire.';
+const AUDIENCE_TABLE_COL_COUNT = 13;
+const SUIVI_TABLE_COL_COUNT = 10;
 
 function getAudienceVirtualWindow(rowsLength){
   return getVirtualWindowByContainer('audienceTableContainer', rowsLength);
+}
+
+function renderAudienceTableMessage(body, message, key){
+  renderTableMessage(body, AUDIENCE_TABLE_COL_COUNT, message, key);
+}
+
+function renderSuiviTableMessage(body, message, key){
+  renderTableMessage(body, SUIVI_TABLE_COL_COUNT, message, key);
+}
+
+function renderAudienceRowsHtml(rows, duplicateKeySet){
+  return rows.map(row=>renderAudienceRowHtml(row, duplicateKeySet)).join('');
+}
+
+function renderSuiviRowsHtml(rows){
+  return rows.map(renderSuiviRowHtml).join('');
+}
+
+function getSuiviFilterCacheKey(query){
+  return [query, filterSuiviProcedure, filterSuiviTribunal].join('||');
+}
+
+function getSuiviRenderStateKey(filterCacheKey){
+  return [filterCacheKey, filterSuiviCheckedFirst ? 'checked-first' : 'default'].join('||');
+}
+
+function getCurrentSuiviRenderStateKey(){
+  return getSuiviRenderStateKey(getSuiviFilterCacheKey($('filterGlobal')?.value?.toLowerCase() || ''));
+}
+
+function getCurrentSuiviFilterCacheKey(){
+  return getSuiviFilterCacheKey($('filterGlobal')?.value?.toLowerCase() || '');
+}
+
+function buildSuiviRowsRenderKey(pageData, stateKey){
+  return [
+    'suivi-rows',
+    audienceRowsRawDataVersion,
+    suiviPrintSelectionVersion,
+    pageData.page,
+    pageData.rows.length,
+    stateKey
+  ].join('::');
+}
+
+function buildAudienceRowsRenderKey(pageData, stateKey){
+  return [
+    'audience-rows',
+    audienceRowsRawDataVersion,
+    audiencePrintSelectionVersion,
+    pageData.page,
+    pageData.rows.length,
+    stateKey
+  ].join('::');
 }
 
 function queueAudienceVirtualRender(){
@@ -83,7 +139,7 @@ function renderAudienceVirtualWindow(force = false){
   const rows = Array.isArray(audienceVirtualRows) ? audienceVirtualRows : [];
   if(!rows.length){
     audienceVirtualLastRange = { start: -1, end: -1 };
-    renderTableMessage(body, 13, AUDIENCE_EMPTY_MESSAGE, 'audience-empty');
+    renderAudienceTableMessage(body, AUDIENCE_EMPTY_MESSAGE, 'audience-empty');
     return;
   }
 
@@ -96,15 +152,12 @@ function renderAudienceVirtualWindow(force = false){
   const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
   const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
   const topSpacer = topHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="13" style="height:${topHeight}px"></td></tr>`
+    ? `<tr class="virtual-spacer"><td colspan="${AUDIENCE_TABLE_COL_COUNT}" style="height:${topHeight}px"></td></tr>`
     : '';
   const bottomSpacer = bottomHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="13" style="height:${bottomHeight}px"></td></tr>`
+    ? `<tr class="virtual-spacer"><td colspan="${AUDIENCE_TABLE_COL_COUNT}" style="height:${bottomHeight}px"></td></tr>`
     : '';
-  const rowsHtml = rows
-    .slice(start, end)
-    .map(row=>renderAudienceRowHtml(row, audienceVirtualDuplicateKeySet))
-    .join('');
+  const rowsHtml = renderAudienceRowsHtml(rows.slice(start, end), audienceVirtualDuplicateKeySet);
   body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
 }
 
@@ -149,7 +202,7 @@ function renderSuiviVirtualWindow(force = false){
   const rows = Array.isArray(suiviVirtualRows) ? suiviVirtualRows : [];
   if(!rows.length){
     suiviVirtualLastRange = { start: -1, end: -1 };
-    renderTableMessage(body, 10, SUIVI_EMPTY_MESSAGE, 'suivi-empty');
+    renderSuiviTableMessage(body, SUIVI_EMPTY_MESSAGE, 'suivi-empty');
     return;
   }
   const { start, end } = getVirtualWindowByContainer('suiviTableContainer', rows.length);
@@ -159,12 +212,12 @@ function renderSuiviVirtualWindow(force = false){
   const topHeight = start * AUDIENCE_VIRTUAL_ROW_HEIGHT;
   const bottomHeight = (rows.length - end) * AUDIENCE_VIRTUAL_ROW_HEIGHT;
   const topSpacer = topHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="10" style="height:${topHeight}px"></td></tr>`
+    ? `<tr class="virtual-spacer"><td colspan="${SUIVI_TABLE_COL_COUNT}" style="height:${topHeight}px"></td></tr>`
     : '';
   const bottomSpacer = bottomHeight > 0
-    ? `<tr class="virtual-spacer"><td colspan="10" style="height:${bottomHeight}px"></td></tr>`
+    ? `<tr class="virtual-spacer"><td colspan="${SUIVI_TABLE_COL_COUNT}" style="height:${bottomHeight}px"></td></tr>`
     : '';
-  const rowsHtml = rows.slice(start, end).map(renderSuiviRowHtml).join('');
+  const rowsHtml = renderSuiviRowsHtml(rows.slice(start, end));
   body.innerHTML = `${topSpacer}${rowsHtml}${bottomSpacer}`;
 }
 
@@ -178,6 +231,12 @@ function queueSuiviVirtualRender(){
 
 function orderSuiviRowsByCheckedSelection(rows){
   if(!filterSuiviCheckedFirst || !Array.isArray(rows) || rows.length < 2) return rows;
+  if(
+    rows === suiviCheckedOrderedRowsCacheInput
+    && suiviCheckedOrderedRowsCacheVersion === suiviPrintSelectionVersion
+  ){
+    return suiviCheckedOrderedRowsCacheOutput;
+  }
   const checkedRows = [];
   const otherRows = [];
   rows.forEach(row=>{
@@ -187,21 +246,26 @@ function orderSuiviRowsByCheckedSelection(rows){
       otherRows.push(row);
     }
   });
-  return checkedRows.concat(otherRows);
+  const out = checkedRows.concat(otherRows);
+  suiviCheckedOrderedRowsCacheInput = rows;
+  suiviCheckedOrderedRowsCacheVersion = suiviPrintSelectionVersion;
+  suiviCheckedOrderedRowsCacheOutput = out;
+  return out;
 }
 
 function renderSuivi(options = {}){
   if(!shouldRenderDeferredSection('suivi', options)) return;
   const q = $('filterGlobal')?.value?.toLowerCase() || '';
-  const suiviFilterCacheKey = [q, filterSuiviProcedure, filterSuiviTribunal].join('||');
-  const suiviRenderStateKey = [suiviFilterCacheKey, filterSuiviCheckedFirst ? 'checked-first' : 'default'].join('||');
+  const suiviFilterCacheKey = getSuiviFilterCacheKey(q);
+  const suiviRenderStateKey = getSuiviRenderStateKey(suiviFilterCacheKey);
   syncPaginationFilterState('suivi', suiviRenderStateKey);
   const suiviBody = $('suiviBody');
   if(!suiviBody) return;
   if(!isManager() && getVisibleClients().length === 0){
+    syncSuiviRenderedSelectionCache([], [], suiviRenderStateKey, 1);
     suiviVirtualRows = [];
     suiviVirtualLastRange = { start: -1, end: -1 };
-    renderTableMessage(suiviBody, 10, SUIVI_NO_CLIENT_MESSAGE, 'suivi-no-client');
+    renderSuiviTableMessage(suiviBody, SUIVI_NO_CLIENT_MESSAGE, 'suivi-no-client');
     renderPagination('suivi', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     updateSuiviCheckedCount();
     return;
@@ -215,25 +279,19 @@ function renderSuivi(options = {}){
     const orderedRows = orderSuiviRowsByCheckedSelection(sortedRows);
     syncSuiviPrintSelection(base.sortedDefaultRows);
     const pageData = paginateRows(orderedRows, 'suivi');
+    syncSuiviRenderedSelectionCache(orderedRows, pageData.rows, suiviRenderStateKey, pageData.page);
     const useVirtual = pageData.rows.length >= SUIVI_VIRTUAL_MIN_ROWS;
     suiviVirtualRows = pageData.rows;
     suiviVirtualLastRange = { start: -1, end: -1 };
     if(!pageData.rows.length){
-      renderTableMessage(suiviBody, 10, SUIVI_EMPTY_MESSAGE, 'suivi-empty');
+      renderSuiviTableMessage(suiviBody, SUIVI_EMPTY_MESSAGE, 'suivi-empty');
     }else if(useVirtual){
       renderSuiviVirtualWindow(true);
     }else{
       setElementHtmlWithRenderKey(
         suiviBody,
-        pageData.rows.map(renderSuiviRowHtml).join(''),
-        [
-          'suivi-rows',
-          audienceRowsRawDataVersion,
-          suiviPrintSelectionVersion,
-          pageData.page,
-          pageData.rows.length,
-          suiviRenderStateKey
-        ].join('::'),
+        renderSuiviRowsHtml(pageData.rows),
+        buildSuiviRowsRenderKey(pageData, suiviRenderStateKey),
         { trustRenderKey: true }
       );
     }
@@ -243,12 +301,7 @@ function renderSuivi(options = {}){
   };
   const queueFinalizeSuiviRender = (rows, expectedStateKey = suiviRenderStateKey, expectedRequestId = null)=>{
     const run = ()=>{
-      const currentStateKey = [
-        $('filterGlobal')?.value?.toLowerCase() || '',
-        filterSuiviProcedure,
-        filterSuiviTribunal,
-        filterSuiviCheckedFirst ? 'checked-first' : 'default'
-      ].join('||');
+      const currentStateKey = getCurrentSuiviRenderStateKey();
       if(currentStateKey !== expectedStateKey) return;
       if(expectedRequestId !== null && expectedRequestId !== suiviFilterRequestSeq) return;
       finalizeSuiviRender(rows);
@@ -259,7 +312,7 @@ function renderSuivi(options = {}){
     }
     scheduleDeferredSectionRender('suivi', run, {
       delayMs: 60,
-      onPending: ()=>renderTableMessage(suiviBody, 10, SUIVI_LOADING_MESSAGE, 'suivi-loading')
+      onPending: ()=>renderSuiviTableMessage(suiviBody, SUIVI_LOADING_MESSAGE, 'suivi-loading')
     });
   };
   let sortedRows = [];
@@ -278,7 +331,7 @@ function renderSuivi(options = {}){
       return true;
     });
     const requestId = ++suiviFilterRequestSeq;
-    renderTableMessage(suiviBody, 10, SUIVI_LOADING_MESSAGE, 'suivi-loading');
+    renderSuiviTableMessage(suiviBody, SUIVI_LOADING_MESSAGE, 'suivi-loading');
     runSuiviFilterInWorker(
       narrowedRows.map((row, idx)=>({
         idx,
@@ -294,11 +347,7 @@ function renderSuivi(options = {}){
       requestId
     )
       .then((filteredIndexes)=>{
-        const currentStateKey = [
-          $('filterGlobal')?.value?.toLowerCase() || '',
-          filterSuiviProcedure,
-          filterSuiviTribunal
-        ].join('||');
+        const currentStateKey = getCurrentSuiviFilterCacheKey();
         if(requestId !== suiviFilterRequestSeq) return;
         if(currentStateKey !== suiviFilterCacheKey) return;
         let nextRows;
@@ -372,35 +421,28 @@ function renderSuivi(options = {}){
 
 function renderAudience(options = {}){
   if(!shouldRenderDeferredSection('audience', options)) return;
+  const shouldRefreshSalleSidebar = isDeferredRenderSectionVisible('salle');
   const audienceQuery = $('filterAudience')?.value?.toLowerCase() || '';
-  const audienceFilterStateKey = [
-    audienceQuery,
-    filterAudienceColor,
-    filterAudienceProcedure,
-    filterAudienceTribunal,
-    filterAudienceDate,
-    filterAudienceErrorsOnly ? '1' : '0',
-    filterAudienceCheckedFirst ? 'checked-first' : 'default',
-    selectedAudienceColor
-  ].join('||');
+  const audienceFilterStateKey = getAudienceFilterStateKey();
   syncPaginationFilterState(
     'audience',
     audienceFilterStateKey
   );
   const body = $('audienceBody');
   if(!body){
-    queueSidebarSalleSessionsRender();
+    if(shouldRefreshSalleSidebar) queueSidebarSalleSessionsRender();
     return;
   }
   renderImportHistoryPanel('audienceImportHistory', 'audience');
   if(!isManager() && getVisibleClients().length === 0){
+    syncAudienceRenderedSelectionCache([], [], audienceFilterStateKey, 1);
     audienceVirtualRows = [];
     audienceVirtualDuplicateKeySet = new Set();
     audienceVirtualLastRange = { start: -1, end: -1 };
-    renderTableMessage(body, 13, AUDIENCE_NO_CLIENT_MESSAGE, 'audience-no-client');
+    renderAudienceTableMessage(body, AUDIENCE_NO_CLIENT_MESSAGE, 'audience-no-client');
     renderPagination('audience', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
     updateAudienceCheckedCount();
-    queueSidebarSalleSessionsRender();
+    if(shouldRefreshSalleSidebar) queueSidebarSalleSessionsRender();
     return;
   }
 
@@ -409,28 +451,21 @@ function renderAudience(options = {}){
     syncAudienceFilterOptions(allRows);
     const duplicateKeySet = getAudienceDuplicateKeySet(allRows);
     const rows = getFilteredAudienceRows(allRows);
-    lastAudienceRenderedRows = rows;
     const pageData = paginateRows(rows, 'audience');
+    syncAudienceRenderedSelectionCache(rows, pageData.rows, audienceFilterStateKey, pageData.page);
     const useVirtual = shouldUseAudienceVirtualization(pageData.rows.length);
     audienceVirtualRows = pageData.rows;
     audienceVirtualDuplicateKeySet = duplicateKeySet;
     audienceVirtualLastRange = { start: -1, end: -1 };
     if(!pageData.rows.length){
-      renderTableMessage(body, 13, AUDIENCE_EMPTY_MESSAGE, 'audience-empty');
+      renderAudienceTableMessage(body, AUDIENCE_EMPTY_MESSAGE, 'audience-empty');
     }else if(useVirtual){
       renderAudienceVirtualWindow(true);
     }else{
       setElementHtmlWithRenderKey(
         body,
-        pageData.rows.map(row=>renderAudienceRowHtml(row, duplicateKeySet)).join(''),
-        [
-          'audience-rows',
-          audienceRowsRawDataVersion,
-          audiencePrintSelectionVersion,
-          pageData.page,
-          pageData.rows.length,
-          audienceFilterStateKey
-        ].join('::'),
+        renderAudienceRowsHtml(pageData.rows, duplicateKeySet),
+        buildAudienceRowsRenderKey(pageData, audienceFilterStateKey),
         { trustRenderKey: true }
       );
     }
@@ -440,20 +475,11 @@ function renderAudience(options = {}){
     }else{
       updateAudienceCheckedCount();
     }
-    queueSidebarSalleSessionsRender();
+    if(shouldRefreshSalleSidebar) queueSidebarSalleSessionsRender();
   };
   const queueFinalizeAudienceRender = (rows, expectedStateKey = audienceFilterStateKey, expectedRequestId = null)=>{
     const run = ()=>{
-      const currentStateKey = [
-        $('filterAudience')?.value?.toLowerCase() || '',
-        filterAudienceColor,
-        filterAudienceProcedure,
-        filterAudienceTribunal,
-        filterAudienceDate,
-        filterAudienceErrorsOnly ? '1' : '0',
-        filterAudienceCheckedFirst ? 'checked-first' : 'default',
-        selectedAudienceColor
-      ].join('||');
+      const currentStateKey = getAudienceFilterStateKey();
       if(currentStateKey !== expectedStateKey) return;
       if(expectedRequestId !== null && expectedRequestId !== audienceFilterRequestSeq) return;
       finalizeAudienceRender(rows);
@@ -464,7 +490,7 @@ function renderAudience(options = {}){
     }
     scheduleDeferredSectionRender('audience', run, {
       delayMs: 60,
-      onPending: ()=>renderTableMessage(body, 13, AUDIENCE_LOADING_MESSAGE, 'audience-loading')
+      onPending: ()=>renderAudienceTableMessage(body, AUDIENCE_LOADING_MESSAGE, 'audience-loading')
     });
   };
 
@@ -492,7 +518,7 @@ function renderAudience(options = {}){
   }
 
   const requestId = ++audienceFilterRequestSeq;
-  renderTableMessage(body, 13, AUDIENCE_LOADING_MESSAGE, 'audience-loading');
+  renderAudienceTableMessage(body, AUDIENCE_LOADING_MESSAGE, 'audience-loading');
   runAudienceFilterInWorker(
     colorFilteredRows.map((row, idx)=>({
       idx,
@@ -502,16 +528,7 @@ function renderAudience(options = {}){
     requestId
   )
     .then((filteredIndexes)=>{
-      const currentStateKey = [
-        $('filterAudience')?.value?.toLowerCase() || '',
-        filterAudienceColor,
-        filterAudienceProcedure,
-        filterAudienceTribunal,
-        filterAudienceDate,
-        filterAudienceErrorsOnly ? '1' : '0',
-        filterAudienceCheckedFirst ? 'checked-first' : 'default',
-        selectedAudienceColor
-      ].join('||');
+      const currentStateKey = getAudienceFilterStateKey();
       if(requestId !== audienceFilterRequestSeq) return;
       if(currentStateKey !== audienceFilterStateKey) return;
       if(!Array.isArray(filteredIndexes)){

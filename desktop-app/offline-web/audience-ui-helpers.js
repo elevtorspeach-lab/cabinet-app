@@ -1,10 +1,20 @@
+const STATUS_BADGE_CLASS_BY_VALUE = {
+  'Soldé': 'status-solde',
+  'Arrêt définitif': 'status-arret',
+  'Clôture': 'status-cloture',
+  'Suspension': 'status-suspension'
+};
+
+const AUDIENCE_ALLOWED_ROW_COLORS = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
+
+function getStatusBadgeClass(status){
+  const value = String(status || 'En cours');
+  return STATUS_BADGE_CLASS_BY_VALUE[value] || 'status-encours';
+}
+
 function renderStatusBadge(status){
   const value = String(status || 'En cours');
-  let cls = 'status-encours';
-  if(value === 'Soldé') cls = 'status-solde';
-  if(value === 'Arrêt définitif') cls = 'status-arret';
-  if(value === 'Clôture') cls = 'status-cloture';
-  if(value === 'Suspension') cls = 'status-suspension';
+  const cls = getStatusBadgeClass(value);
   return `<span class="status-badge ${cls}">${escapeHtml(value)}</span>`;
 }
 
@@ -23,7 +33,6 @@ function getAudienceStatusDerivedColor(status){
 
 function getAudienceRowEffectiveColor(row){
   const explicitColor = String(row?.p?.color || '').trim();
-  const allowedColors = new Set(['blue', 'green', 'red', 'yellow', 'purple-dark', 'purple-light']);
-  if(allowedColors.has(explicitColor)) return explicitColor;
+  if(AUDIENCE_ALLOWED_ROW_COLORS.has(explicitColor)) return explicitColor;
   return getAudienceStatusDerivedColor(row?.d?.statut || '');
 }
