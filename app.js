@@ -1,6 +1,6 @@
 // ================== STATE ==================
 const AppState = { clients: [], salleAssignments: [], recycleBin: [], recycleArchive: [], importHistory: [] };
-const DEFAULT_MANAGER_USERNAME = 'manager';
+const DEFAULT_MANAGER_USERNAME = 'walid';
 const DEFAULT_MANAGER_PASSWORD = '1234';
 const IMPORT_HISTORY_MAX_ENTRIES = 80;
 const IMPORT_HISTORY_PANEL_MARKUP_CACHE_LIMIT = 16;
@@ -17,9 +17,10 @@ const PASSWORD_SETUP_MODE_FORCED = 'forced';
 const PASSWORD_SETUP_MODE_BOOTSTRAP_LOCAL = 'bootstrap-local';
 const PASSWORD_SETUP_MODE_BOOTSTRAP_REMOTE = 'bootstrap-remote';
 const STANDARD_TEAM_TOTAL_MANAGERS = 2;
-const STANDARD_TEAM_TOTAL_ADMINS = 10;
-const STANDARD_TEAM_TOTAL_CLIENTS = 9;
+const STANDARD_TEAM_TOTAL_ADMINS = 8;
+const STANDARD_TEAM_TOTAL_CLIENTS = 5;
 const STANDARD_TEAM_DEFAULT_PASSWORD = '1234';
+const STANDARD_TEAM_MANAGER_USERNAMES = ['walid', 'amine'];
 
 function buildSeedUsers(){
   return [
@@ -525,6 +526,7 @@ const API_PROBE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 900 : 5000;
 const API_HEALTH_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1500 : 8000;
 const API_STATE_LOAD_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1800 : 25000;
 const API_STATE_SAVE_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 30000 : 20000;
+const API_AUTH_LOGIN_TIMEOUT_MS = IS_REMOTE_WEB_HOST ? 1500 : 2200;
 const REMOTE_STATE_PAGED_LOAD_CLIENT_PAGE_SIZE = IS_REMOTE_WEB_HOST ? 25 : 40;
 const REMOTE_STATE_PAGED_LOAD_MAX_PAGES = 2000;
 const REMOTE_STATE_CHUNK_UPLOAD_MIN_LENGTH = IS_REMOTE_WEB_HOST ? 350000 : 1200000;
@@ -3636,7 +3638,7 @@ async function loginRemoteSession(username, password){
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
-    }, API_STATE_LOAD_TIMEOUT_MS);
+    }, API_AUTH_LOGIN_TIMEOUT_MS);
     if(res.status === 401){
       remoteServerReachable = true;
       clearRemoteAuthSession();
@@ -12725,7 +12727,6 @@ async function login(){
       if(remoteAuth.ok){
         remoteLoginState = 'ok';
         updateBootstrapSetupUi({ visible: false });
-        await loadPersistedState();
       }else if(remoteAuth.reason === 'bootstrap_required'){
         updateBootstrapSetupUi({ visible: true, remote: true });
         showLoginError('Configurez d’abord le mot de passe initial du compte gestionnaire.');
@@ -12768,17 +12769,12 @@ async function login(){
       return;
     }
 
-    if((!hasStoredPasswordHash(user) || normalizeLoginPassword(user.password || '')) && passwordInput){
-      const upgradedUser = await secureUserPassword(user, passwordInput, {
-        requirePasswordChange: false
-      });
-      USERS[userIndex] = upgradedUser;
-      try{
-        await persistStateSliceNow('users', USERS, { source: 'auth-security-upgrade' });
-      }catch(err){
-        console.warn('Impossible de mettre à jour la sécurité du compte', err);
-      }
-    }
+    const shouldUpgradePasswordSecurity = Boolean(
+      (!hasStoredPasswordHash(user) || normalizeLoginPassword(user.password || ''))
+      && passwordInput
+      && Number.isFinite(userIndex)
+      && userIndex >= 0
+    );
 
     resetLoginAttempts();
     pendingLoginRetryAfterInit = false;
@@ -12889,6 +12885,24 @@ async function login(){
     safeRun('applyRoleUI', ()=>applyRoleUI({ skipNavigation: true }));
     safeRun('primeDashboardTotalClients', ()=>animateDashboardMetric('totalClients', getVisibleClients().length, { immediate: true }));
     queueLoginPostBoot();
+    if(shouldUpgradePasswordSecurity){
+      setTimeout(async ()=>{
+        try{
+          const latestUser = USERS[userIndex];
+          if(!latestUser) return;
+          const upgradedUser = await secureUserPassword(latestUser, passwordInput, {
+            requirePasswordChange: false
+          });
+          USERS[userIndex] = upgradedUser;
+          if(currentUser && String(currentUser.username || '').trim().toLowerCase() === usernameInput){
+            currentUser = upgradedUser;
+          }
+          await persistStateSliceNow('users', USERS, { source: 'auth-security-upgrade' });
+        }catch(err){
+          console.warn('Impossible de mettre à jour la sécurité du compte', err);
+        }
+      }, 0);
+    }
     if(!LOCAL_ONLY_MODE && hasRemoteAuthSession()){
       const remoteSyncDelayMs = isLargeDatasetMode() ? 900 : 0;
       if(remoteSyncDelayMs > 0){
@@ -12900,6 +12914,9 @@ async function login(){
       }else{
         startRemoteSync();
       }
+      setTimeout(()=>{
+        refreshRemoteState().catch(()=>{});
+      }, 80);
     }else if(remoteLoginState === 'unavailable'){
       setSyncStatus('error', 'Mode local (serveur indisponible)');
     }
@@ -16099,14 +16116,9 @@ async function upsertProvisionedUser(nextUsers, config, nextIdRef){
   if(existingUser){
     nextUser.id = Number.isFinite(Number(existingUser.id)) ? Number(existingUser.id) : nextIdRef.value++;
   }
-  const hasCredentials = existingUser
-    ? (hasStoredPasswordHash(existingUser) || !!normalizeLoginPassword(existingUser.password || ''))
-    : false;
-  if(!hasCredentials){
-    nextUser = await secureUserPassword(nextUser, STANDARD_TEAM_DEFAULT_PASSWORD, {
-      requirePasswordChange: false
-    });
-  }
+  nextUser = await secureUserPassword(nextUser, STANDARD_TEAM_DEFAULT_PASSWORD, {
+    requirePasswordChange: false
+  });
   if(existingIndex >= 0){
     const changed = JSON.stringify(normalizeUser(existingUser)) !== JSON.stringify(normalizeUser(nextUser));
     nextUsers[existingIndex] = nextUser;
@@ -16137,19 +16149,20 @@ async function provisionStandardTeamStructure(){
   let updatedCount = 0;
 
   const accounts = [
-    { username: DEFAULT_MANAGER_USERNAME, role: 'manager', clientIds: [] },
-    ...Array.from({ length: Math.max(0, STANDARD_TEAM_TOTAL_MANAGERS - 1) }, (_, index)=>({
-      username: `manager${index + 2}`,
-      role: 'manager',
-      clientIds: []
-    })),
+    ...STANDARD_TEAM_MANAGER_USERNAMES
+      .slice(0, Math.max(0, STANDARD_TEAM_TOTAL_MANAGERS))
+      .map((username)=>({
+        username,
+        role: 'manager',
+        clientIds: []
+      })),
     ...Array.from({ length: STANDARD_TEAM_TOTAL_ADMINS }, (_, index)=>({
-      username: `admin${String(index + 1).padStart(2, '0')}`,
+      username: `admin${index + 1}`,
       role: 'admin',
       clientIds: []
     })),
     ...Array.from({ length: STANDARD_TEAM_TOTAL_CLIENTS }, (_, index)=>({
-      username: `client${String(index + 1).padStart(2, '0')}`,
+      username: `client${index + 1}`,
       role: 'client',
       clientIds: clientAssignments[index] || []
     }))
