@@ -244,6 +244,7 @@ let diligenceVirtualLastRange = { start: -1, end: -1 };
 let diligenceVirtualRafId = null;
 let diligenceVirtualShowInjonctionColumns = false;
 let diligenceVirtualShowAssColumns = false;
+let diligenceVirtualShowCommandementColumns = false;
 let diligenceRowsCache = null;
 let diligenceRowsCacheVersion = 0;
 let diligenceRowsCacheViewerKey = '';
@@ -381,6 +382,9 @@ const DOSSIER_HISTORY_FIELD_LABELS = {
   cautionVille: 'Ville de caution',
   cautionCin: 'CIN de caution',
   cautionRc: 'RC',
+  efNumber: 'TF N°',
+  conservation: 'Conservation',
+  metrage: 'Métrage',
   note: 'Note',
   avancement: 'Avancement',
   statut: 'Statut',
@@ -407,11 +411,18 @@ const DOSSIER_HISTORY_FIELD_LABELS = {
   'procedureDetails.certificatNonAppelStatus': 'Statut certificat non appel',
   'procedureDetails.notificationStatus': 'Statut notification',
   'procedureDetails.notificationSort': 'Sort notification',
+  'procedureDetails.notifConservateur': 'Not conservateur',
+  'procedureDetails.notifDebiteur': 'Not débiteur',
+  'procedureDetails.refExpertise': 'Ref expertise',
+  'procedureDetails.ord': 'Ord',
+  'procedureDetails.expert': 'Expert',
+  'procedureDetails.dateVente': 'Date vente',
   'procedureDetails.lettreRec': 'Lettre Rec',
   'procedureDetails.curateurNo': 'Curateur N°',
   'procedureDetails.notifCurateur': 'Notif curateur',
   'procedureDetails.sortNotif': 'Sort notif',
-  'procedureDetails.avisCurateur': 'Avis curateur'
+  'procedureDetails.avisCurateur': 'Avis curateur',
+  'procedureDetails.pvPlice': 'PV Police'
 };
 const DOSSIER_HISTORY_SOURCE_LABELS = {
   form: 'Modifier dossier',
@@ -520,6 +531,7 @@ const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.mi
 const EXCELJS_CDN_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
 const AUDIENCE_EXPORT_HEADER_IMAGE_URL = IS_FILE_PROTOCOL ? './assets/audience-export-header.jpeg' : '/assets/audience-export-header.jpeg';
 const AUDIENCE_EXPORT_TEMPLATE_URL = IS_FILE_PROTOCOL ? './assets/audience-export-template.xlsx' : '/assets/audience-export-template.xlsx';
+const AUDIENCE_EXPORT_TEMPLATE_BASE64_SCRIPT_URL = IS_FILE_PROTOCOL ? './assets/audience-export-template.base64.js' : '/assets/audience-export-template.base64.js';
 const AUDIENCE_EXPORT_HEADER_IMAGE_DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAlgCWAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAElBLoDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9U6KKKACiiigAooooAKKKKACiiigAooooAKKKKAMrxB4V0nxXarbavYQ6hAp3COYZAPrXmnir9k34Y+KrWWJ/DVvp08gwbqx+SUficj9K9goranWq0vgk18zGpRpVfjin8j8s/wBpf9lnU/gfeJf2kj6j4buH2xXWPmjbsj+/XmvA6/Z/4neBbP4keBdX8PXyr5V5AyK5GTG2OGHoR61+OPiLRp/D+tXmn3MZint5WjZG6gg4r7zKsdLF03Gp8UfxPg81wMcJUUqfwy/AzqKKVfvD617Z4h9Kfso/spj41NPreuTzWfh22fywIcCS4fuFY5wBjnjvX2xof7Knwu0KJFTwnZ3cqjHn3QLv+dc1+wzJDJ+z1pPkAAC6uA2P72/mvoCvz7McbXnXnBSaSdrI/QcuwVCGHhNxTbV7sxfDfg3RPB8MkWi6bBpscmN6wLgNjpW1RRXiOTk7tntpKKskFFFFIYUUUUAFZviTW7fw3oGoapdyCK3tYWldz2wK0q+df25vH3/CI/Bi406Jv9I1mUWhQHB8vBZm/wDHR+ddGHouvWjSXVnPiKyoUZVX0R+b/jjxPceL/GGqa1efNcXlw00nuSf8K/Tv9j74lH4jfBrTftEqvqOlj7FOoP3VXIj/ADUCvymJyc19V/sA/Ez/AIRn4kTeG7mYR2OtR7UX+9cKRs/QtX3ea4ZVcK+Vax1X9eh8JlWJdLFLmektH/Xqfo7RRRX54foYUUUUAFMmhS4heKRQ8bjaynoR6U+igDir74L+B9TDC68M2E4Y5O+M8/rXHeIP2Q/hbr0LovhqHTHccyWJKN9ec17NRXRHEVoO8ZtfM55YejUVpQT+R8NfFT/gneLexlu/A+qSXEkYLCxvyC8nsrgAD8a+K9e0G+8NarcadqVtJaXlu5jkikXBUg9K/bmvhP8A4KJ/DuxtdQ8PeJrKBY76/MltdFRjft2lWwOp+Y19RleZ1atVUKzvfZny+aZZSpUnXoq1t0fG3hzw3qXizV7fTNKtJb29nbYkUSliTX2j8Kf+CeIltIbzxzqbwSOAx0+wK74z6M/IP4V6n+xz+zvbfC/wjB4g1a2R/EupR+Zl1ybaI8qqn1IwSffFfSNZZhm8+d0sO7Jde/obZflEORVcQrt9O3qeP6H+yX8LdEhRT4Vtb+Rek15l3/pXf+GPh/4c8Fs7aHo9tphcbW+zrjI9K6Givm516tT45N/M+jhQpU/ggl8gooorA3CiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACvy6/be8B/8Id8btRuUQiHV0W/XA+UZJUgfiv61+ot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NH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABP/2Q==';
 const CLIENT_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/client-filter.worker.js' : '/workers/client-filter.worker.js';
 const AUDIENCE_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/audience-filter.worker.js' : '/workers/audience-filter.worker.js';
@@ -528,6 +540,7 @@ const DILIGENCE_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/diligence-filt
 const EXPORT_XLSX_WORKER_URL = IS_FILE_PROTOCOL ? './workers/export-xlsx.worker.js' : '/workers/export-xlsx.worker.js';
 let xlsxLoadPromise = null;
 let excelJsLoadPromise = null;
+let audienceExportTemplateBase64ScriptPromise = null;
 let clientFilterWorker = null;
 let clientFilterWorkerFailed = false;
 let clientFilterRequestSeq = 0;
@@ -953,6 +966,9 @@ function collectDossierDiffEntries(prevDossier, nextDossier){
     'cautionVille',
     'cautionCin',
     'cautionRc',
+    'efNumber',
+    'conservation',
+    'metrage',
     'note',
     'avancement',
     'statut'
@@ -3159,8 +3175,25 @@ function previewSuiviSelectedRows(){
     subtitle: 'Lignes cochées prêtes à exporter',
     headers: dataset.headers,
     rows: dataset.tableRows,
-    exportLabel: 'Exporter Suivi Excel',
-    onExport: ()=>exportSuiviSelectedXLS({ openAfterExport: true })
+    exportLabel: 'Voir le fichier Excel',
+    onExport: openSuiviExcelFilePreviewWindow
+  });
+}
+
+function openSuiviExcelFilePreviewWindow(){
+  const dataset = buildSuiviSelectedExportDataset();
+  if(!dataset.rows.length){
+    alert('Cochez au moins une ligne pour afficher le fichier.');
+    return;
+  }
+  const browserDownloadTarget = primeBrowserDownloadTarget('Ouverture du fichier Excel...');
+  exportSuiviSelectedXLS({
+    openAfterExport: true,
+    browserDownloadTarget,
+    browserOpenInline: true
+  }).catch(err=>{
+    console.error(err);
+    alert("Ouverture du fichier Excel impossible.");
   });
 }
 
@@ -3181,7 +3214,10 @@ async function exportSuiviSelectedXLS(options = {}){
         chunkSize: 120
       });
       await saveBlobDirectOrDownload(csvBlob, 'suivi_export.csv', {
-        openAfterExport: options?.openAfterExport === true
+        openAfterExport: options?.openAfterExport === true,
+        browserDownloadTarget: options?.browserDownloadTarget || null,
+        browserOpenInline: options?.browserOpenInline === true,
+        preferredFileHandle: options?.preferredFileHandle || null
       });
       return;
     }
@@ -3192,7 +3228,10 @@ async function exportSuiviSelectedXLS(options = {}){
       sheetName: 'Suivi',
       colWidths: dataset.colWidths,
       filename: 'suivi_export.xlsx',
-      openAfterExport: options?.openAfterExport === true
+      openAfterExport: options?.openAfterExport === true,
+      browserDownloadTarget: options?.browserDownloadTarget || null,
+      browserOpenInline: options?.browserOpenInline === true,
+      preferredFileHandle: options?.preferredFileHandle || null
     });
   });
 }
@@ -3277,6 +3316,23 @@ async function ensureExcelLibraries({ needXlsx = true, needExcelJs = false, sile
 
 function warmupExcelLibrariesOnIdle(){
   // Keep startup lean: Excel libraries are loaded on demand when an import/export is triggered.
+}
+
+async function ensureAudienceExportTemplateEmbeddedScript(){
+  if(typeof AUDIENCE_EXPORT_TEMPLATE_BASE64 !== 'undefined' && AUDIENCE_EXPORT_TEMPLATE_BASE64){
+    return true;
+  }
+  if(!audienceExportTemplateBase64ScriptPromise){
+    audienceExportTemplateBase64ScriptPromise = loadExternalScript(
+      AUDIENCE_EXPORT_TEMPLATE_BASE64_SCRIPT_URL,
+      'audience-export-template-base64'
+    ).then(()=>true).catch((err)=>{
+      console.warn('Chargement du template audience embarque indisponible', err);
+      audienceExportTemplateBase64ScriptPromise = null;
+      return false;
+    });
+  }
+  return audienceExportTemplateBase64ScriptPromise;
 }
 
 function clearScheduledWarmupTimer(timerId){
@@ -4180,6 +4236,28 @@ function normalizeLooseText(value){
     .trim();
 }
 
+function formatMixedDirectionExportText(value){
+  const text = normalizeLooseText(value);
+  if(!text) return '';
+  const hasArabic = /[\u0600-\u06FF]/.test(text);
+  const hasLatinOrDigits = /[A-Za-z0-9]/.test(text);
+  if(!hasArabic || !hasLatinOrDigits) return text;
+  return `\u200F${text.replace(/[A-Za-z0-9][A-Za-z0-9\s/+().:-]*/g, (segment)=>{
+    const cleaned = String(segment || '').trim();
+    return cleaned ? `\u2066${cleaned}\u2069` : '';
+  })}`;
+}
+
+function getAudienceReferenceCellAlignment(layout, columnIndex){
+  const idx = Math.max(0, Number(columnIndex) - 1);
+  return {
+    horizontal: layout.columnAlignments[idx] || 'left',
+    vertical: 'middle',
+    wrapText: layout.columnWrap[idx] === true,
+    shrinkToFit: layout.columnShrinkToFit[idx] === true
+  };
+}
+
 function normalizeCaseInsensitiveSearchText(value){
   return normalizeLooseText(value).toLowerCase();
 }
@@ -4607,6 +4685,7 @@ function getProcedureShortLabel(procName){
   const map = {
     ASS: 'ASS',
     Restitution: 'RESTIT',
+    Commandement: 'COMD',
     Nantissement: 'NANTI',
     Redressement: 'REDR',
     'Vérification de créance': 'VERIF',
@@ -5203,7 +5282,8 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     pageMargins: { left: 0, right: 0, top: 0, bottom: 0, header: 0, footer: 0 },
     pageSetup: { orientation: 'landscape' },
     columnAlignments: ['left', 'left', 'left', 'center', 'center', 'left', 'center'],
-    columnWrap: [true, true, false, false, false, false, false]
+    columnWrap: [true, true, false, false, false, false, false],
+    columnShrinkToFit: [false, false, false, false, true, false, false]
   };
 
   if(useAudienceReferenceLayout && colCount === 7){
@@ -5225,11 +5305,15 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         }
         templateSheet.getCell('A6').value = subtitleText;
         templateSheet.views = [{ showGridLines: false }];
+        templateSheet.columns = audienceReferenceLayout.columnWidths.map(width=>({ width }));
         await runChunked(rows, async (row, index)=>{
           const rowIndex = index + 9;
           const sheetRow = templateSheet.getRow(rowIndex);
           sheetRow.values = Array.isArray(row) ? row.slice(0, colCount) : new Array(colCount).fill('');
           sheetRow.height = sampleRowHeight;
+          for(let c = 1; c <= colCount; c++){
+            sheetRow.getCell(c).alignment = getAudienceReferenceCellAlignment(audienceReferenceLayout, c);
+          }
         }, { chunkSize: 120 });
         await yieldToMainThread();
         const templateBuffer = await promiseWithTimeout(
@@ -5323,11 +5407,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
           const cell = sheetRow.getCell(c);
           cell.value = Array.isArray(row) ? (row[c - 1] ?? '') : '';
           cell.font = { name: 'Calibri', size: 12, color: { argb: 'FF111111' } };
-          cell.alignment = {
-            horizontal: audienceReferenceLayout.columnAlignments[c - 1] || 'left',
-            vertical: 'middle',
-            wrapText: audienceReferenceLayout.columnWrap[c - 1] === true
-          };
+          cell.alignment = getAudienceReferenceCellAlignment(audienceReferenceLayout, c);
           cell.border = thinBorder;
         }
       }, { chunkSize: 40 });
@@ -5445,6 +5525,7 @@ function parseProcedureToken(token){
   const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
   if(compact === 'ass') return 'ASS';
   if(compact === 'rest' || compact === 'restitution' || compact === 'restit' || compact === 'rv' || compact === 'res') return 'Restitution';
+  if(compact === 'commandement' || compact === 'cmd' || compact === 'com') return 'Commandement';
   if(compact === 'nant' || compact === 'nantissement' || compact === 'nanti') return 'Nantissement';
   if(compact === 'redressement' || compact === 'redress' || compact === 'redr') return 'Redressement';
   if(compact === 'verificationdecreance' || compact === 'verificationcreance' || compact === 'verifcreance' || compact === 'verifdecreance' || compact === 'verif' || compact === 'creance') return 'Vérification de créance';
@@ -6000,9 +6081,30 @@ function loadArrayBufferWithXhr(url){
   });
 }
 
+function base64ToArrayBuffer(base64Value){
+  const normalized = String(base64Value || '').trim();
+  if(!normalized) return null;
+  try{
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for(let index = 0; index < binary.length; index += 1){
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes.buffer;
+  }catch(err){
+    console.warn('Décodage base64 du template audience impossible', err);
+    return null;
+  }
+}
+
 async function getAudienceExportTemplateArrayBuffer(){
   if(!audienceExportTemplateArrayBufferPromise){
     audienceExportTemplateArrayBufferPromise = (async ()=>{
+      await ensureAudienceExportTemplateEmbeddedScript();
+      if(typeof AUDIENCE_EXPORT_TEMPLATE_BASE64 !== 'undefined' && AUDIENCE_EXPORT_TEMPLATE_BASE64){
+        const embeddedBuffer = base64ToArrayBuffer(AUDIENCE_EXPORT_TEMPLATE_BASE64);
+        if(embeddedBuffer) return embeddedBuffer;
+      }
       try{
         const response = await fetch(AUDIENCE_EXPORT_TEMPLATE_URL, { cache: 'no-store' });
         if(!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -9646,6 +9748,9 @@ function parseExcelData(rows, sheet = null){
     cautionVille: ['ville de caution', 'ville caution'],
     cautionCin: ['cin de caution', 'cni de caution', 'cin caution', 'cni caution'],
     cautionRc: ['rc', 'r.c', 'r c'],
+    efNumber: ['ef n', 'ef n°', 'ef no', 'ef numero', 'ef numéro'],
+    conservation: ['conservation'],
+    metrage: ['metrage', 'métrage'],
     refAssignation: ['reference dossier assignation', 'réference dossier assignation', 'référence dossier assignation', 'ref dossier assignation'],
     refRestitution: ['reference dossier restitution', 'réference dossier restitution', 'référence dossier restitution', 'ref dossier restitution'],
     refSfdc: ['reference dossier sfdc', 'réference dossier sfdc', 'référence dossier sfdc', 'ref dossier sfdc'],
@@ -9890,6 +9995,9 @@ function parseExcelData(rows, sheet = null){
       cautionVille: getColIndex(dossierColMap, dossierHeaderKeys.cautionVille),
       cautionCin: getColIndex(dossierColMap, dossierHeaderKeys.cautionCin),
       cautionRc: getColIndex(dossierColMap, dossierHeaderKeys.cautionRc),
+      efNumber: getColIndex(dossierColMap, dossierHeaderKeys.efNumber),
+      conservation: getColIndex(dossierColMap, dossierHeaderKeys.conservation),
+      metrage: getColIndex(dossierColMap, dossierHeaderKeys.metrage),
       refAssignation: getColIndex(dossierColMap, dossierHeaderKeys.refAssignation),
       refRestitution: getColIndex(dossierColMap, dossierHeaderKeys.refRestitution),
       refSfdc: getColIndex(dossierColMap, dossierHeaderKeys.refSfdc),
@@ -9948,6 +10056,9 @@ function parseExcelData(rows, sheet = null){
       const cautionVille = idx.cautionVille !== -1 ? String(row[idx.cautionVille] || '').trim() : '';
       const cautionCin = idx.cautionCin !== -1 ? String(row[idx.cautionCin] || '').trim() : '';
       const cautionRc = idx.cautionRc !== -1 ? String(row[idx.cautionRc] || '').trim() : '';
+      const efNumber = idx.efNumber !== -1 ? String(row[idx.efNumber] || '').trim() : '';
+      const conservation = idx.conservation !== -1 ? String(row[idx.conservation] || '').trim() : '';
+      const metrage = idx.metrage !== -1 ? String(row[idx.metrage] || '').trim() : '';
       const montantRaw = idx.montant !== -1 ? String(row[idx.montant] || '').trim() : '';
       const montantValues = parseExcelMontantValues(montantRaw);
       const montant = String(montantValues[0] || '').trim();
@@ -9960,17 +10071,26 @@ function parseExcelData(rows, sheet = null){
         ? String(row[idx.sortExecution] || '').trim()
         : (idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '');
       const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
-      let sortOrd = idx.sortOrd !== -1 ? String(row[idx.sortOrd] || '').trim() : '';
-      if(!sortOrd && idx.sortOrd !== -1){
-        const statusFromFill = getOrdonnanceStatusFromFill(j, idx.sortOrd);
-        if(statusFromFill === 'att') sortOrd = 'att ord';
-        if(statusFromFill === 'ok') sortOrd = 'ord ok';
-      }
+      const sortOrd = idx.sortOrd !== -1 ? String(row[idx.sortOrd] || '').trim() : '';
       const statutRaw = idx.statut !== -1 ? String(row[idx.statut] || '').trim() : '';
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
       const hasExplicitReferences = !!(refAssignation || refRestitution || refSfdc || refInjonction);
-      const hasOtherDossierSignals = !!(immatriculation || boiteNo || caution || marque || adresse || ville || cautionAdresse || cautionVille || cautionCin || cautionRc);
+      const hasOtherDossierSignals = !!(
+        immatriculation
+        || boiteNo
+        || caution
+        || marque
+        || adresse
+        || ville
+        || cautionAdresse
+        || cautionVille
+        || cautionCin
+        || cautionRc
+        || efNumber
+        || conservation
+        || metrage
+      );
       const isCarryDossierRow = !refClient
         && !debiteur
         && !clientName
@@ -10010,6 +10130,9 @@ function parseExcelData(rows, sheet = null){
         cautionVille,
         cautionCin,
         cautionRc,
+        efNumber,
+        conservation,
+        metrage,
         refAssignation,
         refRestitution,
         refSfdc,
@@ -10260,7 +10383,10 @@ function closeExportPreviewModal(){
   exportPreviewButtonLabel = 'Exporter Excel';
   exportPreviewBusy = false;
   if(meta) meta.innerHTML = '';
-  if(wrap) wrap.innerHTML = '';
+  if(wrap){
+    wrap.innerHTML = '';
+    wrap.classList.remove('preview-table-wrap-audience');
+  }
   if(exportBtn){
     exportBtn.style.display = 'none';
     exportBtn.disabled = false;
@@ -10271,6 +10397,109 @@ function closeExportPreviewModal(){
     printBtn.disabled = false;
   }
   if(modal) modal.style.display = 'none';
+}
+
+function setExportPreviewModalState({ title = '', subtitle = '', rows = [], onExport = null, exportLabel = 'Exporter Excel', metaHtml = '' } = {}){
+  const modal = $('exportPreviewModal');
+  const titleNode = $('exportPreviewTitle');
+  const metaNode = $('exportPreviewMeta');
+  const wrap = $('exportPreviewTableWrap');
+  const exportBtn = $('exportPreviewExcelBtn');
+  if(!modal || !titleNode || !metaNode || !wrap){
+    alert('Aperçu indisponible.');
+    return null;
+  }
+  const safeRows = Array.isArray(rows) ? rows : [];
+  exportPreviewAction = typeof onExport === 'function' ? onExport : null;
+  exportPreviewButtonLabel = String(exportLabel || 'Exporter Excel').trim() || 'Exporter Excel';
+  exportPreviewBusy = false;
+  titleNode.innerHTML = `<i class="fa-regular fa-file-excel"></i> ${escapeHtml(title || 'Aperçu Excel')}`;
+  metaNode.innerHTML = String(metaHtml || '').trim() || `
+    <div>${String(subtitle || '').trim() ? escapeHtml(String(subtitle || '').trim()) : 'Aperçu sans téléchargement'}</div>
+    <div>${safeRows.length} ligne(s)</div>
+  `;
+  wrap.classList.remove('preview-table-wrap-audience');
+  if(exportBtn){
+    if(exportPreviewAction && safeRows.length){
+      exportBtn.style.display = 'inline-flex';
+      exportBtn.disabled = false;
+      exportBtn.innerHTML = `<i class="fa-regular fa-file-excel"></i> ${escapeHtml(exportPreviewButtonLabel)}`;
+    }else{
+      exportBtn.style.display = 'none';
+      exportBtn.disabled = false;
+      exportBtn.innerHTML = '<i class="fa-regular fa-file-excel"></i> Exporter Excel';
+    }
+  }
+  return { modal, titleNode, metaNode, wrap, exportBtn };
+}
+
+function buildAudienceReferencePreviewHtml({ subtitle = '', headers = [], rows = [], headerImageDataUrl = '' } = {}){
+  const safeHeaders = Array.isArray(headers) ? headers.slice(0, 7) : [];
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const columnWidths = [14.77734375, 20.6640625, 16.33203125, 13.77734375, 16.77734375, 23.21875, 26.88671875];
+  const totalWidth = columnWidths.reduce((sum, width)=>sum + width, 0) || 1;
+  const colGroupHtml = columnWidths
+    .map((width)=>`<col style="width:${((width / totalWidth) * 100).toFixed(4)}%">`)
+    .join('');
+  const theadHtml = `<tr>${safeHeaders.map((header)=>`<th>${escapeHtml(header)}</th>`).join('')}</tr>`;
+  const tbodyHtml = safeRows
+    .map((row)=>`<tr>${(Array.isArray(row) ? row : []).slice(0, 7).map((cell, index)=>{
+      const text = formatMixedDirectionExportText(String(cell ?? ''));
+      const html = escapeHtml(text) || '&nbsp;';
+      const nowrapClass = index === 4 ? ' preview-bidi-cell-nowrap' : '';
+      return `<td><span class="preview-bidi-cell${nowrapClass}" dir="auto">${html}</span></td>`;
+    }).join('')}</tr>`)
+    .join('');
+  const headerHtml = headerImageDataUrl
+    ? `<img class="preview-audience-sheet-header-image" src="${escapeAttr(headerImageDataUrl)}" alt="En-tête audience">`
+    : '';
+  return `
+    <div class="preview-audience-sheet">
+      <div class="preview-audience-sheet-paper">
+        <div class="preview-audience-sheet-header">${headerHtml}</div>
+        <div class="preview-audience-sheet-subtitle-row">
+          <div class="preview-audience-sheet-subtitle">${escapeHtml(String(subtitle || '').trim() || '-')}</div>
+          <div class="preview-audience-sheet-count">${safeRows.length} ligne(s)</div>
+        </div>
+        <div class="preview-audience-sheet-table-wrap">
+          <table class="preview-table preview-table-audience-reference">
+            <colgroup>${colGroupHtml}</colgroup>
+            <thead>${theadHtml}</thead>
+            <tbody>${tbodyHtml}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function showAudienceExportPreviewModal({ title = '', subtitle = '', headers = [], rows = [], onExport = null, exportLabel = 'Ouvrir le fichier Excel' } = {}){
+  const state = setExportPreviewModalState({
+    title,
+    subtitle,
+    rows,
+    onExport,
+    exportLabel,
+    metaHtml: ''
+  });
+  if(!state) return;
+  const { modal, wrap } = state;
+  const safeHeaders = Array.isArray(headers) ? headers : [];
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if(!safeHeaders.length || !safeRows.length){
+    wrap.innerHTML = '<div class="preview-empty">Aucune donnée à afficher.</div>';
+    modal.style.display = 'flex';
+    return;
+  }
+  wrap.classList.add('preview-table-wrap-audience');
+  const headerImageDataUrl = await getAudienceExportHeaderImageDataUrl();
+  wrap.innerHTML = buildAudienceReferencePreviewHtml({
+    subtitle,
+    headers: safeHeaders,
+    rows: safeRows,
+    headerImageDataUrl
+  });
+  modal.style.display = 'flex';
 }
 
 async function handleExportPreviewExcel(){
@@ -10391,37 +10620,11 @@ function handlePrintExportPreview(){
 }
 
 function showExportPreviewModal({ title = '', subtitle = '', headers = [], rows = [], onExport = null, exportLabel = 'Exporter Excel' } = {}){
-  const modal = $('exportPreviewModal');
-  const titleNode = $('exportPreviewTitle');
-  const metaNode = $('exportPreviewMeta');
-  const wrap = $('exportPreviewTableWrap');
-  const exportBtn = $('exportPreviewExcelBtn');
-  if(!modal || !titleNode || !metaNode || !wrap){
-    alert('Aperçu indisponible.');
-    return;
-  }
+  const state = setExportPreviewModalState({ title, subtitle, rows, onExport, exportLabel });
+  if(!state) return;
+  const { modal, wrap } = state;
   const safeHeaders = Array.isArray(headers) ? headers : [];
   const safeRows = Array.isArray(rows) ? rows : [];
-  exportPreviewAction = typeof onExport === 'function' ? onExport : null;
-  exportPreviewButtonLabel = String(exportLabel || 'Exporter Excel').trim() || 'Exporter Excel';
-  exportPreviewBusy = false;
-  titleNode.innerHTML = `<i class="fa-regular fa-file-excel"></i> ${escapeHtml(title || 'Aperçu Excel')}`;
-  const subtitleText = String(subtitle || '').trim();
-  metaNode.innerHTML = `
-    <div>${subtitleText ? escapeHtml(subtitleText) : 'Aperçu sans téléchargement'}</div>
-    <div>${safeRows.length} ligne(s)</div>
-  `;
-  if(exportBtn){
-    if(exportPreviewAction && safeRows.length){
-      exportBtn.style.display = 'inline-flex';
-      exportBtn.disabled = false;
-      exportBtn.innerHTML = `<i class="fa-regular fa-file-excel"></i> ${escapeHtml(exportPreviewButtonLabel)}`;
-    }else{
-      exportBtn.style.display = 'none';
-      exportBtn.disabled = false;
-      exportBtn.innerHTML = '<i class="fa-regular fa-file-excel"></i> Exporter Excel';
-    }
-  }
   if(!safeHeaders.length || !safeRows.length){
     wrap.innerHTML = '<div class="preview-empty">Aucune donnée à afficher.</div>';
   }else{
@@ -10569,7 +10772,7 @@ async function applyExcelImport(payload, options = {}){
   }
 
   const importIgnoredRows = [];
-  const knownProcedureSet = new Set(['ASS', 'Restitution', 'Nantissement', 'Redressement', 'Vérification de créance', 'Liquidation judiciaire', 'SFDC', 'S/bien', 'Injonction']);
+  const knownProcedureSet = new Set(['ASS', 'Restitution', 'Commandement', 'Nantissement', 'Redressement', 'Vérification de créance', 'Liquidation judiciaire', 'SFDC', 'S/bien', 'Injonction']);
   const defaultDossierProceduresWhenMissing = ['ASS', 'Restitution', 'SFDC'];
   let importedDossiersCount = 0;
   let linkedAudiencesCount = 0;
@@ -10817,6 +11020,48 @@ async function applyExcelImport(payload, options = {}){
   });
 
   const getCandidatesByRefDossier = (targetRefKey)=>refToStateProcMap.get(targetRefKey) || [];
+  const normalizeAudienceDepotDateValue = (value)=>{
+    const raw = String(value || '').trim();
+    if(!raw) return '';
+    return normalizeDateDDMMYYYY(raw) || raw;
+  };
+  const getProcedureReferenceKeys = (details)=>{
+    if(!details || typeof details !== 'object') return [];
+    return splitReferenceValues(details.referenceClient || '')
+      .map(v=>normalizeReferenceForAudienceLookup(v))
+      .filter(Boolean);
+  };
+  const resolveAudienceDepotDateForRef = (dossier, refKey, targetProc, importedValue = '')=>{
+    const importedDepotDate = normalizeAudienceDepotDateValue(importedValue);
+    if(importedDepotDate) return importedDepotDate;
+    const targetDetails = dossier?.procedureDetails?.[targetProc];
+    const targetDepotDate = normalizeAudienceDepotDateValue(targetDetails?.depotLe || targetDetails?.dateDepot || '');
+    if(targetDepotDate) return targetDepotDate;
+    const detailsMap = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+      ? dossier.procedureDetails
+      : {};
+    for(const details of Object.values(detailsMap)){
+      if(!getProcedureReferenceKeys(details).includes(refKey)) continue;
+      const existingDepotDate = normalizeAudienceDepotDateValue(details?.depotLe || details?.dateDepot || '');
+      if(existingDepotDate) return existingDepotDate;
+    }
+    return '';
+  };
+  const propagateAudienceDepotDateForRef = (dossier, refKey, depotDate)=>{
+    const resolvedDepotDate = normalizeAudienceDepotDateValue(depotDate);
+    if(!resolvedDepotDate) return '';
+    const detailsMap = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+      ? dossier.procedureDetails
+      : {};
+    Object.values(detailsMap).forEach((details)=>{
+      if(!details || typeof details !== 'object') return;
+      if(!getProcedureReferenceKeys(details).includes(refKey)) return;
+      const currentDepotDate = normalizeAudienceDepotDateValue(details.depotLe || details.dateDepot || '');
+      if(currentDepotDate) return;
+      details.depotLe = resolvedDepotDate;
+    });
+    return resolvedDepotDate;
+  };
 
   if(importDossiers){
     const reportDossiersProgress = makeProgressReporter('Import Excel - dossiers');
@@ -10899,6 +11144,9 @@ async function applyExcelImport(payload, options = {}){
       cautionVille: row.cautionVille || '',
       cautionCin: row.cautionCin || '',
       cautionRc: row.cautionRc || '',
+      efNumber: row.efNumber || '',
+      conservation: row.conservation || '',
+      metrage: row.metrage || '',
       montant: principalMontant,
       montantByProcedure: [],
       ww: row.immatriculation,
@@ -11237,8 +11485,12 @@ async function applyExcelImport(payload, options = {}){
     if(row.juge) p.juge = row.juge;
     if(row.sort) p.sort = row.sort;
     if(row.tribunal) p.tribunal = row.tribunal;
-    // In audience import files, "date depot" corresponds to procedure "Dépôt le".
-    if(row.dateDepot) p.depotLe = row.dateDepot;
+    // Keep "date depot" synchronized across repeated audience imports for the same ref dossier.
+    const resolvedAudienceDepotDate = resolveAudienceDepotDateForRef(dossier, refKey, targetProc, row.dateDepot);
+    if(resolvedAudienceDepotDate){
+      p.depotLe = resolvedAudienceDepotDate;
+      propagateAudienceDepotDateForRef(dossier, refKey, resolvedAudienceDepotDate);
+    }
     const importedAudienceColor = String(row.importedColor || '').trim();
     if(importedAudienceColor) p.color = importedAudienceColor;
     const importedOrdonnanceStatus = String(row.importedOrdonnanceStatus || '').trim();
@@ -11720,6 +11972,7 @@ async function initApplication(){
   restoreSidebarState();
   restoreContentZoom();
   renderProcedureMontantGroups();
+  syncConditionalCreationFieldsVisibility([]);
   markDeferredRenderDirty(
     'dashboard',
     'clients',
@@ -11905,6 +12158,7 @@ function setupEvents(){
           editingOriginalProcedures = editingOriginalProcedures.filter(p=>p !== value);
         }
       }
+      syncConditionalCreationFieldsVisibility();
       renderProcedureDetails();
     });
   });
@@ -12953,6 +13207,9 @@ async function addDossier(){
       cautionVille: $('cautionVilleInput')?.value.trim() || '',
       cautionCin: $('cautionCinInput')?.value.trim() || '',
       cautionRc: $('cautionRcInput')?.value.trim() || '',
+      efNumber: $('efNumberInput')?.value.trim() || '',
+      conservation: $('conservationInput')?.value.trim() || '',
+      metrage: $('metrageInput')?.value.trim() || '',
       note: $('noteInput')?.value.trim() || '',
       avancement: $('avancementInput')?.value.trim() || '',
       statut: $('statutInput')?.value || 'En cours',
@@ -13307,6 +13564,7 @@ function renderProcedureBadges(procedureText){
     let cls = 'proc-autre';
     if(name === 'ASS') cls = 'proc-ass';
     if(name === 'Restitution') cls = 'proc-restitution';
+    if(name === 'Commandement') cls = 'proc-commandement';
     if(name === 'Nantissement') cls = 'proc-nantissement';
     if(name === 'Redressement') cls = 'proc-redressement';
     if(name === 'Vérification de créance') cls = 'proc-verification-creance';
@@ -13380,10 +13638,17 @@ function getDiligenceSearchValues(row){
     details.notifCurateur,
     details.sortNotif,
     details.avisCurateur,
+    details.pvPlice,
     details.dateNotification,
     details.certificatNonAppelStatus,
     details.executionNo,
-    details.huissier
+    details.huissier,
+    details.ord,
+    details.notifConservateur,
+    details.notifDebiteur,
+    details.refExpertise,
+    details.expert,
+    details.dateVente
   ];
   return values
     .map(value=>normalizeDiligenceSearchQuery(value))
@@ -13524,6 +13789,9 @@ function editDossier(clientId, index){
   if($('cautionVilleInput')) $('cautionVilleInput').value = d.cautionVille || '';
   if($('cautionCinInput')) $('cautionCinInput').value = d.cautionCin || '';
   if($('cautionRcInput')) $('cautionRcInput').value = d.cautionRc || '';
+  if($('efNumberInput')) $('efNumberInput').value = d.efNumber || '';
+  if($('conservationInput')) $('conservationInput').value = d.conservation || '';
+  if($('metrageInput')) $('metrageInput').value = d.metrage || '';
   if($('noteInput')) $('noteInput').value = d.note || '';
   if($('avancementInput')) $('avancementInput').value = d.avancement || '';
   if($('statutInput')) $('statutInput').value = d.statut || 'En cours';
@@ -13533,7 +13801,7 @@ function editDossier(clientId, index){
   document.querySelectorAll('.proc-check').forEach(cb=>cb.checked=false);
   document.querySelectorAll('.checkbox-group label').forEach(l=>l.classList.remove('active'));
 
-  const standard = new Set(['ASS','Restitution','Nantissement','Redressement','Vérification de créance','Liquidation judiciaire','SFDC','S/bien','Injonction']);
+  const standard = new Set(['ASS','Restitution','Commandement','Nantissement','Redressement','Vérification de créance','Liquidation judiciaire','SFDC','S/bien','Injonction']);
   const procs = normalizeProcedures(d);
   procedureMontantGroups = normalizeProcedureMontantGroups(d.montantByProcedure, procs, d.montant || '');
   if(!hasMultipleAffectationDatesForSelection(procs)){
@@ -13614,6 +13882,7 @@ function resetCreationForm(clientId = ''){
   $('procedureDetails').innerHTML = '';
   $('procedureCustom').value = '';
   renderCustomProcedures();
+  syncConditionalCreationFieldsVisibility([]);
   if($('noteInput')) $('noteInput').value = '';
   if($('avancementInput')) $('avancementInput').value = '';
   if($('statutInput')) $('statutInput').value = 'En cours';
@@ -13669,6 +13938,9 @@ function openDossierDetails(clientId, index){
     ['Ville de caution', dossier.cautionVille || '-'],
     ['CIN de caution', dossier.cautionCin || '-'],
     ['RC', dossier.cautionRc || '-'],
+    ['TF N°', dossier.efNumber || '-'],
+    ['Conservation', dossier.conservation || '-'],
+    ['Métrage', dossier.metrage || '-'],
     ['Statut', dossier.statut || 'En cours'],
     ['Avancement', dossier.avancement || '-'],
     ['Note', dossier.note || '-']
@@ -13867,7 +14139,10 @@ function buildDossierSummarySections(client, dossier){
         ['Adresse de caution', formatDossierExcelCellValue(dossier?.cautionAdresse)],
         ['Ville de caution', formatDossierExcelCellValue(dossier?.cautionVille)],
         ['CIN de caution', formatDossierExcelCellValue(dossier?.cautionCin)],
-        ['RC', formatDossierExcelCellValue(dossier?.cautionRc)]
+        ['RC', formatDossierExcelCellValue(dossier?.cautionRc)],
+        ['TF N°', formatDossierExcelCellValue(dossier?.efNumber)],
+        ['Conservation', formatDossierExcelCellValue(dossier?.conservation)],
+        ['Métrage', formatDossierExcelCellValue(dossier?.metrage)]
       ]
     },
     {
@@ -14305,6 +14580,10 @@ function isDiligenceAssProcedure(procedure){
   return getDiligenceProcedureFilterValue(procedure) === 'ASS';
 }
 
+function isDiligenceCommandementProcedure(procedure){
+  return getDiligenceProcedureFilterValue(procedure) === 'Commandement';
+}
+
 function matchesDiligenceProcedureFilter(procedure, filterValue){
   const activeFilter = String(filterValue || 'all').trim() || 'all';
   if(activeFilter === 'all') return true;
@@ -14342,19 +14621,30 @@ function getDiligenceRows(){
       const procedures = normalizeProcedures(d);
       procedures.forEach(proc=>{
         const baseProc = getDiligenceProcedureFilterValue(proc);
-        if(baseProc !== 'ASS' && baseProc !== 'SFDC' && baseProc !== 'S/bien' && baseProc !== 'Injonction') return;
+        if(
+          baseProc !== 'ASS'
+          && baseProc !== 'SFDC'
+          && baseProc !== 'S/bien'
+          && baseProc !== 'Injonction'
+          && baseProc !== 'Commandement'
+        ) return;
         const details = d?.procedureDetails?.[proc] || {};
         if(baseProc === 'ASS' && !isDiligenceAssAudienceDue(details)) return;
-        const tribunal = String(details.tribunal || '').trim();
+        const isCommandement = baseProc === 'Commandement';
+        const tribunal = isCommandement ? '' : String(details.tribunal || '').trim();
         const rawSort = String(details.sort || '').trim();
         const sort = isDiligenceExecutionProcedure(baseProc)
           ? normalizeDiligenceSort(rawSort)
           : rawSort;
-        const delegation = normalizeDiligenceAttOk(details.attDelegationOuDelegat || '') || 'att';
-        const ordonnance = getDiligenceOrdonnanceStatus(
-          details.attOrdOrOrdOk || '',
-          details.notificationNo || ''
-        ) || 'att';
+        const delegation = isCommandement
+          ? ''
+          : (normalizeDiligenceAttOk(details.attDelegationOuDelegat || '') || 'att');
+        const ordonnance = isCommandement
+          ? String(details.ord || '').trim()
+          : (getDiligenceOrdonnanceStatus(
+            details.attOrdOrOrdOk || '',
+            details.notificationNo || ''
+          ) || 'att');
         rows.push({
           clientId: c.id,
           dossierIndex: di,
@@ -14582,6 +14872,69 @@ function getDiligenceNotificationSortValue(value, procedure = ''){
   return '';
 }
 
+function getDiligenceReferenceDossierValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.refExpertise || '').trim();
+  }
+  return String(row?.details?.referenceClient || '').trim();
+}
+
+function getDiligenceOrdonnanceCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.ord || '').trim();
+  }
+  return getDiligenceOrdonnanceLabelFromDetails(row?.details) || '';
+}
+
+function getDiligenceNotificationNumberCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.notifConservateur || '').trim();
+  }
+  return String(row?.details?.notificationNo || '').trim();
+}
+
+function getDiligenceNotificationSortCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.notifDebiteur || '').trim();
+  }
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure);
+}
+
+function getDiligenceDelegationCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.dateVente || '').trim();
+  }
+  return isDiligenceAssNbLayout(row)
+    ? String(row?.details?.notifCurateur || '').trim()
+    : (normalizeDiligenceAttOk(row?.details?.attDelegationOuDelegat || '') || '');
+}
+
+function getDiligenceHuissierCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.expert || '').trim();
+  }
+  return isDiligenceAssNbLayout(row)
+    ? String(row?.details?.sortNotif || '').trim()
+    : String(row?.details?.huissier || '').trim();
+}
+
+function getDiligenceExecutionSortCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)){
+    return String(row?.details?.sort || '').trim();
+  }
+  if(isDiligenceAssNbLayout(row)){
+    return getDiligenceAvisCurateurValue(row?.details?.avisCurateur || '');
+  }
+  return !isDiligenceAssProcedure(row?.procedure)
+    ? normalizeDiligenceSort(row?.details?.sort || '')
+    : '';
+}
+
+function getDiligenceTribunalCellValue(row){
+  if(isDiligenceCommandementProcedure(row?.procedure)) return '';
+  return String(row?.tribunal || row?.details?.tribunal || '').trim();
+}
+
 function isDiligenceAssNbLayout(row){
   return isDiligenceAssProcedure(row?.procedure)
     && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'NB';
@@ -14599,31 +14952,35 @@ function getDiligenceAssHeaderMode(rows){
 function normalizeDiligenceLettreRec(value){
   const raw = String(value ?? '').trim().toLowerCase();
   if(!raw) return '';
-  if(raw.includes('retour')) return 'lettre retour';
+  if(raw.includes('retour')) return 'att retour la lettre';
   if(raw === 'ok' || raw.includes(' ok')) return 'OK';
-  if(raw.includes('lettre') || raw.includes('tr')) return 'att lettre du tr';
+  if(raw.includes('lettre') || raw.includes('tr')) return 'att lettre du TR';
   return String(value ?? '').trim();
 }
 
 function getDiligenceLettreRecValue(value){
   const normalized = normalizeDiligenceLettreRec(value);
-  return normalized || 'att lettre du tr';
+  return normalized || 'att lettre du TR';
 }
 
 function normalizeDiligenceAvisCurateur(value){
   const raw = String(value ?? '').trim().toLowerCase();
   if(!raw) return '';
-  if(raw.includes('anj') || raw.includes('pliie') || raw.includes('plie')){
-    return 'pliie anj';
+  if(raw.includes('pub') || raw.includes('auj') || raw.includes('au j') || raw.includes('anj') || raw.includes('pliie') || raw.includes('plie')){
+    return 'PUB AU J';
   }
   if(raw === 'ok' || raw.includes(' ok')) return 'OK';
-  if(raw.includes('tr')) return 'envoyer au tr';
+  if(raw.includes('tr')) return 'envoyer au TR';
   return String(value ?? '').trim();
 }
 
 function getDiligenceAvisCurateurValue(value){
   const normalized = normalizeDiligenceAvisCurateur(value);
-  return normalized || 'envoyer au tr';
+  return normalized || 'envoyer au TR';
+}
+
+function getDiligencePvPliceValue(value){
+  return normalizeDiligenceAttOk(value) || 'att';
 }
 
 function normalizeDiligenceSearchQuery(value){
@@ -14649,6 +15006,7 @@ const DILIGENCE_AUTOSIZE_FIELDS = new Set([
   'notifCurateur',
   'sortNotif',
   'avisCurateur',
+  'pvPlice',
   'ville',
   'attDelegationOuDelegat',
   'huissier',
@@ -14673,6 +15031,7 @@ function getDiligenceAutoSizeWidthCh(field, text){
     notifCurateur: 16,
     sortNotif: 14,
     avisCurateur: 14,
+    pvPlice: 10,
     ville: 14,
     attDelegationOuDelegat: 10,
     huissier: 14,
@@ -14688,6 +15047,7 @@ function getDiligenceAutoSizeWidthCh(field, text){
     notifCurateur: 24,
     sortNotif: 24,
     avisCurateur: 18,
+    pvPlice: 10,
     ville: 26,
     huissier: 34,
     tribunal: 36,
@@ -14817,9 +15177,9 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
       <select
         class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
         onchange="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
-        <option value="att lettre du tr" ${status === 'att lettre du tr' ? 'selected' : ''}>att lettre du Tr</option>
-        <option value="lettre retour" ${status === 'lettre retour' ? 'selected' : ''}>lettre retour</option>
-        <option value="OK" ${status === 'OK' ? 'selected' : ''}>OK</option>
+        <option value="att lettre du TR" ${status === 'att lettre du TR' ? 'selected' : ''}>1 Att lettre du TR</option>
+        <option value="att retour la lettre" ${status === 'att retour la lettre' ? 'selected' : ''}>2 att retour la lettre</option>
+        <option value="OK" ${status === 'OK' ? 'selected' : ''}>3 OK</option>
       </select>
     `;
   }
@@ -14832,9 +15192,23 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
       <select
         class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
         onchange="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
-        <option value="envoyer au tr" ${status === 'envoyer au tr' ? 'selected' : ''}>envoyer au tr</option>
-        <option value="pliie anj" ${status === 'pliie anj' ? 'selected' : ''}>pliie anj</option>
-        <option value="OK" ${status === 'OK' ? 'selected' : ''}>OK</option>
+        <option value="envoyer au TR" ${status === 'envoyer au TR' ? 'selected' : ''}>1 envoyer au TR</option>
+        <option value="OK" ${status === 'OK' ? 'selected' : ''}>2 OK</option>
+        <option value="PUB AU J" ${status === 'PUB AU J' ? 'selected' : ''}>3 PUB AU J</option>
+      </select>
+    `;
+  }
+  if(field === 'pvPlice'){
+    const status = getDiligencePvPliceValue(normalized);
+    if(!row?.canEdit){
+      return escapeHtml(status || '-');
+    }
+    return `
+      <select
+        class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
+        onchange="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="att" ${status === 'att' ? 'selected' : ''}>att</option>
+        <option value="ok" ${status === 'ok' ? 'selected' : ''}>ok</option>
       </select>
     `;
   }
@@ -14848,6 +15222,32 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
         class="diligence-inline-input"
         value="${escapeAttr(normalized)}"
         oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+    `;
+  }
+  if(field === 'dateVente'){
+    if(!row?.canEdit){
+      return escapeHtml(normalized || '-');
+    }
+    return `
+      <input
+        type="date"
+        class="diligence-inline-input"
+        value="${escapeAttr(normalized)}"
+        oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+    `;
+  }
+  if(field === 'ord'){
+    if(!row?.canEdit){
+      return escapeHtml(normalized || '-');
+    }
+    return `
+      <select
+        class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
+        onchange="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="att ord" ${normalized === 'att ord' ? 'selected' : ''}>att ord</option>
+        <option value="ord ok" ${normalized === 'ord ok' ? 'selected' : ''}>ord ok</option>
+        <option value="att paiement" ${normalized === 'att paiement' ? 'selected' : ''}>att paiement</option>
+      </select>
     `;
   }
   if(field === 'sort'){
@@ -14918,6 +15318,8 @@ function applyDiligenceFieldValue(clientId, dossierIndex, procKey, field, value)
     nextValue = normalizeDiligenceLettreRec(value);
   }else if(field === 'avisCurateur'){
     nextValue = normalizeDiligenceAvisCurateur(value);
+  }else if(field === 'pvPlice'){
+    nextValue = getDiligencePvPliceValue(value);
   }
   if(field === 'ville'){
     dossier.ville = nextValue;
@@ -15085,7 +15487,10 @@ function exportDiligenceXLS(options = {}){
         chunkSize: 120
       });
       await saveBlobDirectOrDownload(csvBlob, 'diligence_export.csv', {
-        openAfterExport: options?.openAfterExport === true
+        openAfterExport: options?.openAfterExport === true,
+        browserDownloadTarget: options?.browserDownloadTarget || null,
+        browserOpenInline: options?.browserOpenInline === true,
+        preferredFileHandle: options?.preferredFileHandle || null
       });
       return;
     }
@@ -15096,7 +15501,10 @@ function exportDiligenceXLS(options = {}){
       sheetName: 'Diligence',
       colWidths: dataset.colWidths,
       filename: 'diligence_export.xlsx',
-      openAfterExport: options?.openAfterExport === true
+      openAfterExport: options?.openAfterExport === true,
+      browserDownloadTarget: options?.browserDownloadTarget || null,
+      browserOpenInline: options?.browserOpenInline === true,
+      preferredFileHandle: options?.preferredFileHandle || null
     });
   });
 }
@@ -15131,7 +15539,7 @@ function getDiligenceExportColumnDefinitions(){
       key: 'referenceDossier',
       header: 'Référence dossier',
       width: 26,
-      getValue: (row)=>row?.details?.referenceClient || ''
+      getValue: (row)=>getDiligenceReferenceDossierValue(row)
     },
     {
       key: 'juge',
@@ -15151,19 +15559,19 @@ function getDiligenceExportColumnDefinitions(){
       key: 'ordonnance',
       header: 'Ordonnance',
       width: 18,
-      getValue: (row)=>getDiligenceOrdonnanceLabelFromDetails(row?.details) || ''
+      getValue: (row)=>getDiligenceOrdonnanceCellValue(row)
     },
     {
       key: 'notificationNo',
       header: 'Notification N°',
       width: 22,
-      getValue: (row)=>row?.details?.notificationNo || ''
+      getValue: (row)=>getDiligenceNotificationNumberCellValue(row)
     },
     {
       key: 'notificationSort',
       header: 'Sort notification',
       width: 24,
-      getValue: (row)=>getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure)
+      getValue: (row)=>getDiligenceNotificationSortCellValue(row)
     },
     {
       key: 'certificatNonAppel',
@@ -15201,9 +15609,7 @@ function getDiligenceExportColumnDefinitions(){
       headerAss: 'Délégation / Notif curateur',
       headerNb: 'Notif curateur',
       width: 18,
-      getValue: (row)=>isDiligenceAssNbLayout(row)
-        ? (row?.details?.notifCurateur || '')
-        : (normalizeDiligenceAttOk(row?.details?.attDelegationOuDelegat || '') || '')
+      getValue: (row)=>getDiligenceDelegationCellValue(row)
     },
     {
       key: 'huissier',
@@ -15211,9 +15617,7 @@ function getDiligenceExportColumnDefinitions(){
       headerAss: 'Huissier / Sort notif',
       headerNb: 'Sort notif',
       width: 26,
-      getValue: (row)=>isDiligenceAssNbLayout(row)
-        ? (row?.details?.sortNotif || '')
-        : (row?.details?.huissier || '')
+      getValue: (row)=>getDiligenceHuissierCellValue(row)
     },
     {
       key: 'sortExecution',
@@ -15221,18 +15625,22 @@ function getDiligenceExportColumnDefinitions(){
       headerAss: 'Avis curateur',
       headerNb: 'Avis curateur',
       width: 22,
-      getValue: (row)=>{
-        if(isDiligenceAssNbLayout(row)){
-          return getDiligenceAvisCurateurValue(row?.details?.avisCurateur || '');
-        }
-        return !isDiligenceAssProcedure(row?.procedure) ? normalizeDiligenceSort(row?.details?.sort || '') : '';
-      }
+      getValue: (row)=>getDiligenceExecutionSortCellValue(row)
+    },
+    {
+      key: 'pvPlice',
+      header: 'PV Police',
+      width: 14,
+      assOnly: true,
+      getValue: (row)=>isDiligenceAssProcedure(row?.procedure)
+        ? getDiligencePvPliceValue(row?.details?.pvPlice || '')
+        : ''
     },
     {
       key: 'tribunal',
       header: 'Tribunal',
       width: 34,
-      getValue: (row)=>row?.tribunal || ''
+      getValue: (row)=>getDiligenceTribunalCellValue(row)
     }
   ];
 }
@@ -15241,6 +15649,12 @@ function shouldShowDiligenceAssColumnsForRows(rows){
   if(isDiligenceAssProcedure(filterDiligenceProcedure)) return true;
   const sourceRows = Array.isArray(rows) ? rows : [];
   return !!sourceRows.length && sourceRows.every((row)=>isDiligenceAssProcedure(row?.procedure));
+}
+
+function shouldShowDiligenceCommandementColumnsForRows(rows){
+  if(isDiligenceCommandementProcedure(filterDiligenceProcedure)) return true;
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  return !!sourceRows.length && sourceRows.every((row)=>isDiligenceCommandementProcedure(row?.procedure));
 }
 
 function buildDiligenceExportRowCells(row, columns){
@@ -15252,6 +15666,30 @@ function buildDiligenceExportRowCells(row, columns){
 
 function finalizeDiligenceExportDataset(rows){
   const sourceRows = Array.isArray(rows) ? rows : [];
+  const showCommandementColumns = shouldShowDiligenceCommandementColumnsForRows(sourceRows);
+  if(showCommandementColumns){
+    const columns = [
+      { header: 'Client', width: 24, getValue: (row)=>row?.clientName || '' },
+      { header: 'Référence client', width: 26, getValue: (row)=>row?.dossier?.referenceClient || '' },
+      { header: 'Nom', width: 30, getValue: (row)=>row?.dossier?.debiteur || '' },
+      { header: 'Date dépôt', width: 20, getValue: (row)=>row?.details?.depotLe || row?.details?.dateDepot || '' },
+      { header: 'Execution N°', width: 20, getValue: (row)=>row?.details?.executionNo || '' },
+      { header: 'Notif Conservateur', width: 24, getValue: (row)=>row?.details?.notifConservateur || '' },
+      { header: 'Notif débiteur', width: 24, getValue: (row)=>row?.details?.notifDebiteur || '' },
+      { header: 'Ref expertise', width: 26, getValue: (row)=>getDiligenceReferenceDossierValue(row) },
+      { header: 'Ord', width: 18, getValue: (row)=>row?.details?.ord || '' },
+      { header: 'Expert', width: 24, getValue: (row)=>row?.details?.expert || '' },
+      { header: 'Sort', width: 22, getValue: (row)=>row?.details?.sort || '' },
+      { header: 'Date vente', width: 20, getValue: (row)=>row?.details?.dateVente || '' }
+    ];
+    const tableRows = sourceRows.map((row)=>columns.map((column)=>String(column.getValue(row) || '').trim()));
+    return {
+      rows: sourceRows,
+      headers: columns.map((column)=>column.header),
+      tableRows,
+      colWidths: columns.map((column)=>({ wch: Number(column.width) || 22 }))
+    };
+  }
   const showAssColumns = shouldShowDiligenceAssColumnsForRows(sourceRows);
   const assHeaderMode = showAssColumns ? getDiligenceAssHeaderMode(sourceRows) : 'default';
   const columns = getDiligenceExportColumnDefinitions().filter((column)=>!column.assOnly || showAssColumns);
@@ -15339,8 +15777,25 @@ function previewDiligenceSelectedRows(){
     subtitle: 'Lignes cochées prêtes à exporter',
     headers: dataset.headers,
     rows: dataset.tableRows,
-    exportLabel: 'Exporter Diligence Excel',
-    onExport: ()=>exportDiligenceXLS({ openAfterExport: true })
+    exportLabel: 'Voir le fichier Excel',
+    onExport: openDiligenceExcelFilePreviewWindow
+  });
+}
+
+function openDiligenceExcelFilePreviewWindow(){
+  const dataset = buildDiligenceSelectedExportDataset();
+  if(!dataset.rows.length){
+    alert('Cochez au moins une ligne pour afficher le fichier.');
+    return;
+  }
+  const browserDownloadTarget = primeBrowserDownloadTarget('Ouverture du fichier Excel...');
+  exportDiligenceXLS({
+    openAfterExport: true,
+    browserDownloadTarget,
+    browserOpenInline: true
+  }).catch(err=>{
+    console.error(err);
+    alert("Ouverture du fichier Excel impossible.");
   });
 }
 
@@ -16554,7 +17009,9 @@ function buildAudienceSelectedExportTableRow(row){
   const d = row?.d || {};
   const draft = row?.draft || {};
   const dossierRef = getAudienceRowDraftReferenceValue(row);
-  const instructionValue = draft.instruction || p.instruction || draft.sort || p.sort || '';
+  const instructionValue = formatMixedDirectionExportText(
+    draft.instruction || p.instruction || draft.sort || p.sort || ''
+  );
   const jugeValue = draft.juge || p.juge || '';
   return [
     row?.c?.name || '',
@@ -16625,12 +17082,12 @@ function previewAudienceSelectedRows(){
     }).catch(err=>console.error(err));
     return;
   }
-  showExportPreviewModal({
+  showAudienceExportPreviewModal({
     title: "Aperçu Excel - Export d'audience",
     subtitle: dataset.subtitle,
     headers: dataset.headers,
     rows: dataset.tableRows,
-    exportLabel: "Voir le fichier Excel",
+    exportLabel: 'Ouvrir le fichier Excel',
     onExport: openAudienceExcelFilePreviewWindow
   });
 }
@@ -17376,7 +17833,7 @@ async function exportAudienceRegularXLS(){
       subtitle: dataset.subtitle,
       sheetName: 'Audience',
       colWidths: dataset.colWidths,
-      filename: 'export_audience_standard.xlsx'
+      filename: 'adoukll.xlsx'
       ,
       layoutPreset: 'audience-reference'
     });
@@ -17417,7 +17874,7 @@ async function exportAudienceXLS(options = {}){
       subtitle: dataset.subtitle,
       sheetName: 'Audience',
       colWidths: dataset.colWidths,
-      filename: 'audience_export.xlsx',
+      filename: 'adoukll.xlsx',
       layoutPreset: 'audience-reference',
       openAfterExport: options?.openAfterExport === true,
       browserDownloadTarget: options?.browserDownloadTarget || null,
@@ -17762,6 +18219,24 @@ function activateProcedureCheckboxes(procList){
 }
 
 function buildProcedureCardFieldsHtml(baseProc, tribunalFieldHtml, addOnlyButtonHtml){
+  if(baseProc === 'Commandement'){
+    return `
+      <input type="text" data-field="dateDepot" placeholder="Date dépôt">
+      <input type="text" data-field="executionNo" placeholder="Execution N°">
+      <input type="text" data-field="notifConservateur" placeholder="Not conservateur">
+      <input type="text" data-field="notifDebiteur" placeholder="Not débiteur">
+      <input type="text" data-field="refExpertise" placeholder="Ref expertise">
+      <select data-field="ord">
+        <option value="att ord">att ord</option>
+        <option value="ord ok">ord ok</option>
+        <option value="att paiement">att paiement</option>
+      </select>
+      <input type="text" data-field="expert" placeholder="Expert">
+      <input type="text" data-field="sort" list="commandementSortOptions" placeholder="Sort">
+      <input type="text" data-field="dateVente" placeholder="Date vente">
+      ${addOnlyButtonHtml}
+    `;
+  }
   if(baseProc === 'SFDC' || baseProc === 'S/bien'){
     return `
       <input type="text" data-field="dateDepot" placeholder="Date d’affectation">
@@ -17838,6 +18313,10 @@ function collectProcedureDraft(){
   return collectProcedureDraftFromCards();
 }
 
+function normalizeProcedureName(value){
+  return normalizeLooseText(value).toLowerCase();
+}
+
 function getProcedureBaseName(procName){
   const raw = String(procName || '').trim();
   if(!raw) return '';
@@ -17881,6 +18360,7 @@ function getProcedureColorClass(procName){
   const base = getProcedureBaseName(procName);
   if(base === 'ASS') return 'proc-ass';
   if(base === 'Restitution') return 'proc-restitution';
+  if(base === 'Commandement') return 'proc-commandement';
   if(base === 'Nantissement') return 'proc-nantissement';
   if(base === 'Redressement') return 'proc-redressement';
   if(base === 'Vérification de créance') return 'proc-verification-creance';
@@ -17975,6 +18455,22 @@ function syncProcedureTribunalAutocompleteOptions(draft = null){
   datalist.innerHTML = labels.map(label=>`<option value="${escapeHtml(label)}"></option>`).join('');
 }
 
+function syncConditionalCreationFieldsVisibility(forceList){
+  const selectedProcedures = Array.isArray(forceList)
+    ? forceList.slice()
+    : [...document.querySelectorAll('.proc-check:checked')].map(cb=>cb.value);
+  const normalizedProcedures = new Set(
+    selectedProcedures
+      .map(value=>normalizeProcedureName(getProcedureBaseName(String(value || '').trim())))
+      .filter(Boolean)
+  );
+  document.querySelectorAll('#creationSection [data-procedure-visibility]').forEach(fieldContainer=>{
+    const requiredProcedure = normalizeProcedureName(String(fieldContainer.dataset.procedureVisibility || '').trim());
+    const shouldShow = !requiredProcedure || normalizedProcedures.has(requiredProcedure);
+    fieldContainer.classList.toggle('creation-procedure-only-hidden', !shouldShow);
+  });
+}
+
 function renderProcedureDetails(forceList, forceDraft){
   const container = $('procedureDetails');
   const draft = forceDraft && typeof forceDraft === 'object'
@@ -18009,6 +18505,7 @@ function renderProcedureDetails(forceList, forceDraft){
   }
 
   const finalList = [...new Set(selected.map(v=>String(v).trim()).filter(Boolean))];
+  syncConditionalCreationFieldsVisibility(finalList);
 
   finalList.forEach(proc=>{
     if(!proc || !String(proc).trim()) return;

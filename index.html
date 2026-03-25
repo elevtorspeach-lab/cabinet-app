@@ -178,7 +178,7 @@
           <i class="fa-solid fa-file-lines"></i> Export d'audience
         </button>
         <button id="previewAudienceBtn" class="btn-primary" type="button">
-          <i class="fa-regular fa-eye"></i> Voir le fichier
+          <i class="fa-regular fa-eye"></i> Aperçu Excel
         </button>
       </div>
     </div>
@@ -585,12 +585,12 @@
             <input type="text" id="debiteurInput" placeholder="Nom du débiteur"/>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" data-procedure-visibility="Restitution">
             <label>WW</label>
             <input type="text" id="wwInput" placeholder="WW"/>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" data-procedure-visibility="Restitution">
             <label>Marque</label>
             <input type="text" id="marqueInput" placeholder="Marque"/>
           </div>
@@ -623,6 +623,23 @@
             </div>
           </div>
 
+          <div class="form-group full" data-procedure-visibility="Commandement">
+            <div class="restitution-extra-row">
+              <div class="form-group">
+                <label>TF N°</label>
+                <input type="text" id="efNumberInput" placeholder="TF N°"/>
+              </div>
+              <div class="form-group">
+                <label>Conservation</label>
+                <input type="text" id="conservationInput" placeholder="Conservation"/>
+              </div>
+              <div class="form-group">
+                <label>Métrage</label>
+                <input type="text" id="metrageInput" placeholder="Métrage"/>
+              </div>
+            </div>
+          </div>
+
           <div class="form-group full">
             <label>Montant par procédure</label>
             <div id="procedureMontantGroups" class="procedure-montant-groups"></div>
@@ -638,6 +655,7 @@
               <label data-proc="SFDC"><input type="checkbox" value="SFDC" class="proc-check"> SFDC</label>
               <label data-proc="Injonction"><input type="checkbox" value="Injonction" class="proc-check"> Injonction</label>
               <label data-proc="S/bien"><input type="checkbox" value="S/bien" class="proc-check"> S/bien</label>
+              <label data-proc="Commandement"><input type="checkbox" value="Commandement" class="proc-check"> Commandement</label>
               <label data-proc="Vérification de créance"><input type="checkbox" value="Vérification de créance" class="proc-check"> Vérification de créance</label>
               <label data-proc="Redressement"><input type="checkbox" value="Redressement" class="proc-check"> Redressement</label>
               <label data-proc="Liquidation judiciaire"><input type="checkbox" value="Liquidation judiciaire" class="proc-check"> Liquidation judiciaire</label>
@@ -651,6 +669,9 @@
 
           <div id="procedureDetails" class="procedure-details full"></div>
           <datalist id="procedureTribunalOptions"></datalist>
+          <datalist id="commandementSortOptions">
+            <option value="att expertise"></option>
+          </datalist>
 
           <!-- DOCUMENTS + NOTE/STATUT -->
           <div class="form-group full two-col">

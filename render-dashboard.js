@@ -164,6 +164,17 @@ function queueDashboardHeavyRender(options = {}){
 function renderDashboard(options = {}){
   if(!shouldRenderDeferredSection('dashboard', options)) return;
   const immediateMetrics = options.immediate === true || isLargeDatasetMode() || heavyUiOperationCount > 0;
+  const shouldRenderCalendarNow =
+    options.includeAudienceMetrics !== false
+    && isDeferredRenderSectionVisible('dashboard')
+    && !importInProgress;
+  if(shouldRenderCalendarNow){
+    if(typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'){
+      window.requestAnimationFrame(()=>renderDashboardCalendar());
+    }else{
+      renderDashboardCalendar();
+    }
+  }
   animateDashboardMetric('totalClients', getVisibleClients().length, { immediate: immediateMetrics });
   queueDashboardHeavyRender({
     delayMs: options.deferHeavy ? 1800 : 0,
