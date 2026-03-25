@@ -16690,14 +16690,22 @@ function getSuiviRequiredProcedureFields(procName, details){
   ];
 }
 
-function isSuiviProcedurePendingDepot(procName, details){
-  const procDetails = details && typeof details === 'object' ? details : {};
-  const requiredFields = getSuiviRequiredProcedureFields(procName, procDetails);
-  if(!requiredFields.length) return false;
-  return requiredFields.some((field)=>{
-    const value = procDetails[field];
-    return !String(value || '').trim();
+function hasSuiviProcedureHistoryActivity(dossier, procName){
+  const procedure = String(procName || '').trim();
+  if(!procedure) return false;
+  const historyEntries = Array.isArray(dossier?.history) ? dossier.history : [];
+  return historyEntries.some(entry=>{
+    if(String(entry?.procedure || '').trim() !== procedure) return false;
+    const field = String(entry?.field || '').trim();
+    if(!field.startsWith('procedureDetails.')) return false;
+    return normalizeHistoryValue(entry?.before) !== normalizeHistoryValue(entry?.after);
   });
+}
+
+function isSuiviProcedurePendingDepot(dossier, procName, details){
+  const procDetails = details && typeof details === 'object' ? details : {};
+  if(String(procDetails.referenceClient || '').trim()) return false;
+  return hasSuiviProcedureHistoryActivity(dossier, procName);
 }
 
 function hasSuiviPendingDepotRow(row){
@@ -16708,7 +16716,7 @@ function hasSuiviPendingDepotRow(row){
   const detailsMap = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
     ? dossier.procedureDetails
     : {};
-  return procedures.some(procName=>isSuiviProcedurePendingDepot(procName, detailsMap[procName]));
+  return procedures.some(procName=>isSuiviProcedurePendingDepot(dossier, procName, detailsMap[procName]));
 }
 
 function getDashboardAttDepotCount(){
