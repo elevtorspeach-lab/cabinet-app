@@ -35,7 +35,7 @@ function buildDiligenceCountLabel(totalRows){
   labels.push(filterDiligenceSort === 'all' ? 'tous les sorts' : `sort: ${filterDiligenceSort}`);
   labels.push(filterDiligenceDelegation === 'all' ? 'toutes les délégations' : `délégation: ${filterDiligenceDelegation}`);
   labels.push(filterDiligenceOrdonnance === 'all' ? 'toutes les ordonnances' : `ordonnance: ${getDiligenceOrdonnanceLabel(filterDiligenceOrdonnance)}`);
-  labels.push(filterDiligenceTribunal === 'all' ? 'tous les tribunaux' : `tribunal: ${filterDiligenceTribunal}`);
+  labels.push(filterDiligenceTribunal === 'all' ? 'tous les tribunaux' : `tribunal: ${getDiligenceTribunalFilterLabel(filterDiligenceTribunal)}`);
   return `${totalRows} ligne(s) diligence (${labels.join(', ')})`;
 }
 
@@ -411,7 +411,7 @@ function renderDiligence(options = {}){
         filterDiligenceOrdonnance !== 'all'
         && normalizeDiligenceOrdonnance(row.ordonnance) !== normalizeDiligenceOrdonnance(filterDiligenceOrdonnance)
       ) return false;
-      if(filterDiligenceTribunal !== 'all' && row.tribunal !== filterDiligenceTribunal) return false;
+      if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
       return true;
     });
     const requestId = ++diligenceFilterRequestSeq;

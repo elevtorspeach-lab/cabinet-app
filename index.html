@@ -302,12 +302,17 @@
                 <option value="all">Toutes</option>
               </select>
             </div>
-	            <div class="audience-color-filter">
-	              <label for="diligenceTribunalFilter">Tribunal</label>
-	              <select id="diligenceTribunalFilter">
-	                <option value="all">Tous</option>
-	              </select>
-	            </div>
+            <div class="audience-color-filter">
+              <label for="diligenceTribunalFilter">Tribunal</label>
+              <input
+                type="text"
+                id="diligenceTribunalFilter"
+                list="diligenceTribunalOptions"
+                placeholder=""
+                autocomplete="off"
+              />
+              <datalist id="diligenceTribunalOptions"></datalist>
+            </div>
 	            <label id="diligenceCheckedCount" class="audience-checked-count" for="diligencePageSelectionToggle">
               <input id="diligencePageSelectionToggle" type="checkbox" aria-label="Cocher ou décocher toute la page diligence">
               <span class="label">Cochés</span>

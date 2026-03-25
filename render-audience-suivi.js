@@ -155,8 +155,11 @@ function renderAudienceRowHtml(row, duplicateKeySet){
       </td>
       <td data-label="Client">${escapeHtml(c.name)}</td>
       <td data-label="Référence Client" class="${isRefClientMismatch ? 'audience-refclient-mismatch' : ''}">
-        ${escapeHtml(refClientDisplay)}
-        ${isRefClientMismatch ? '<div class="audience-inline-error">Réf client audience différente du global</div>' : ''}
+        ${canEdit
+          ? `<input class="${isRefClientMismatch ? 'audience-refclient-mismatch-input' : ''}" value="${escapeAttr(draft.refClient || refClientDisplay)}" oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refClient',this.value)">`
+          : escapeHtml(refClientDisplay)
+        }
+        ${isRefClientMismatch ? '<div class="audience-inline-error">Réf client audience introuvable dans le dossier global. Modifiez-la ici pour corriger rapidement.</div>' : ''}
       </td>
       <td data-label="Débiteur">${escapeHtml(d.debiteur || '-')}</td>
       <td data-label="Référence dossier">

@@ -2481,6 +2481,12 @@ tr.color-purple-light{border-left:6px solid #6d28d9;background:#b18af0}
   color:#991b1b !important;
   font-weight:700;
 }
+.audience-refclient-mismatch-input{
+  border-color:#ef4444 !important;
+  background:#fff1f2 !important;
+  color:#991b1b !important;
+  font-weight:700;
+}
 .audience-inline-error{
   margin-top:4px;
   font-size:11px;
@@ -2773,7 +2779,8 @@ tr.color-purple-light{border-left:6px solid #6d28d9;background:#b18af0}
   line-height:1.1;
 }
 
-#diligenceSection .audience-color-filter select{
+#diligenceSection .audience-color-filter select,
+#diligenceSection .audience-color-filter input{
   padding:8px 10px;
 }
 

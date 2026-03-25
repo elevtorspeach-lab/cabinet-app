@@ -77,6 +77,8 @@ let filterDiligenceSort = 'all';
 let filterDiligenceDelegation = 'all';
 let filterDiligenceOrdonnance = 'all';
 let filterDiligenceTribunal = 'all';
+let diligenceTribunalAliasMap = new Map();
+let diligenceTribunalLabelMap = new Map();
 let filterDiligenceCheckedFirst = false;
 let diligencePrintSelection = new Set();
 let diligencePrintSelectionVersion = 0;
@@ -4676,6 +4678,65 @@ function applySuiviTribunalFilterFromInput(value, options = {}){
   return true;
 }
 
+function resolveDiligenceTribunalFilterKey(value){
+  const rawKey = makeTribunalFilterKey(value);
+  if(!rawKey) return '';
+  return diligenceTribunalAliasMap.get(rawKey) || rawKey;
+}
+
+function getDiligenceTribunalFilterLabel(value){
+  const key = resolveDiligenceTribunalFilterKey(value);
+  if(!key || key === 'all') return 'Tous';
+  return diligenceTribunalLabelMap.get(key) || String(value || '').trim() || 'Tous';
+}
+
+function resolveDiligenceTribunalInputSelection(value, allowApproximate = false){
+  const raw = normalizeLooseText(value || '');
+  if(!raw) return { key: 'all', label: 'Tous' };
+  const rawKey = makeTribunalFilterKey(raw);
+  if(!rawKey) return null;
+  const directKey = diligenceTribunalAliasMap.get(rawKey) || rawKey;
+  if(diligenceTribunalLabelMap.has(directKey)){
+    return { key: directKey, label: diligenceTribunalLabelMap.get(directKey) || raw };
+  }
+  if(!allowApproximate) return null;
+
+  let best = null;
+  let bestScore = -1;
+  diligenceTribunalLabelMap.forEach((label, key)=>{
+    const normalizedLabel = normalizeLooseText(label || '');
+    if(!normalizedLabel) return;
+    let score = -1;
+    if(normalizedLabel === raw) score = 1000;
+    else if(normalizedLabel.startsWith(raw)) score = 800 - Math.max(0, normalizedLabel.length - raw.length);
+    else if(normalizedLabel.includes(raw)) score = 600 - Math.max(0, normalizedLabel.length - raw.length);
+    else{
+      const similarity = getTribunalSimilarity(rawKey, makeTribunalFilterKey(normalizedLabel));
+      if(similarity >= 0.55) score = Math.round(similarity * 100);
+    }
+    if(score > bestScore){
+      bestScore = score;
+      best = { key, label };
+    }
+  });
+  return bestScore >= 0 ? best : null;
+}
+
+function applyDiligenceTribunalFilterFromInput(value, options = {}){
+  const opts = options && typeof options === 'object' ? options : {};
+  const selection = resolveDiligenceTribunalInputSelection(value, !!opts.allowApproximate);
+  if(!selection){
+    return false;
+  }
+  filterDiligenceTribunal = selection.key;
+  const tribunalInput = $('diligenceTribunalFilter');
+  if(tribunalInput){
+    tribunalInput.value = selection.key === 'all' ? '' : selection.label;
+  }
+  renderDiligence();
+  return true;
+}
+
 function getProcedureShortLabel(procName){
   const raw = String(procName || '').trim();
   if(!raw) return '';
@@ -6896,6 +6957,7 @@ function deleteAudienceImportBatch(batchId){
   const orphanDossierUids = new Set((batch.createdOrphanDossierUids || []).map(v=>String(v || '').trim()).filter(Boolean));
   let restoredProcedures = 0;
   let removedOrphanDossiers = 0;
+  let preservedManualProcedures = 0;
 
   AppState.clients = (Array.isArray(AppState.clients) ? AppState.clients : []).filter(client=>{
     let dossiers = Array.isArray(client?.dossiers) ? client.dossiers : [];
@@ -6911,6 +6973,11 @@ function deleteAudienceImportBatch(batchId){
       Object.keys(details).forEach(procKey=>{
         const proc = details[procKey];
         if(String(proc?._audienceImportBatchId || '').trim() !== batch.id) return;
+        if(hasManualAudienceChangesAfterImport(dossier, procKey, batch.createdAt)){
+          delete proc._audienceImportBatchId;
+          preservedManualProcedures += 1;
+          return;
+        }
         const op = operationMap.get(`${dossierUid}::${procKey}`);
         if(op && op.beforeProc && typeof op.beforeProc === 'object'){
           details[procKey] = JSON.parse(JSON.stringify(op.beforeProc));
@@ -6951,7 +7018,7 @@ function deleteAudienceImportBatch(batchId){
   handleDossierDataChange({ audience: true });
   queuePersistAppState();
   refreshPrimaryViews({ includeSalle: true });
-  alert(`Import audience supprimé.\nProcédures restaurées: ${restoredProcedures}\nDossiers hors global retirés: ${removedOrphanDossiers}`);
+  alert(`Import audience supprimé.\nProcédures restaurées: ${restoredProcedures}\nProcédures manuelles conservées: ${preservedManualProcedures}\nDossiers hors global retirés: ${removedOrphanDossiers}`);
 }
 
 function formatImportHistoryDate(value){
@@ -8052,6 +8119,31 @@ function getDossierAudienceReferenceKeys(dossier){
     pushRef(proc?.referenceClient || '');
   });
   return refs;
+}
+
+function refreshAudienceRefClientMismatchFlags(dossier){
+  if(!dossier || typeof dossier !== 'object') return false;
+  const refs = getDossierAudienceReferenceKeys(dossier);
+  const details = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
+    ? dossier.procedureDetails
+    : {};
+  let changed = false;
+  Object.values(details).forEach((proc)=>{
+    if(!proc || typeof proc !== 'object' || !proc._refClientMismatch) return;
+    const providedKeys = splitReferenceValues(proc._refClientProvided || '')
+      .map(value=>normalizeReferenceForAudienceLookup(value))
+      .filter(Boolean);
+    if(providedKeys.some(key=>refs.has(key))){
+      delete proc._refClientMismatch;
+      delete proc._refClientProvided;
+      delete proc._refClientExpected;
+      changed = true;
+      return;
+    }
+    const expectedRefs = [...refs];
+    proc._refClientExpected = expectedRefs.length ? expectedRefs.join('/') : '-';
+  });
+  return changed;
 }
 
 function getDossierProcedureReferenceKeys(dossier){
@@ -9799,6 +9891,7 @@ function parseExcelData(rows, sheet = null){
     audience: ['audience'],
     juge: ['juge'],
     sort: ['sort'],
+    sortOrd: ['sort ord', 'sort ordonnance', 'ordonnance', 'statut ordonnance'],
     tribunal: ['tribunal'],
     dateDepot: ['date depot', 'date depôt', 'date depot '],
     statut: ['statut', 'status', 'etat', 'état']
@@ -9918,6 +10011,16 @@ function parseExcelData(rows, sheet = null){
       ordonnanceStatus: String(best?.ordonnanceStatus || '').trim()
     };
   };
+  const getAudienceOrdonnanceMetaFromValue = (value)=>{
+    const status = normalizeDiligenceOrdonnance(value);
+    if(status === 'ok'){
+      return { color: 'yellow', ordonnanceStatus: 'ok' };
+    }
+    if(status === 'att'){
+      return { color: 'green', ordonnanceStatus: 'att' };
+    }
+    return { color: '', ordonnanceStatus: '' };
+  };
   const referenceHints = {};
   const registerReferenceHint = (rawRef, procName, extras = {})=>{
     const key = normalizeReferenceForAudienceLookup(rawRef);
@@ -10008,7 +10111,6 @@ function parseExcelData(rows, sheet = null){
       dateDepot: getColIndex(dossierColMap, dossierHeaderKeys.dateDepot),
       sortExecution: getColIndex(dossierColMap, dossierHeaderKeys.sortExecution),
       sort: getColIndex(dossierColMap, dossierHeaderKeys.sort),
-      sortOrd: getColIndex(dossierColMap, dossierHeaderKeys.sortOrd),
       tribunal: getColIndex(dossierColMap, dossierHeaderKeys.tribunal),
       statut: getColIndex(dossierColMap, dossierHeaderKeys.statut)
     };
@@ -10071,7 +10173,6 @@ function parseExcelData(rows, sheet = null){
         ? String(row[idx.sortExecution] || '').trim()
         : (idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '');
       const sort = idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '';
-      const sortOrd = idx.sortOrd !== -1 ? String(row[idx.sortOrd] || '').trim() : '';
       const statutRaw = idx.statut !== -1 ? String(row[idx.statut] || '').trim() : '';
       const isEmptyDossierRow = !refClient && !debiteur && !clientName && !procedureText && !type && !montant && !dateAffectation;
       if(isEmptyDossierRow) break;
@@ -10143,7 +10244,6 @@ function parseExcelData(rows, sheet = null){
         dateDepot,
         sortExecution,
         sort,
-        sortOrd,
         tribunal,
         statutRaw
       });
@@ -10169,6 +10269,7 @@ function parseExcelData(rows, sheet = null){
       audience: getColIndex(map, audienceHeaderKeys.audience),
       juge: getColIndex(map, audienceHeaderKeys.juge),
       sort: getColIndex(map, audienceHeaderKeys.sort),
+      sortOrd: getColIndex(map, audienceHeaderKeys.sortOrd),
       tribunal: getColIndex(map, audienceHeaderKeys.tribunal),
       dateDepot: getColIndex(map, audienceHeaderKeys.dateDepot),
       statut: getColIndex(map, audienceHeaderKeys.statut)
@@ -10180,18 +10281,21 @@ function parseExcelData(rows, sheet = null){
       const debiteur = idx.debiteur !== -1 ? String(row[idx.debiteur] || '').trim() : '';
       const refClient = idx.refClient !== -1 ? String(row[idx.refClient] || '').trim() : '';
       if(!refDossier && !debiteur && !refClient) break;
-      const importColorMeta = getAudienceImportRowMeta(j, [
-        idx.refClient,
-        idx.debiteur,
-        idx.refDossier,
-        idx.procedure,
-        idx.audience,
-        idx.juge,
-        idx.sort,
-        idx.tribunal,
-        idx.dateDepot,
-        idx.statut
-      ]);
+      const sortOrdText = idx.sortOrd !== -1 ? String(row[idx.sortOrd] || '').trim() : '';
+      const importColorMeta = idx.sortOrd !== -1
+        ? getAudienceOrdonnanceMetaFromValue(sortOrdText)
+        : getAudienceImportRowMeta(j, [
+          idx.refClient,
+          idx.debiteur,
+          idx.refDossier,
+          idx.procedure,
+          idx.audience,
+          idx.juge,
+          idx.sort,
+          idx.tribunal,
+          idx.dateDepot,
+          idx.statut
+        ]);
       audiences.push({
         rowNumber: j + 1,
         refClient,
@@ -10201,10 +10305,12 @@ function parseExcelData(rows, sheet = null){
         audience: idx.audience !== -1 ? parseExcelDateValue(row[idx.audience]) : '',
         juge: idx.juge !== -1 ? String(row[idx.juge] || '').trim() : '',
         sort: idx.sort !== -1 ? String(row[idx.sort] || '').trim() : '',
+        sortOrd: sortOrdText,
         tribunal: idx.tribunal !== -1 ? String(row[idx.tribunal] || '').trim() : '',
         dateDepot: idx.dateDepot !== -1 ? parseExcelDateValue(row[idx.dateDepot]) : '',
         importedColor: importColorMeta.color,
         importedOrdonnanceStatus: importColorMeta.ordonnanceStatus,
+        hasSortOrdColumn: idx.sortOrd !== -1,
         statutRaw: idx.statut !== -1 ? String(row[idx.statut] || '').trim() : '',
         hasStatutColumn: idx.statut !== -1
       });
@@ -11221,18 +11327,16 @@ async function applyExcelImport(payload, options = {}){
     const notificationSortValue = String(row.notificationSort || '').trim();
     const notificationNoValue = String(row.notificationNo || '').trim();
     const sortValue = String(row.sortExecution || row.sort || '').trim();
-    const sortOrdValue = String(row.sortOrd || '').trim();
     const tribunalValue = String(row.tribunal || '').trim();
     const assignProcedureMeta = (proc, refValue)=>{
       if(
-        !(executionNoValue || importedDateDepotValue || sortValue || sortOrdValue || tribunalValue || (proc === 'Injonction' && (notificationSortValue || notificationNoValue)))
+        !(executionNoValue || importedDateDepotValue || sortValue || tribunalValue || (proc === 'Injonction' && (notificationSortValue || notificationNoValue)))
         || !String(refValue || '').trim()
       ) return;
       if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
       if(executionNoValue) dossier.procedureDetails[proc].executionNo = executionNoValue;
       if(importedDateDepotValue) dossier.procedureDetails[proc].dateDepot = importedDateDepotValue;
       if(sortValue) dossier.procedureDetails[proc].sort = sortValue;
-      if(sortOrdValue) dossier.procedureDetails[proc].attOrdOrOrdOk = sortOrdValue;
       if(tribunalValue) dossier.procedureDetails[proc].tribunal = tribunalValue;
       if(proc === 'Injonction' && notificationSortValue) dossier.procedureDetails[proc].notificationSort = notificationSortValue;
       if(proc === 'Injonction' && notificationNoValue) dossier.procedureDetails[proc].notificationNo = notificationNoValue;
@@ -11492,7 +11596,12 @@ async function applyExcelImport(payload, options = {}){
       propagateAudienceDepotDateForRef(dossier, refKey, resolvedAudienceDepotDate);
     }
     const importedAudienceColor = String(row.importedColor || '').trim();
-    if(importedAudienceColor) p.color = importedAudienceColor;
+    if(row.hasSortOrdColumn === true){
+      p._disableAudienceRowColor = importedAudienceColor ? '' : '1';
+      p.color = importedAudienceColor || '';
+    }else if(importedAudienceColor){
+      p.color = importedAudienceColor;
+    }
     const importedOrdonnanceStatus = String(row.importedOrdonnanceStatus || '').trim();
     if(importedOrdonnanceStatus === 'att') p.attOrdOrOrdOk = 'att ord';
     if(importedOrdonnanceStatus === 'ok') p.attOrdOrOrdOk = 'ord ok';
@@ -12310,8 +12419,16 @@ function setupEvents(){
     renderDiligence();
   });
   $('diligenceTribunalFilter')?.addEventListener('change', (e)=>{
-    filterDiligenceTribunal = e.target.value;
-    renderDiligence();
+    applyDiligenceTribunalFilterFromInput(e.target.value, { allowApproximate: true });
+  });
+  $('diligenceTribunalFilter')?.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    applyDiligenceTribunalFilterFromInput(e.target.value, { allowApproximate: true });
+  });
+  $('diligenceTribunalFilter')?.addEventListener('input', (e)=>{
+    if(String(e.target?.value || '').trim()) return;
+    applyDiligenceTribunalFilterFromInput('', { allowApproximate: false });
   });
   $('diligenceCheckedOrder')?.addEventListener('change', (e)=>{
     filterDiligenceCheckedFirst = String(e.target?.value || 'default') === 'checked-first';
@@ -14657,6 +14774,7 @@ function getDiligenceRows(){
           delegation,
           ordonnance,
           tribunal,
+          tribunalFilterKey: makeTribunalFilterKey(tribunal),
           canEdit: canEditClient(c)
         });
       });
@@ -14686,8 +14804,8 @@ function resetDiligenceAuxFilters(){
   if(delegationSelect) delegationSelect.value = 'all';
   const ordonnanceSelect = $('diligenceOrdonnanceFilter');
   if(ordonnanceSelect) ordonnanceSelect.value = 'all';
-  const tribunalSelect = $('diligenceTribunalFilter');
-  if(tribunalSelect) tribunalSelect.value = 'all';
+  const tribunalInput = $('diligenceTribunalFilter');
+  if(tribunalInput) tribunalInput.value = '';
 }
 
 function syncDiligenceProcedureFilter(rows){
@@ -14712,23 +14830,26 @@ function syncDiligenceProcedureFilter(rows){
 }
 
 function syncDiligenceTribunalFilter(rows){
-  const select = $('diligenceTribunalFilter');
-  if(!select) return;
+  const tribunalInput = $('diligenceTribunalFilter');
+  const tribunalOptions = $('diligenceTribunalOptions');
+  if(!tribunalInput || !tribunalOptions) return;
   if(rows === diligenceFilterTribunalRowsRef){
-    select.value = filterDiligenceTribunal;
+    tribunalInput.value = filterDiligenceTribunal === 'all' ? '' : getDiligenceTribunalFilterLabel(filterDiligenceTribunal);
     return;
   }
-  const set = new Set();
-  rows.forEach(r=>{
-    const tribunal = String(r.tribunal || '').trim();
-    if(tribunal) set.add(tribunal);
-  });
-  const sorted = [...set].sort((a,b)=>a.localeCompare(b, 'fr'));
-  select.innerHTML = `<option value="all">Tous</option>${sorted.map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}`;
-  if(filterDiligenceTribunal !== 'all' && !set.has(filterDiligenceTribunal)){
+  const tribunalState = buildTribunalClusterStateFromLabels(
+    rows.map(r=>normalizeLooseText(r?.tribunal || '')).filter(Boolean)
+  );
+  diligenceTribunalAliasMap = tribunalState.aliasMap;
+  diligenceTribunalLabelMap = new Map(tribunalState.options.map(({ key, label })=>[key, label]));
+  tribunalOptions.innerHTML = tribunalState.options.map(({ label })=>`<option value="${escapeHtml(label)}"></option>`).join('');
+  if(filterDiligenceTribunal !== 'all'){
+    filterDiligenceTribunal = resolveDiligenceTribunalFilterKey(filterDiligenceTribunal);
+  }
+  if(filterDiligenceTribunal !== 'all' && !tribunalState.keySet.has(filterDiligenceTribunal)){
     filterDiligenceTribunal = 'all';
   }
-  select.value = filterDiligenceTribunal;
+  tribunalInput.value = filterDiligenceTribunal === 'all' ? '' : getDiligenceTribunalFilterLabel(filterDiligenceTribunal);
   diligenceFilterTribunalRowsRef = rows;
 }
 
@@ -15458,7 +15579,7 @@ function getFilteredDiligenceRows(allRows){
       filterDiligenceOrdonnance !== 'all'
       && normalizeDiligenceOrdonnance(row.ordonnance) !== normalizeDiligenceOrdonnance(filterDiligenceOrdonnance)
     ) return false;
-    if(filterDiligenceTribunal !== 'all' && row.tribunal !== filterDiligenceTribunal) return false;
+    if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
     if(!q) return true;
     if(executionOnlyQuery) return hasDiligenceExecutionNumber(row);
     const searchValues = row.__diligenceSearchValues || (row.__diligenceSearchValues = getDiligenceSearchValues(row));
@@ -17481,16 +17602,19 @@ function getAudienceRowsRawCached(){
           ? `${procedureNorm}__${debiteurNorm}__${refDossier}`
           : '';
         const explicitColor = String(p?.color || '').trim();
+        const disableAudienceRowColor = String(p?._disableAudienceRowColor || '').trim() === '1';
         const dossierStatus = String(d?.statut || '').trim();
         const statusDerivedColor = dossierStatus === 'Soldé'
           ? 'purple-dark'
           : (dossierStatus === 'Arrêt définitif' ? 'purple-light' : '');
-        const effectiveColor = statusDerivedColor
+        const effectiveColor = disableAudienceRowColor
+          ? ''
+          : (statusDerivedColor
           || (
             ['blue', 'green', 'red', 'yellow', 'document-ok', 'purple-dark', 'purple-light'].includes(explicitColor)
               ? explicitColor
               : ''
-          );
+          ));
         const audienceDateDisplay = formatAudienceDateDisplayValue(draft?.dateAudience || p?.audience || '');
         const sortMeta = {
           ref: refDossier,
@@ -17901,6 +18025,8 @@ function setAudienceColor(ci, di, procKey, checked){
   const p = getAudienceProcedure(ci, di, procKey);
   const allowed = new Set(['blue', 'green', 'red', 'yellow', 'document-ok', 'purple-dark', 'purple-light']);
   if(!checked){
+    detachAudienceImportBatchOwnership(p);
+    delete p._disableAudienceRowColor;
     p.color = '';
     if(dossier.statut === 'Soldé' || dossier.statut === 'Arrêt définitif'){
       dossier.statut = 'En cours';
@@ -17913,6 +18039,8 @@ function setAudienceColor(ci, di, procKey, checked){
     queueAudienceColorBatchUpdate({ persist: false, dashboard: true, suivi: false });
     return;
   }
+  detachAudienceImportBatchOwnership(p);
+  delete p._disableAudienceRowColor;
   p.color = selectedAudienceColor;
   if(selectedAudienceColor === 'purple-dark') dossier.statut = 'Soldé';
   if(selectedAudienceColor === 'purple-light') dossier.statut = 'Arrêt définitif';
@@ -17930,6 +18058,30 @@ function getAudienceProcedure(ci, di, procKey){
   if(!dossier.procedureDetails) dossier.procedureDetails = {};
   if(!dossier.procedureDetails[procKey]) dossier.procedureDetails[procKey] = {};
   return dossier.procedureDetails[procKey];
+}
+
+function detachAudienceImportBatchOwnership(procData){
+  if(!procData || typeof procData !== 'object') return false;
+  if(!String(procData._audienceImportBatchId || '').trim()) return false;
+  delete procData._audienceImportBatchId;
+  return true;
+}
+
+function hasManualAudienceChangesAfterImport(dossier, procKey, importCreatedAt){
+  const targetProcKey = String(procKey || '').trim();
+  if(!dossier || !targetProcKey) return false;
+  const importTime = Date.parse(String(importCreatedAt || '').trim() || '');
+  if(!Number.isFinite(importTime)) return false;
+  const historyEntries = Array.isArray(dossier.history) ? dossier.history : [];
+  return historyEntries.some((entry)=>{
+    if(String(entry?.procedure || '').trim() !== targetProcKey) return false;
+    const source = String(entry?.source || '').trim();
+    if(source !== 'audience' && source !== 'form') return false;
+    const entryTime = Date.parse(String(entry?.at || '').trim() || '');
+    if(!Number.isFinite(entryTime) || entryTime < importTime) return false;
+    const field = String(entry?.field || '').trim();
+    return field.startsWith('procedureDetails.');
+  });
 }
 
 function queueAudienceColorBatchUpdate(options = {}){
@@ -18011,10 +18163,23 @@ function updateAudienceDraft(key, field, value){
   const { ci, di, procKey } = parseAudienceDraftKey(key);
   const dossier = AppState.clients?.[ci]?.dossiers?.[di];
   const p = getAudienceProcedure(ci, di, procKey);
-  const before = getAudienceProcedureFieldValue(p, field);
-  applyAudienceFieldToProcedure(p, field, value);
-  const after = getAudienceProcedureFieldValue(p, field);
+  const before = field === 'refClient'
+    ? String(dossier?.referenceClient || '')
+    : getAudienceProcedureFieldValue(p, field);
+  if(field === 'refClient'){
+    if(dossier) dossier.referenceClient = String(value || '').trim();
+    refreshAudienceRefClientMismatchFlags(dossier);
+  }else{
+    applyAudienceFieldToProcedure(p, field, value);
+  }
+  const after = field === 'refClient'
+    ? String(dossier?.referenceClient || '')
+    : getAudienceProcedureFieldValue(p, field);
+  if(before !== after){
+    detachAudienceImportBatchOwnership(p);
+  }
   const fieldMap = {
+    refClient: 'referenceClient',
     refDossier: 'procedureDetails.referenceClient',
     dateAudience: 'procedureDetails.audience',
     juge: 'procedureDetails.juge',
