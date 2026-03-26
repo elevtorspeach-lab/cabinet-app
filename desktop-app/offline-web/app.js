@@ -5516,6 +5516,12 @@ function normalizeReferenceValue(value){
     .toUpperCase();
 }
 
+function isStrictDuplicateProtectedClientReference(value){
+  const normalized = normalizeReferenceValue(value);
+  if(!normalized) return false;
+  return /[A-Z]/.test(normalized) && /\d/.test(normalized);
+}
+
 function normalizeDossierReferenceValue(value){
   const raw = String(value || '')
     .normalize('NFKC')
@@ -5572,7 +5578,7 @@ function showCreationReferenceClientError(message){
 
 function findDuplicateClientReference(referenceValue, options = {}){
   const normalizedReference = normalizeReferenceValue(referenceValue);
-  if(!normalizedReference) return null;
+  if(!normalizedReference || !isStrictDuplicateProtectedClientReference(normalizedReference)) return null;
   const ignoreClientId = Number(options.ignoreClientId);
   const ignoreDossierIndex = Number(options.ignoreDossierIndex);
   for(const client of AppState.clients){
@@ -5606,6 +5612,10 @@ function validateCreationReferenceClient(options = {}){
     clearCreationReferenceClientError();
     return true;
   }
+  if(!isStrictDuplicateProtectedClientReference(rawReference)){
+    clearCreationReferenceClientError();
+    return true;
+  }
   const duplicate = findDuplicateClientReference(rawReference, {
     ignoreClientId: editingDossier?.clientId,
     ignoreDossierIndex: editingDossier?.index
@@ -5614,7 +5624,7 @@ function validateCreationReferenceClient(options = {}){
     clearCreationReferenceClientError();
     return true;
   }
-  const message = `Référence Client déjà utilisée${duplicate.clientName ? ` (${duplicate.clientName})` : ''}.`;
+  const message = `Cette référence client existe déjà${duplicate.clientName ? ` (${duplicate.clientName})` : ''}.`;
   showCreationReferenceClientError(message);
   if(options.focus !== false){
     $('referenceClientInput')?.focus();
