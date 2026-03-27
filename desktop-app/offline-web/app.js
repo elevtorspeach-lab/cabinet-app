@@ -56,6 +56,9 @@ let audienceTribunalLabelMap = new Map();
 let audiencePrintSelection = new Set();
 let audiencePrintSelectionVersion = 0;
 let audiencePrintSelectionPruneDataVersion = -1;
+let audienceTransientPriorityColorRows = new Map();
+let audienceTransientPinnedRowKeys = new Set();
+let audienceTransientPriorityColorResetTimer = null;
 let audienceAutocompleteItems = [];
 let audienceAutocompleteActiveIndex = -1;
 let audienceAutocompleteHideTimer = null;
@@ -537,8 +540,9 @@ const EXCELJS_LOCAL_URL = IS_FILE_PROTOCOL ? './vendor/libs/exceljs.min.js' : '/
 const XLSX_CDN_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
 const EXCELJS_CDN_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
 const AUDIENCE_EXPORT_HEADER_IMAGE_URL = IS_FILE_PROTOCOL ? './assets/audience-export-header.jpeg' : '/assets/audience-export-header.jpeg';
-const AUDIENCE_EXPORT_TEMPLATE_URL = IS_FILE_PROTOCOL ? './assets/audience-export-template.xlsx' : '/assets/audience-export-template.xlsx';
-const AUDIENCE_EXPORT_TEMPLATE_BASE64_SCRIPT_URL = IS_FILE_PROTOCOL ? './assets/audience-export-template.base64.js' : '/assets/audience-export-template.base64.js';
+const AUDIENCE_EXPORT_TEMPLATE_ASSET_VERSION = 'ad99528-audience-header';
+const AUDIENCE_EXPORT_TEMPLATE_URL = `${IS_FILE_PROTOCOL ? './assets/audience-export-template.xlsx' : '/assets/audience-export-template.xlsx'}?v=${AUDIENCE_EXPORT_TEMPLATE_ASSET_VERSION}`;
+const AUDIENCE_EXPORT_TEMPLATE_BASE64_SCRIPT_URL = `${IS_FILE_PROTOCOL ? './assets/audience-export-template.base64.js' : '/assets/audience-export-template.base64.js'}?v=${AUDIENCE_EXPORT_TEMPLATE_ASSET_VERSION}`;
 const AUDIENCE_EXPORT_HEADER_IMAGE_DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAlgCWAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAElBLoDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9U6KKKACiiigAooooAKKKKACiiigAooooAKKKKAMrxB4V0nxXarbavYQ6hAp3COYZAPrXmnir9k34Y+KrWWJ/DVvp08gwbqx+SUficj9K9goranWq0vgk18zGpRpVfjin8j8s/wBpf9lnU/gfeJf2kj6j4buH2xXWPmjbsj+/XmvA6/Z/4neBbP4keBdX8PXyr5V5AyK5GTG2OGHoR61+OPiLRp/D+tXmn3MZint5WjZG6gg4r7zKsdLF03Gp8UfxPg81wMcJUUqfwy/AzqKKVfvD617Z4h9Kfso/spj41NPreuTzWfh22fywIcCS4fuFY5wBjnjvX2xof7Knwu0KJFTwnZ3cqjHn3QLv+dc1+wzJDJ+z1pPkAAC6uA2P72/mvoCvz7McbXnXnBSaSdrI/QcuwVCGHhNxTbV7sxfDfg3RPB8MkWi6bBpscmN6wLgNjpW1RRXiOTk7tntpKKskFFFFIYUUUUAFZviTW7fw3oGoapdyCK3tYWldz2wK0q+df25vH3/CI/Bi406Jv9I1mUWhQHB8vBZm/wDHR+ddGHouvWjSXVnPiKyoUZVX0R+b/jjxPceL/GGqa1efNcXlw00nuSf8K/Tv9j74lH4jfBrTftEqvqOlj7FOoP3VXIj/ADUCvymJyc19V/sA/Ez/AIRn4kTeG7mYR2OtR7UX+9cKRs/QtX3ea4ZVcK+Vax1X9eh8JlWJdLFLmektH/Xqfo7RRRX54foYUUUUAFMmhS4heKRQ8bjaynoR6U+igDir74L+B9TDC68M2E4Y5O+M8/rXHeIP2Q/hbr0LovhqHTHccyWJKN9ec17NRXRHEVoO8ZtfM55YejUVpQT+R8NfFT/gneLexlu/A+qSXEkYLCxvyC8nsrgAD8a+K9e0G+8NarcadqVtJaXlu5jkikXBUg9K/bmvhP8A4KJ/DuxtdQ8PeJrKBY76/MltdFRjft2lWwOp+Y19RleZ1atVUKzvfZny+aZZSpUnXoq1t0fG3hzw3qXizV7fTNKtJb29nbYkUSliTX2j8Kf+CeIltIbzxzqbwSOAx0+wK74z6M/IP4V6n+xz+zvbfC/wjB4g1a2R/EupR+Zl1ybaI8qqn1IwSffFfSNZZhm8+d0sO7Jde/obZflEORVcQrt9O3qeP6H+yX8LdEhRT4Vtb+Rek15l3/pXf+GPh/4c8Fs7aHo9tphcbW+zrjI9K6Givm516tT45N/M+jhQpU/ggl8gooorA3CiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACvy6/be8B/8Id8btRuUQiHV0W/XA+UZJUgfiv61+ot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NH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABNH/Db3wu/6JXX/AL/yn/xNH9mYb/n8+X/gD+zMJfz7/BHjVFfRn/Db3wu/6JXX/v/Kf/ABP/2Q==';
 const CLIENT_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/client-filter.worker.js' : '/workers/client-filter.worker.js';
 const AUDIENCE_FILTER_WORKER_URL = IS_FILE_PROTOCOL ? './workers/audience-filter.worker.js' : '/workers/audience-filter.worker.js';
@@ -1201,6 +1205,9 @@ function markAudienceColorCachesDirty(){
   audienceSelectionCountRowsRef = null;
   audienceSelectionCountVersion = -1;
   audienceSelectionCountValue = 0;
+  lastAudienceRenderCacheKey = '';
+  lastAudienceRenderIdentityKey = '';
+  audienceVirtualLastRange = { start: -1, end: -1 };
 }
 
 function markNonAudienceDossierCachesDirty(){
@@ -1915,7 +1922,7 @@ function applyRemoteDossierPatchLocally(patch){
     const clientIdx = findClientIndex(clientId);
     if(clientIdx === -1 || !dossier) return false;
     if(!Array.isArray(AppState.clients[clientIdx].dossiers)) AppState.clients[clientIdx].dossiers = [];
-    AppState.clients[clientIdx].dossiers.push(dossier);
+    AppState.clients[clientIdx].dossiers.unshift(dossier);
     const targetClient = AppState.clients[clientIdx];
     return {
       action,
@@ -3092,6 +3099,7 @@ function getSelectedSuiviRowsForExport(){
 
 function buildSuiviSelectedExportDatasetBase(){
   const rows = getSelectedSuiviRowsForExport();
+  const omitWwAndMarque = shouldOmitSuiviWwAndMarqueColumns(rows);
   const headers = [
     'Client',
     'date affectation',
@@ -3101,8 +3109,6 @@ function buildSuiviSelectedExportDatasetBase(){
     'debiteur ',
     'Adresse',
     'Ville',
-    'WW',
-    'Marque',
     'Caution',
     'Adresse  caution',
     'Date depot',
@@ -3111,29 +3117,35 @@ function buildSuiviSelectedExportDatasetBase(){
     'Sort',
     'Tribunal'
   ];
+  if(!omitWwAndMarque){
+    headers.splice(8, 0, 'WW', 'Marque');
+  }
+  const colWidths = [
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 16 },
+    { wch: 28 },
+    { wch: 20 },
+    { wch: 28 },
+    { wch: 34 },
+    { wch: 18 },
+    { wch: 22 },
+    { wch: 28 },
+    { wch: 18 },
+    { wch: 22 },
+    { wch: 18 },
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 34 }
+  ];
+  if(!omitWwAndMarque){
+    colWidths.splice(8, 0, { wch: 18 }, { wch: 22 });
+  }
   return {
     rows,
     headers,
-    colWidths: [
-      { wch: 20 },
-      { wch: 18 },
-      { wch: 16 },
-      { wch: 28 },
-      { wch: 20 },
-      { wch: 28 },
-      { wch: 34 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 28 },
-      { wch: 18 },
-      { wch: 22 },
-      { wch: 18 },
-      { wch: 20 },
-      { wch: 18 },
-      { wch: 34 }
-    ]
+    omitWwAndMarque,
+    colWidths
   };
 }
 
@@ -3173,8 +3185,18 @@ function collectSuiviProcedureExportValues(dossier, procedureName){
   };
 }
 
-function buildSuiviExportTableRows(rows){
+function shouldOmitSuiviWwAndMarqueColumns(rows){
   const sourceRows = Array.isArray(rows) ? rows : [];
+  if(!sourceRows.length) return false;
+  return sourceRows.every((row)=>{
+    const procedures = getSuiviExportProcedureNames(row);
+    return procedures.length > 0 && procedures.every((procedureName)=>getProcedureBaseName(procedureName) === 'ASS');
+  });
+}
+
+function buildSuiviExportTableRows(rows, options = {}){
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const omitWwAndMarque = options?.omitWwAndMarque === true;
   return sourceRows.flatMap((row)=>{
     const procedures = getSuiviExportProcedureNames(row);
     return procedures.map((procedureName)=>{
@@ -3182,7 +3204,7 @@ function buildSuiviExportTableRows(rows){
       const fallbackTribunal = (row?.tribunalList && row.tribunalList.length)
         ? row.tribunalList.join(', ')
         : '';
-      return [
+      const exportRow = [
         row.c?.name || '-',
         normalizeDateDDMMYYYY(row.d?.dateAffectation || '') || '-',
         row.d?.type || '-',
@@ -3191,8 +3213,6 @@ function buildSuiviExportTableRows(rows){
         row.d?.debiteur || '-',
         row.d?.adresse || '-',
         row.d?.ville || '-',
-        row.d?.ww || '-',
-        row.d?.marque || '-',
         row.d?.caution || '-',
         row.d?.cautionAdresse || '-',
         procedureValues.dateDepot || '',
@@ -3201,6 +3221,10 @@ function buildSuiviExportTableRows(rows){
         procedureValues.sort || '',
         procedureValues.tribunal || fallbackTribunal || ''
       ];
+      if(!omitWwAndMarque){
+        exportRow.splice(8, 0, row.d?.ww || '-', row.d?.marque || '-');
+      }
+      return exportRow;
     });
   });
 }
@@ -3209,14 +3233,14 @@ function buildSuiviSelectedExportDataset(){
   const dataset = buildSuiviSelectedExportDatasetBase();
   return {
     ...dataset,
-    tableRows: buildSuiviExportTableRows(dataset.rows)
+    tableRows: buildSuiviExportTableRows(dataset.rows, { omitWwAndMarque: dataset.omitWwAndMarque })
   };
 }
 
 async function buildSuiviSelectedExportDatasetAsync(){
   const dataset = buildSuiviSelectedExportDatasetBase();
   const rowGroups = await mapChunked(dataset.rows, async (row)=>{
-    return buildSuiviExportTableRows([row]);
+    return buildSuiviExportTableRows([row], { omitWwAndMarque: dataset.omitWwAndMarque });
   }, { chunkSize: 80, onProgress: makeProgressReporter('Export suivi') });
   return {
     ...dataset,
@@ -10084,7 +10108,7 @@ function parseExcelData(rows, sheet = null){
     dateDepot: ['date depot', 'date depôt', 'date dépôt', 'date depot '],
     sort: ['sort'],
     sortExecution: ['sort execution', 'sort exécution', 'sort exec', 'sort exéc'],
-    sortOrd: ['sort ord', 'sort ordonnance', 'ordonnance', 'statut ordonnance'],
+    sortOrd: ['sort ord', 'sord ord', 'sort ordonnance', 'ordonnance', 'statut ordonnance'],
     tribunal: ['tribunal', 'trib', 'tr'],
     statut: ['statut', 'status', 'etat', 'état']
   };
@@ -10097,7 +10121,7 @@ function parseExcelData(rows, sheet = null){
     audience: ['audience'],
     juge: ['juge'],
     sort: ['sort'],
-    sortOrd: ['sort ord', 'sort ordonnance', 'ordonnance', 'statut ordonnance'],
+    sortOrd: ['sort ord', 'sort ordd', 'sord ord', 'sord ordd', 'sortord', 'sort ordonnance', 'sort ordonance', 'ordonnance', 'statut ordonnance', 'statut ordonnance'],
     tribunal: ['tribunal'],
     dateDepot: ['date depot', 'date depôt', 'date depot '],
     statut: ['statut', 'status', 'etat', 'état']
@@ -10978,6 +11002,13 @@ function showExcelImportResult(summary, issuesText){
   modal.style.display = 'flex';
 }
 
+function syncAudienceColorFilterSelectAppearance(){
+  const select = $('filterAudienceColor');
+  if(!select) return;
+  const allowed = ['all', 'blue', 'green', 'yellow', 'document-ok', 'closed'];
+  allowed.forEach(value=>select.classList.remove(`audience-color-select-${value}`));
+}
+
 function resetAudienceFiltersUi(){
   filterAudienceColor = 'all';
   filterAudienceProcedure = 'all';
@@ -10988,6 +11019,7 @@ function resetAudienceFiltersUi(){
   setSelectedAudienceColor('all', false);
   if($('filterAudience')) $('filterAudience').value = '';
   if($('filterAudienceColor')) $('filterAudienceColor').value = 'all';
+  syncAudienceColorFilterSelectAppearance();
   if($('filterAudienceProcedure')) $('filterAudienceProcedure').value = 'all';
   if($('filterAudienceTribunal')) $('filterAudienceTribunal').value = '';
   if($('filterAudienceDate')) $('filterAudienceDate').value = '';
@@ -11039,6 +11071,7 @@ function openDashboardAudienceAttSortView(){
   resetAudienceFiltersUi();
   filterAudienceColor = 'blue';
   if($('filterAudienceColor')) $('filterAudienceColor').value = 'blue';
+  syncAudienceColorFilterSelectAppearance();
   paginationState.audience = 1;
   showView('audience', { force: true });
 }
@@ -11869,10 +11902,17 @@ async function applyExcelImport(payload, options = {}){
       p.depotLe = resolvedAudienceDepotDate;
       propagateAudienceDepotDateForRef(dossier, refKey, resolvedAudienceDepotDate);
     }
-    const importedAudienceColor = String(row.importedColor || '').trim();
+    const importedOrdonnanceStatus = normalizeDiligenceOrdonnance(row.sortOrd || '');
+    const importedAudienceColor = importedOrdonnanceStatus === 'att'
+      ? 'green'
+      : (importedOrdonnanceStatus === 'ok' ? 'yellow' : String(row.importedColor || '').trim());
     if(row.hasSortOrdColumn === true){
       p._audienceSortOrd = String(row.sortOrd || '').trim();
-      if(isAudienceOrdonnanceColorSuppressed(p)){
+      if(importedOrdonnanceStatus){
+        delete p._disableAudienceRowColor;
+        delete p._suppressAudienceOrdonnanceColor;
+        p.color = importedAudienceColor;
+      }else if(isAudienceOrdonnanceColorSuppressed(p)){
         p._disableAudienceRowColor = '1';
         p.color = '';
       }else{
@@ -11880,7 +11920,6 @@ async function applyExcelImport(payload, options = {}){
         p.color = importedAudienceColor || '';
       }
     }
-    const importedOrdonnanceStatus = String(row.importedOrdonnanceStatus || '').trim();
     if(importedOrdonnanceStatus === 'att') p.attOrdOrOrdOk = 'att ord';
     if(importedOrdonnanceStatus === 'ok') p.attOrdOrOrdOk = 'ord ok';
     if(row.hasStatutColumn === true){
@@ -12632,6 +12671,7 @@ function setupEvents(){
     filterAudienceColor = 'all';
     const colorSel = $('filterAudienceColor');
     if(colorSel) colorSel.value = 'all';
+    syncAudienceColorFilterSelectAppearance();
     renderAudience();
   });
   $('diligenceProcedureFilter')?.addEventListener('change', (e)=>{
@@ -12753,11 +12793,12 @@ function setupEvents(){
   });
   $('filterAudienceColor')?.addEventListener('change', (e)=>{
     filterAudienceColor = e.target.value;
+    clearAudiencePrintSelection({ immediate: true });
+    syncAudienceColorFilterSelectAppearance();
     renderAudience();
   });
   $('filterAudienceProcedure')?.addEventListener('change', (e)=>{
-    filterAudienceProcedure = e.target.value;
-    clearAudiencePrintSelection();
+    setAudienceProcedureFilter(e.target.value, { syncUi: false });
     renderAudience();
   });
   $('filterAudienceTribunal')?.addEventListener('change', (e)=>{
@@ -12815,12 +12856,11 @@ function setupEvents(){
       filterAudienceColor = 'all';
       const colorSel = $('filterAudienceColor');
       if(colorSel) colorSel.value = 'all';
-      if(color !== 'all'){
-        applyColorToSelectedAudienceRows(color);
-      }
+      syncAudienceColorFilterSelectAppearance();
       renderAudience();
     });
   });
+  syncAudienceColorFilterSelectAppearance();
   window.addEventListener('beforeunload', ()=>{
     if(hasLoadedState) persistAppStateNow();
   });
@@ -12836,6 +12876,7 @@ function setSelectedAudienceColor(color, syncFilter){
     filterAudienceColor = color;
     const sel = $('filterAudienceColor');
     if(sel) sel.value = color;
+    syncAudienceColorFilterSelectAppearance();
   }
 }
 
@@ -13608,14 +13649,14 @@ async function addDossier(){
         targetClientId: Number(client.id),
         dossier
       };
-    }else{
-      dossier.history = [];
-      client.dossiers.push(dossier);
-      dossierPatch = {
-        action: 'create',
-        clientId: Number(client.id),
-        dossier
-      };
+  }else{
+    dossier.history = [];
+    client.dossiers.unshift(dossier);
+    dossierPatch = {
+      action: 'create',
+      clientId: Number(client.id),
+      dossier
+    };
     }
     const previousAudienceImpact = editingDossier
       ? dossierHasAudienceImpact(
@@ -14171,6 +14212,46 @@ function computeAudienceRowContentScore(row){
   if(sort) score += 2;
   if(tribunal) score += 1;
   return score;
+}
+
+function getAudienceRowDedupeOrdonnanceRank(row){
+  const status = getAudienceRowOrdonnanceStatus(row);
+  if(status === 'att' || status === 'ok') return 1;
+  return 0;
+}
+
+function compareAudienceRowsForDedupe(existing, next){
+  const existingOrdonnanceRank = getAudienceRowDedupeOrdonnanceRank(existing);
+  const nextOrdonnanceRank = getAudienceRowDedupeOrdonnanceRank(next);
+  if(nextOrdonnanceRank !== existingOrdonnanceRank){
+    return nextOrdonnanceRank - existingOrdonnanceRank;
+  }
+
+  const existingMissingGlobalRank = existing?.p?._missingGlobal ? 0 : 1;
+  const nextMissingGlobalRank = next?.p?._missingGlobal ? 0 : 1;
+  if(nextMissingGlobalRank !== existingMissingGlobalRank){
+    return nextMissingGlobalRank - existingMissingGlobalRank;
+  }
+
+  const existingRefClientRank = existing?.p?._refClientMismatch ? 0 : 1;
+  const nextRefClientRank = next?.p?._refClientMismatch ? 0 : 1;
+  if(nextRefClientRank !== existingRefClientRank){
+    return nextRefClientRank - existingRefClientRank;
+  }
+
+  const existingContentScore = getAudienceRowContentScore(existing);
+  const nextContentScore = getAudienceRowContentScore(next);
+  if(nextContentScore !== existingContentScore){
+    return nextContentScore - existingContentScore;
+  }
+
+  const existingClosedRank = getAudienceStatusDerivedColor(existing?.__resolvedStatus || existing?.d?.statut || '') ? 1 : 0;
+  const nextClosedRank = getAudienceStatusDerivedColor(next?.__resolvedStatus || next?.d?.statut || '') ? 1 : 0;
+  if(nextClosedRank !== existingClosedRank){
+    return nextClosedRank - existingClosedRank;
+  }
+
+  return 0;
 }
 
 function editDossier(clientId, index){
@@ -15016,6 +15097,11 @@ function isDiligenceExecutionProcedure(procedure){
   return proc === 'SFDC' || proc === 'S/bien' || proc === 'Injonction';
 }
 
+function isDiligenceFreeTextExecutionSortProcedure(procedure){
+  const proc = getDiligenceProcedureFilterValue(procedure);
+  return proc === 'SFDC' || proc === 'Injonction';
+}
+
 function isDiligenceAssAudienceDue(details){
   const audienceDateRaw = normalizeDateDDMMYYYY(details?.audience || '') || String(details?.audience || '').trim();
   if(!audienceDateRaw) return false;
@@ -15054,7 +15140,7 @@ function getDiligenceRows(){
         const isCommandement = baseProc === 'Commandement';
         const tribunal = isCommandement ? '' : String(details.tribunal || '').trim();
         const rawSort = String(details.sort || '').trim();
-        const sort = isDiligenceExecutionProcedure(baseProc)
+        const sort = isDiligenceExecutionProcedure(baseProc) && !isDiligenceFreeTextExecutionSortProcedure(baseProc)
           ? normalizeDiligenceSort(rawSort)
           : rawSort;
         const delegation = isCommandement
@@ -15349,6 +15435,9 @@ function getDiligenceExecutionSortCellValue(row){
   }
   if(isDiligenceAssNbLayout(row)){
     return getDiligenceAvisCurateurValue(row?.details?.avisCurateur || '');
+  }
+  if(isDiligenceFreeTextExecutionSortProcedure(row?.procedure)){
+    return String(row?.details?.sort || '').trim();
   }
   return !isDiligenceAssProcedure(row?.procedure)
     ? normalizeDiligenceSort(row?.details?.sort || '')
@@ -15688,6 +15777,18 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
         oninput="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
     `;
     }
+    if(isDiligenceFreeTextExecutionSortProcedure(row?.procedure)){
+      if(!row?.canEdit){
+        return escapeHtml(normalized || '-');
+      }
+      return `
+      <input
+        type="text"
+        class="diligence-inline-input${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
+        value="${escapeAttr(value || '')}"
+        oninput="${onSizeChange}updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+    `;
+    }
     const sortStatus = normalizeDiligenceSort(normalized);
     if(!row?.canEdit){
       return escapeHtml(sortStatus || '-');
@@ -15734,7 +15835,7 @@ function applyDiligenceFieldValue(clientId, dossierIndex, procKey, field, value)
   if(field === 'attOrdOrOrdOk' || field === 'attDelegationOuDelegat'){
     nextValue = normalizeDiligenceAttOk(value);
   }else if(field === 'sort'){
-    nextValue = isDiligenceExecutionProcedure(proc)
+    nextValue = isDiligenceExecutionProcedure(proc) && !isDiligenceFreeTextExecutionSortProcedure(proc)
       ? normalizeDiligenceSort(value)
       : String(value ?? '').trim();
   }else if(field === 'notificationSort'){
@@ -17075,6 +17176,43 @@ function makeAudiencePrintKey(ci, di, procKey){
   return `${Number(ci)}::${Number(di)}::${String(procKey || '')}`;
 }
 
+function getAudienceTransientPriorityColorKey(ci, di, procKey){
+  return makeAudiencePrintKey(ci, di, procKey);
+}
+
+function getAudienceTransientPriorityColorForRow(row){
+  const key = getAudienceTransientPriorityColorKey(row?.ci, row?.di, row?.procKey);
+  return String(audienceTransientPriorityColorRows.get(key) || '').trim();
+}
+
+function queueAudienceTransientPriorityColorReset(){
+  if(audienceTransientPriorityColorResetTimer) return;
+  audienceTransientPriorityColorResetTimer = setTimeout(()=>{
+    audienceTransientPriorityColorResetTimer = null;
+    audienceTransientPriorityColorRows.clear();
+    audienceTransientPinnedRowKeys.clear();
+  }, 0);
+}
+
+function rememberAudienceTransientPriorityColor(ci, di, procKey, color){
+  const key = getAudienceTransientPriorityColorKey(ci, di, procKey);
+  const safeColor = String(color || '').trim();
+  if(!key) return;
+  if(!safeColor){
+    audienceTransientPriorityColorRows.delete(key);
+    return;
+  }
+  audienceTransientPriorityColorRows.set(key, safeColor);
+  queueAudienceTransientPriorityColorReset();
+}
+
+function pinAudienceRowTemporarily(ci, di, procKey){
+  const key = getAudienceTransientPriorityColorKey(ci, di, procKey);
+  if(!key) return;
+  audienceTransientPinnedRowKeys.add(key);
+  queueAudienceTransientPriorityColorReset();
+}
+
 function getAudienceFilterStateKey(){
   return [
     $('filterAudience')?.value?.toLowerCase() || '',
@@ -17086,6 +17224,19 @@ function getAudienceFilterStateKey(){
     filterAudienceCheckedFirst ? 'checked-first' : 'default',
     selectedAudienceColor
   ].join('||');
+}
+
+function setAudienceProcedureFilter(value, options = {}){
+  const nextValue = String(value || 'all').trim() || 'all';
+  const changed = nextValue !== filterAudienceProcedure;
+  filterAudienceProcedure = nextValue;
+  if(changed && options.clearSelection !== false){
+    clearAudiencePrintSelection({ immediate: true });
+  }
+  if(options.syncUi !== false && $('filterAudienceProcedure')){
+    $('filterAudienceProcedure').value = filterAudienceProcedure;
+  }
+  return changed;
 }
 
 function countSelectedAudienceRows(rows){
@@ -17165,11 +17316,18 @@ function updateAudienceCheckedCount(){
   syncAudiencePageSelectionToggle();
 }
 
-function clearAudiencePrintSelection(){
-  if(!audiencePrintSelection.size) return false;
+function clearAudiencePrintSelection(options = {}){
+  if(!audiencePrintSelection.size){
+    if(options.immediate) updateAudienceCheckedCount();
+    return false;
+  }
   audiencePrintSelection = new Set();
   audiencePrintSelectionVersion += 1;
   lastAudienceRenderedSelectedCount = 0;
+  if(options.immediate){
+    updateAudienceCheckedCount();
+    return true;
+  }
   queueAudienceCheckedCountRender();
   return true;
 }
@@ -17200,14 +17358,28 @@ function toggleAudiencePrintSelection(ci, di, procKey, checked){
   }
 }
 
+function clearAudienceRowPrintSelection(ci, di, procKey){
+  const key = makeAudiencePrintKey(ci, di, procKey);
+  if(!audiencePrintSelection.delete(key)) return false;
+  audiencePrintSelectionVersion += 1;
+  if(lastAudienceRenderedRowKeySet.has(key)){
+    lastAudienceRenderedSelectedCount = Math.max(0, lastAudienceRenderedSelectedCount - 1);
+  }
+  queueAudienceCheckedCountRender();
+  return true;
+}
+
 function toggleAudiencePrintSelectionEncoded(ci, di, procKeyEncoded, checked){
   toggleAudiencePrintSelection(ci, di, decodeURIComponent(String(procKeyEncoded)), checked);
 }
 
 function toggleAudienceSelectionAndColorEncoded(ci, di, procKeyEncoded, checked){
   const procKey = decodeURIComponent(String(procKeyEncoded));
+  if(checked && applySelectedAudienceColorToRow(ci, di, procKey)){
+    renderAudience();
+    return;
+  }
   toggleAudiencePrintSelection(ci, di, procKey, checked);
-  setAudienceColor(ci, di, procKey, checked);
   if(filterAudienceCheckedFirst){
     paginationState.audience = 1;
     renderAudience();
@@ -17219,6 +17391,112 @@ function getActiveAudiencePriorityColor(){
   const activeBtn = document.querySelector('.color-btn[data-color].active');
   const color = String(activeBtn?.dataset?.color || '').trim();
   return color || selectedAudienceColor || 'all';
+}
+
+function getSelectedAudienceAppliedColorValue(){
+  const explicitSelectedColor = String(selectedAudienceColor || '').trim();
+  const filterSelectedColor = String(filterAudienceColor || '').trim();
+  const targetColor = explicitSelectedColor && explicitSelectedColor !== 'all'
+    ? explicitSelectedColor
+    : filterSelectedColor;
+  const allowed = new Set(['blue', 'green', 'red', 'yellow', 'document-ok', 'purple-dark', 'purple-light', 'closed']);
+  if(!allowed.has(targetColor) || targetColor === 'all') return '';
+  return targetColor === 'closed' ? 'purple-dark' : targetColor;
+}
+
+function clearSelectedAudienceColorFromRow(ci, di, procKey, appliedColor){
+  const client = AppState.clients?.[ci];
+  if(!canEditData() || !canEditClient(client)) return false;
+  const dossier = AppState.clients?.[ci]?.dossiers?.[di];
+  if(!dossier) return false;
+  const p = getAudienceProcedure(ci, di, procKey);
+  const currentRow = {
+    c: client,
+    d: dossier,
+    procKey,
+    p,
+    draft: {},
+    ci,
+    di
+  };
+  if(getAudienceRowEffectiveColor(currentRow) !== appliedColor){
+    return false;
+  }
+  detachAudienceImportBatchOwnership(p);
+  let changed = false;
+  if(appliedColor === 'green' || appliedColor === 'yellow'){
+    delete p._audienceSortOrd;
+    delete p.attOrdOrOrdOk;
+    if(['green', 'yellow'].includes(String(p?.color || '').trim())){
+      p.color = '';
+    }
+    delete p._disableAudienceRowColor;
+    delete p._suppressAudienceOrdonnanceColor;
+    changed = true;
+  }else if(appliedColor === 'purple-dark' || appliedColor === 'purple-light'){
+    if(String(p?.color || '').trim() === appliedColor){
+      p.color = '';
+      changed = true;
+    }
+    if(appliedColor === 'purple-dark' && String(dossier?.statut || '').trim() === 'Soldé'){
+      dossier.statut = 'En cours';
+      changed = true;
+    }
+    if(appliedColor === 'purple-light' && String(dossier?.statut || '').trim() === 'Arrêt définitif'){
+      dossier.statut = 'En cours';
+      changed = true;
+    }
+  }else{
+    if(String(p?.color || '').trim() === appliedColor){
+      p.color = '';
+      changed = true;
+    }
+  }
+  if(!changed) return false;
+  rememberAudienceTransientPriorityColor(ci, di, procKey, appliedColor);
+  pinAudienceRowTemporarily(ci, di, procKey);
+  clearAudienceRowPrintSelection(ci, di, procKey);
+  markAudienceColorCachesDirty();
+  queueAudienceColorBatchUpdate({
+    persist: true,
+    persistClientId: client.id,
+    persistDossier: dossier,
+    dashboard: true,
+    suivi: true
+  });
+  return true;
+}
+
+function applySelectedAudienceColorToRow(ci, di, procKey){
+  const appliedColor = getSelectedAudienceAppliedColorValue();
+  if(!appliedColor) return false;
+  if(clearSelectedAudienceColorFromRow(ci, di, procKey, appliedColor)){
+    return true;
+  }
+  const client = AppState.clients?.[ci];
+  if(!canEditData() || !canEditClient(client)) return false;
+  const dossier = AppState.clients?.[ci]?.dossiers?.[di];
+  if(!dossier) return false;
+  const p = getAudienceProcedure(ci, di, procKey);
+  rememberAudienceTransientPriorityColor(ci, di, procKey, '');
+  pinAudienceRowTemporarily(ci, di, procKey);
+  clearAudienceRowPrintSelection(ci, di, procKey);
+  detachAudienceImportBatchOwnership(p);
+  delete p._disableAudienceRowColor;
+  delete p._suppressAudienceOrdonnanceColor;
+  if(String(p?.color || '').trim() === appliedColor) return false;
+  p.color = appliedColor;
+  if(appliedColor === 'purple-dark') dossier.statut = 'Soldé';
+  if(appliedColor === 'purple-light') dossier.statut = 'Arrêt définitif';
+  markAudienceColorCachesDirty();
+  queueAudienceColorBatchUpdate({
+    persist: true,
+    persistClientId: client.id,
+    persistDossier: dossier,
+    dashboard: true,
+    suivi: true
+  });
+  return true;
 }
 
 function getAudienceRowDateValue(row){
@@ -17341,7 +17619,7 @@ function getFilteredAudienceRows(allRows = null){
         others.push(row);
       }
     });
-    const out = matched.concat(others);
+    const out = applyAudienceTransientPinnedRowOrder(matched.concat(others));
     audienceFilteredRowsCacheInput = rows;
     audienceFilteredRowsCacheKey = filterKey;
     audienceFilteredRowsCacheOutput = out;
@@ -17375,11 +17653,40 @@ function getFilteredAudienceRows(allRows = null){
     if(a.bucket !== b.bucket) return a.bucket - b.bucket;
     return compareAudienceSortMeta(a.sortMeta, b.sortMeta);
   });
-  const out = decorated.map(item=>item.row);
+  const out = applyAudienceTransientPinnedRowOrder(decorated.map(item=>item.row));
   audienceFilteredRowsCacheInput = rows;
   audienceFilteredRowsCacheKey = filterKey;
   audienceFilteredRowsCacheOutput = out;
   return orderAudienceRowsByCheckedSelection(out);
+}
+
+function applyAudienceTransientPinnedRowOrder(rows){
+  const list = Array.isArray(rows) ? rows.slice() : [];
+  if(!list.length || !audienceTransientPinnedRowKeys.size || !lastAudienceRenderedRows.length){
+    return list;
+  }
+  const previousIndexByKey = new Map();
+  lastAudienceRenderedRows.forEach((row, index)=>{
+    previousIndexByKey.set(makeAudiencePrintKey(row?.ci, row?.di, row?.procKey), index);
+  });
+  const pinnedMoves = [];
+  list.forEach((row)=>{
+    const key = makeAudiencePrintKey(row?.ci, row?.di, row?.procKey);
+    if(!audienceTransientPinnedRowKeys.has(key)) return;
+    const previousIndex = previousIndexByKey.get(key);
+    if(!Number.isFinite(previousIndex)) return;
+    pinnedMoves.push({ key, previousIndex });
+  });
+  pinnedMoves
+    .sort((a, b)=>a.previousIndex - b.previousIndex)
+    .forEach((move)=>{
+      const currentIndex = list.findIndex(row=>makeAudiencePrintKey(row?.ci, row?.di, row?.procKey) === move.key);
+      if(currentIndex < 0) return;
+      const [row] = list.splice(currentIndex, 1);
+      const targetIndex = Math.max(0, Math.min(move.previousIndex, list.length));
+      list.splice(targetIndex, 0, row);
+    });
+  return list;
 }
 
 function applyColorToSelectedAudienceRows(color){
@@ -17915,9 +18222,7 @@ function dedupeAudienceRowsByReferenceAndDebiteur(rows){
       map.set(key, row);
       return;
     }
-    const existingScore = getAudienceRowContentScore(existing);
-    const nextScore = getAudienceRowContentScore(row);
-    if(nextScore > existingScore){
+    if(compareAudienceRowsForDedupe(existing, row) > 0){
       map.set(key, row);
     }
   });
@@ -17931,9 +18236,10 @@ function isAudienceRowInvalid(row, duplicateKeySet = null){
   const sort = String(row?.draft?.sort ?? row?.p?.sort ?? '').trim();
   const hasAttNum = /att\s*(num|numero|num[eé]ro|n°|nº)/i.test(refDossier);
   const missingGlobal = !!row?.p?._missingGlobal;
+  const refClientMismatch = !!row?.p?._refClientMismatch;
   const duplicateKey = buildAudienceDuplicateKey(row);
   const isDuplicate = !!(duplicateKeySet && duplicateKey && duplicateKeySet.has(duplicateKey));
-  return isDuplicate || hasAttNum || missingGlobal || (!dateAudience && !juge && !sort);
+  return isDuplicate || hasAttNum || missingGlobal || refClientMismatch || (!dateAudience && !juge && !sort);
 }
 
 function getAudienceErrorRows(){
@@ -17991,7 +18297,7 @@ function syncAudienceFilterOptions(rows){
   tribunalOptions.innerHTML = `<option value="Tous"></option>${tribunaux.map(({ label })=>`<option value="${escapeHtml(label)}"></option>`).join('')}`;
 
   if(filterAudienceProcedure !== 'all' && !procedureSet.has(filterAudienceProcedure)){
-    filterAudienceProcedure = 'all';
+    setAudienceProcedureFilter('all', { syncUi: false });
   }
   if(filterAudienceTribunal !== 'all'){
     filterAudienceTribunal = resolveAudienceTribunalFilterKey(filterAudienceTribunal);

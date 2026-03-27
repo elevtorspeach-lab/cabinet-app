@@ -2160,7 +2160,7 @@ tr:hover{background:#f1f5f9}
 
 .audience-actions-row{
   display:grid;
-  grid-template-columns:auto 1fr auto;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
   align-items:center;
   gap:12px;
 }
@@ -2170,6 +2170,15 @@ tr:hover{background:#f1f5f9}
   display:flex;
   align-items:center;
   gap:8px;
+  min-width:0;
+}
+
+.audience-actions-left{
+  justify-content:flex-start;
+}
+
+.audience-actions-right{
+  justify-content:flex-end;
 }
 
 .audience-actions-center{
@@ -2177,6 +2186,9 @@ tr:hover{background:#f1f5f9}
   justify-content:center;
   align-items:center;
   min-width:0;
+  overflow:hidden;
+  justify-self:center;
+  width:100%;
 }
 
 .audience-checked-count{
@@ -2471,6 +2483,72 @@ tr:hover{background:#f1f5f9}
   font-size:16px;
 }
 
+#filterAudienceColor.audience-color-select-all{
+  background:#334155;
+  color:#fff;
+  border-color:#334155;
+}
+
+#filterAudienceColor.audience-color-select-blue{
+  background:#1e3a8a;
+  color:#fff;
+  border-color:#1e3a8a;
+}
+
+#filterAudienceColor.audience-color-select-green{
+  background:#166534;
+  color:#fff;
+  border-color:#166534;
+}
+
+#filterAudienceColor.audience-color-select-yellow{
+  background:#eab308;
+  color:#3b2f00;
+  border-color:#ca8a04;
+}
+
+#filterAudienceColor.audience-color-select-document-ok{
+  background:#0f766e;
+  color:#fff;
+  border-color:#0f766e;
+}
+
+#filterAudienceColor.audience-color-select-closed{
+  background:#6d28d9;
+  color:#fff;
+  border-color:#6d28d9;
+}
+
+#filterAudienceColor option[value="all"]{
+  background:#334155;
+  color:#fff;
+}
+
+#filterAudienceColor option[value="blue"]{
+  background:#1e3a8a;
+  color:#fff;
+}
+
+#filterAudienceColor option[value="green"]{
+  background:#166534;
+  color:#fff;
+}
+
+#filterAudienceColor option[value="yellow"]{
+  background:#eab308;
+  color:#3b2f00;
+}
+
+#filterAudienceColor option[value="document-ok"]{
+  background:#0f766e;
+  color:#fff;
+}
+
+#filterAudienceColor option[value="closed"]{
+  background:#6d28d9;
+  color:#fff;
+}
+
 .suivi-toolbar{
   display:flex;
   align-items:flex-end;
@@ -2569,10 +2647,17 @@ tr:hover{background:#f1f5f9}
 .color-filters{
   display:flex;
   gap:6px;
-  flex-wrap:wrap;
+  flex-wrap:nowrap;
   justify-content:center;
+  max-width:100%;
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding-bottom:2px;
+  scrollbar-width:thin;
 }
 .color-btn{
+  flex:0 0 auto;
+  white-space:nowrap;
   padding:6px 14px;
   border-radius:20px;
   border:none;
@@ -4261,6 +4346,27 @@ td[data-label="Actions"] .btn-danger{
   background:#b18af0;
 }
 
+#audienceSection tbody tr.color-blue td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-blue:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-green td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-green:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-red td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-red:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-yellow td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-yellow:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-document-ok td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-document-ok:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-purple-dark td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-purple-dark:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-purple-light td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-purple-light:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-green-purple td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-green-purple:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-yellow-purple td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input),
+#audienceSection tbody tr.color-yellow-purple:hover td input:not(.audience-print-check):not(.audience-ref-missing):not(.audience-refclient-mismatch-input){
+  background:transparent;
+}
+
 #audienceSection tbody tr.color-green-purple td:nth-child(2),
 #audienceSection tbody tr.color-green-purple td:nth-child(3),
 #audienceSection tbody tr.color-green-purple td:nth-child(4),
@@ -4382,9 +4488,9 @@ td[data-label="Actions"] .btn-danger{
 
 .status-arret{
   color:#ffffff;
-  background:linear-gradient(135deg,#fb923c 0%, #f97316 100%);
-  border-color:#f97316;
-  box-shadow:0 12px 22px rgba(249,115,22,.24);
+  background:linear-gradient(135deg,#b794f4 0%, #8b5cf6 100%);
+  border-color:#8b5cf6;
+  box-shadow:0 12px 22px rgba(139,92,246,.28);
 }
 
 .status-cloture{
