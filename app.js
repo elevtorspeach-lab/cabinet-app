@@ -10759,12 +10759,13 @@ function parseExcelData(rows, sheet = null){
   return { dossiers, audiences, referenceHints };
 }
 
-function buildExcelImportIssueMessage(issues){
+function buildExcelImportIssueMessage(issues, options = {}){
   if(!Array.isArray(issues) || !issues.length) return '';
   const maxIssues = 200;
   const limitedIssues = issues.slice(0, maxIssues);
   const groupedByLine = new Map();
   const unknownLineLabel = 'Ligne ?';
+  const introLabel = String(options?.introLabel || 'Erreurs classées par ligne :').trim() || 'Erreurs classées par ligne :';
 
   const parseIssue = (issueText)=>{
     const rawText = String(issueText || '').trim();
@@ -10820,7 +10821,7 @@ function buildExcelImportIssueMessage(issues){
     return a.lineNumber - b.lineNumber;
   });
 
-  const lines = ['Erreurs classées par ligne :'];
+  const lines = [introLabel];
   groups.forEach(group=>{
     lines.push(`${group.lineLabel}:`);
     group.details.forEach((detail, idx)=>{
@@ -10833,6 +10834,29 @@ function buildExcelImportIssueMessage(issues){
     lines.push(`... +${issues.length - maxIssues} autres lignes ignorées`);
   }
   return lines.join('\n');
+}
+
+function buildExcelImportResultDetails({ skippedIssues = [], warningIssues = [], infoIssues = [] } = {}){
+  const sections = [];
+  if(Array.isArray(skippedIssues) && skippedIssues.length){
+    sections.push(buildExcelImportIssueMessage(skippedIssues, {
+      introLabel: `Lignes non importées (${skippedIssues.length}) :`
+    }));
+  }
+  if(Array.isArray(warningIssues) && warningIssues.length){
+    if(sections.length) sections.push('');
+    sections.push(buildExcelImportIssueMessage(warningIssues, {
+      introLabel: `Avertissements sur lignes importées (${warningIssues.length}) :`
+    }));
+  }
+  if(Array.isArray(infoIssues) && infoIssues.length){
+    const visibleInfo = infoIssues.filter(Boolean);
+    if(visibleInfo.length){
+      if(sections.length) sections.push('');
+      sections.push(['Informations :', ...visibleInfo].join('\n'));
+    }
+  }
+  return sections.join('\n').trim() || 'Aucune erreur.';
 }
 
 function isExcelImportDisplayError(issue){
@@ -11449,11 +11473,27 @@ async function applyExcelImport(payload, options = {}){
     return;
   }
 
-  const importIgnoredRows = [];
+  const importSkippedRows = [];
+  const importWarningRows = [];
+  const importInfoRows = [];
   const knownProcedureSet = new Set(['ASS', 'Restitution', 'Commandement', 'Nantissement', 'Redressement', 'Vérification de créance', 'Liquidation judiciaire', 'SFDC', 'S/bien', 'Injonction']);
   const defaultDossierProceduresWhenMissing = ['ASS', 'Restitution', 'SFDC'];
   let importedDossiersCount = 0;
+  let skippedDossiersCount = 0;
   let linkedAudiencesCount = 0;
+  let skippedAudiencesCount = 0;
+  const addSkippedImportIssue = (message)=>{
+    const text = String(message || '').trim();
+    if(text) importSkippedRows.push(text);
+  };
+  const addWarningImportIssue = (message)=>{
+    const text = String(message || '').trim();
+    if(text) importWarningRows.push(text);
+  };
+  const addInfoImportIssue = (message)=>{
+    const text = String(message || '').trim();
+    if(text) importInfoRows.push(text);
+  };
 
   const clientMap = new Map();
   AppState.clients.forEach(c=>clientMap.set(String(c.name || '').trim().toLowerCase(), c));
@@ -11768,7 +11808,7 @@ async function applyExcelImport(payload, options = {}){
     const normalizedProcedureTokens = rawProcedureTokens.map(v=>parseProcedureToken(v));
     const unknownProcedureTokens = rawProcedureTokens.filter((raw, idx)=>!knownProcedureSet.has(normalizedProcedureTokens[idx]));
     if(unknownProcedureTokens.length){
-      importIgnoredRows.push(`${rowNumberLabel}: procédure inconnue (${unknownProcedureTokens.join(', ')})${dossierContext}`);
+      addWarningImportIssue(`${rowNumberLabel}: procédure inconnue (${unknownProcedureTokens.join(', ')})${dossierContext}`);
     }
     const clientName = row.clientName || row.debiteur || 'Client';
     const clientKey = String(clientName).trim().toLowerCase();
@@ -11792,13 +11832,14 @@ async function applyExcelImport(payload, options = {}){
       ? parsedProcedures.filter(proc=>!allowedDossierProcedureSet.has(proc))
       : [];
     if(movedToAudience.length){
-      importIgnoredRows.push(`${rowNumberLabel}: procédures déplacées vers import Audience (${movedToAudience.join(', ')})${dossierContext}`);
+      addWarningImportIssue(`${rowNumberLabel}: procédures déplacées vers import Audience (${movedToAudience.join(', ')})${dossierContext}`);
     }
     const procedures = allowedDossierProcedureSet
       ? parsedProcedures.filter(proc=>allowedDossierProcedureSet.has(proc))
       : parsedProcedures;
     if(!procedures.length){
-      importIgnoredRows.push(`${rowNumberLabel}: dossier ignoré (aucune procédure valide) - Ref client "${row.refClient || '-'}", Débiteur "${row.debiteur || '-'}"${dossierContext}`);
+      skippedDossiersCount += 1;
+      addSkippedImportIssue(`${rowNumberLabel}: dossier ignoré (aucune procédure valide) - Ref client "${row.refClient || '-'}", Débiteur "${row.debiteur || '-'}"${dossierContext}`);
       return;
     }
     const procedureDetails = {};
@@ -12034,17 +12075,19 @@ async function applyExcelImport(payload, options = {}){
     const hint = getReferenceHint(refKey);
     const hintedProc = parseProcedureToken(hint.procedure || '');
     if(!refKey){
-      importIgnoredRows.push(`${rowNumberLabel}: audience ignorée (ref dossier vide) - Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`);
+      skippedAudiencesCount += 1;
+      addSkippedImportIssue(`${rowNumberLabel}: audience ignorée (ref dossier vide) - Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`);
       return;
     }
     const normalizedAudienceDate = normalizeDateDDMMYYYY(row.audience || '');
     if(String(row.audience || '').trim() && !normalizedAudienceDate){
-      importIgnoredRows.push(`${rowNumberLabel}: date audience invalide "${row.audience}" (format attendu jj/mm/aaaa)${audienceBaseContext}`);
+      addWarningImportIssue(`${rowNumberLabel}: date audience invalide "${row.audience}" (format attendu jj/mm/aaaa)${audienceBaseContext}`);
     }
     const explicitProcRaw = String(row?.procedureText || '').trim();
     const explicitProc = explicitProcRaw ? parseProcedureToken(explicitProcRaw) : '';
     if(explicitProcRaw && !knownProcedureSet.has(explicitProc)){
-      importIgnoredRows.push(`${rowNumberLabel}: procédure audience inconnue "${explicitProcRaw}"${audienceBaseContext}`);
+      skippedAudiencesCount += 1;
+      addSkippedImportIssue(`${rowNumberLabel}: procédure audience inconnue "${explicitProcRaw}"${audienceBaseContext}`);
       return;
     }
     const rowRefClientKeys = getClientReferenceMatchKeys(row.refClient || '');
@@ -12082,7 +12125,8 @@ async function applyExcelImport(payload, options = {}){
           ? explicitProc
           : (hintedProc && knownProcedureSet.has(hintedProc) ? hintedProc : 'ASS');
         if(audienceOnlyMode && !isAudienceProcedure(procFallback)){
-          importIgnoredRows.push(`${rowNumberLabel}: procédure "${procFallback}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
+          skippedAudiencesCount += 1;
+          addSkippedImportIssue(`${rowNumberLabel}: procédure "${procFallback}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
           return;
         }
         const orphanDossier = getOrCreateAudienceOrphanDossier(refKey, row, procFallback);
@@ -12094,7 +12138,7 @@ async function applyExcelImport(payload, options = {}){
             || normalizeReferenceValue(String(row?.refClient || '').trim()),
           rowDebiteur: String(row?.debiteur || '').trim().toLowerCase()
         }];
-        importIgnoredRows.push(`${rowNumberLabel}: ${ref || '-'} introuvable dans dossier global (ajouté à Audience, ligne marquée en rouge)${missingRefContext}`);
+        addWarningImportIssue(`${rowNumberLabel}: ${ref || '-'} introuvable dans dossier global (ajouté à Audience, ligne marquée en rouge)${missingRefContext}`);
       }else{
         candidates = fallback;
       }
@@ -12126,7 +12170,11 @@ async function applyExcelImport(payload, options = {}){
       });
       match = bestCandidate || activeCandidates[0];
     }
-    if(!match) return;
+    if(!match){
+      skippedAudiencesCount += 1;
+      addSkippedImportIssue(`${rowNumberLabel}: audience ignorée (aucun dossier correspondant trouvé) - Réf dossier "${ref || '-'}", Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`);
+      return;
+    }
     const { dossier, proc } = match;
     let refClientMismatch = null;
     if(rowRefClientKeySet.size){
@@ -12142,7 +12190,7 @@ async function applyExcelImport(payload, options = {}){
           provided: givenRefClient,
           expected: expectedRefClient
         };
-        importIgnoredRows.push(
+        addWarningImportIssue(
           `${rowNumberLabel}: incohérence ref client pour Réf dossier "${ref || '-'}" et Débiteur "${row.debiteur || '-'}" (fourni: "${givenRefClient}" | dossier global: "${expectedRefClient}")${missingRefContext}`
         );
       }
@@ -12153,7 +12201,8 @@ async function applyExcelImport(payload, options = {}){
     if(!targetProc) targetProc = 'ASS';
     if(audienceOnlyMode && !isAudienceProcedure(targetProc)){
       if(explicitProc && !isAudienceProcedure(explicitProc)){
-        importIgnoredRows.push(`${rowNumberLabel}: procédure "${explicitProc}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
+        skippedAudiencesCount += 1;
+        addSkippedImportIssue(`${rowNumberLabel}: procédure "${explicitProc}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
         return;
       }
       targetProc = 'ASS';
@@ -12228,7 +12277,7 @@ async function applyExcelImport(payload, options = {}){
     const reconciliation = reconcileAudienceOrphanDossiers();
     reconciledOrphans = reconciliation.matchedDossiers;
     if(reconciledOrphans > 0){
-      importIgnoredRows.push(`Rapprochement automatique: ${reconciledOrphans} dossier(s) audience hors global fusionné(s).`);
+      addInfoImportIssue(`Rapprochement automatique: ${reconciledOrphans} dossier(s) audience hors global fusionné(s).`);
     }
   }
 
@@ -12244,20 +12293,24 @@ async function applyExcelImport(payload, options = {}){
   handleDossierDataChange({ audience: true });
   await persistAppStateNow();
   refreshPrimaryViews();
-  const importDisplayErrors = importIgnoredRows.filter(isExcelImportDisplayError);
-  const issuesText = buildExcelImportIssueMessage(importDisplayErrors);
+  const importDisplaySkipped = importSkippedRows.filter(isExcelImportDisplayError);
+  const importDisplayWarnings = importWarningRows.filter(isExcelImportDisplayError);
+  const issuesText = buildExcelImportResultDetails({
+    skippedIssues: importDisplaySkipped,
+    warningIssues: importDisplayWarnings,
+    infoIssues: importInfoRows
+  });
   const summaryLines = [
     `Import terminé.`,
     `Dossiers détectés: ${dossiers.length}`,
     `Dossiers importés: ${importedDossiersCount}`,
+    `Dossiers non importés: ${skippedDossiersCount}`,
     `Audience hors global rapprochée: ${reconciledOrphans}`,
     `Audiences détectées: ${audiences.length}`,
-    `Audiences liées: ${linkedAudiencesCount}`,
-    `Erreurs ignorées (non bloquantes): ${importDisplayErrors.length}`
+    `Audiences importées: ${linkedAudiencesCount}`,
+    `Audiences non importées: ${skippedAudiencesCount}`,
+    `Avertissements sur lignes importées: ${importDisplayWarnings.length}`
   ];
-  if(!importDossiers && importAudiences){
-    summaryLines.push('Mode Audience: création de nouveaux dossiers globaux désactivée.');
-  }
   const summary = summaryLines.join('\n');
   closeImportProgressModal(true);
   showExcelImportResult(summary, issuesText);
@@ -18895,11 +18948,11 @@ function getAudienceRowsDedupedCached(){
   ){
     return audienceRowsDedupeCache;
   }
-  const deduped = dedupeAudienceRowsByReferenceAndDebiteur(getAudienceRowsRawCached());
-  audienceRowsDedupeCache = deduped;
+  const rows = getAudienceRowsRawCached();
+  audienceRowsDedupeCache = rows;
   audienceRowsDedupeCacheVersion = audienceRowsRawDataVersion;
   audienceRowsDedupeCacheViewerKey = viewerKey;
-  return deduped;
+  return rows;
 }
 
 function getAudienceRows(options = {}){
