@@ -62,6 +62,7 @@ function shouldShowDiligenceCommandementColumns(rows){
 
 function getDiligenceColCount(){
   if(diligenceVirtualShowCommandementColumns) return 12;
+  if(diligenceVirtualCompactProcedureMode === 'sfdc' || diligenceVirtualCompactProcedureMode === 'sbien') return 12;
   return diligenceVirtualShowAssColumns ? 18 : 15;
 }
 
@@ -136,9 +137,7 @@ function buildDiligenceHeadHtml(){
     <th>Référence dossier</th>
     ${diligenceVirtualShowAssColumns ? '<th>Juge</th><th>Sort</th>' : ''}
     <th>Ordonnance</th>
-    <th>${notificationNoHeader}</th>
-    <th>${notificationSortHeader}</th>
-    <th>${certificatHeader}</th>
+    ${showSharedNotificationColumns ? `<th>${notificationNoHeader}</th><th>${notificationSortHeader}</th><th>${certificatHeader}</th>` : ''}
     <th>${executionHeader}</th>
     <th>${villeHeader}</th>
     <th>${delegationHeader}</th>
@@ -221,6 +220,18 @@ function renderDiligenceRowHtml(row){
     `;
   }
   const isAssNbLayout = isDiligenceAssNbLayout(row);
+  const sharedNotificationCells = isAssNbLayout
+    ? `
+      <td>${renderDiligenceEditableCell(row, procEncoded, notificationNoField, notificationNoValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, notificationSortField, notificationSortValue)}</td>
+    `
+    : (showSharedNotificationColumns
+      ? `
+        <td>${renderDiligenceEditableCell(row, procEncoded, notificationNoField, notificationNoValue)}</td>
+        <td>${renderDiligenceEditableCell(row, procEncoded, notificationSortField, notificationSortValue)}</td>
+        <td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue)}</td>
+      `
+      : '');
   const afterNotificationCells = isAssNbLayout
     ? `
       <td>${renderDiligenceEditableCell(row, procEncoded, 'lettreRec', row.details?.lettreRec || '')}</td>
@@ -233,7 +244,6 @@ function renderDiligenceRowHtml(row){
       <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
     `
     : `
-      <td>${showSharedNotificationColumns ? renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue) : ''}</td>
       <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue)}</td>
       <td>${renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue)}</td>
       <td>${renderDiligenceEditableCell(row, procEncoded, delegationField, delegationValue)}</td>
@@ -260,8 +270,7 @@ function renderDiligenceRowHtml(row){
       ${diligenceVirtualShowAssColumns ? `<td>${renderDiligenceEditableCell(row, procEncoded, 'juge', judgeValue)}</td>` : ''}
       ${diligenceVirtualShowAssColumns ? `<td>${renderDiligenceEditableCell(row, procEncoded, 'sort', sortValue)}</td>` : ''}
       <td>${renderDiligenceEditableCell(row, procEncoded, ordField, ordValue)}</td>
-      <td>${showSharedNotificationColumns ? renderDiligenceEditableCell(row, procEncoded, notificationNoField, notificationNoValue) : ''}</td>
-      <td>${showSharedNotificationColumns ? renderDiligenceEditableCell(row, procEncoded, notificationSortField, notificationSortValue) : ''}</td>
+      ${sharedNotificationCells}
       ${afterNotificationCells}
     </tr>
   `;

@@ -238,6 +238,7 @@ function renderSuiviRowHtml(row){
   const isDuplicate = isSuiviRowDuplicate(row);
   const dossierType = String(row?.d?.type || '').trim() || '-';
   const referenceClient = String(row?.d?.referenceClient || '').trim() || '-';
+  const statusSnapshot = getDossierDisplayStatusSnapshot(row.d);
   return `
     <tr class="${isDuplicate ? 'color-red' : ''}">
       <td data-label="Sélection">
@@ -255,7 +256,7 @@ function renderSuiviRowHtml(row){
       <td data-label="Débiteur">${escapeHtml(row.d.debiteur || '-')}</td>
       <td data-label="Montant">${escapeHtml(row.d.montant || '-')}</td>
       <td data-label="Ville">${escapeHtml(row.d.ville || '-')}</td>
-      <td data-label="Statut">${renderStatusDisplay(row.d.statut || 'En cours', row.d.statutDetails || '')}</td>
+      <td data-label="Statut">${renderStatusDisplay(statusSnapshot.statut || 'En cours', statusSnapshot.detail || '')}</td>
       <td data-label="Actions">
         <button type="button" class="btn-primary" data-action="view" data-client-id="${row.c.id}" data-dossier-index="${row.index}">
           <i class="fa-solid fa-eye"></i>
@@ -657,7 +658,7 @@ function renderAudience(options = {}){
   runAudienceFilterInWorker(
     colorFilteredRows.map((row, idx)=>({
       idx,
-      haystack: row.__haystack || (row.__haystack = buildAudienceSearchHaystack(row.c?.name, row.d, row.procKey, row.p, row.draft))
+      haystack: row.__haystack || (row.__haystack = buildAudienceSearchHaystack(row.c?.name, row.d, row.procKey, row.p, row.draft, row))
     })),
     audienceQuery,
     requestId

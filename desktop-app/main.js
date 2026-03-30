@@ -102,6 +102,21 @@ async function ensureDesktopStateFileForOpen() {
   return filePath;
 }
 
+async function resolveAppIndexPath() {
+  const packagedIndexPath = path.join(__dirname, 'offline-web', 'index.html');
+  if (app.isPackaged) {
+    return packagedIndexPath;
+  }
+
+  const projectRootIndexPath = path.resolve(__dirname, '..', 'index.html');
+  try {
+    await fs.access(projectRootIndexPath);
+    return projectRootIndexPath;
+  } catch (_err) {
+    return packagedIndexPath;
+  }
+}
+
 async function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -115,7 +130,7 @@ async function createWindow() {
     }
   });
 
-  const appIndexPath = path.join(__dirname, 'offline-web', 'index.html');
+  const appIndexPath = await resolveAppIndexPath();
   await win.loadFile(appIndexPath, {
     query: {
       apiBase: DESKTOP_REMOTE_API_BASE,
