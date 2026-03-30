@@ -142,6 +142,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
   const hasError = isAudienceRowInvalid(row, duplicateKeySet);
   const isMissingGlobal = !!row?.p?._missingGlobal;
   const isRefClientMismatch = !!row?.p?._refClientMismatch;
+  const audienceImportErrorMessage = String(row?.p?._audienceImportErrorMessage || '').trim();
   const canFixRefClient = canEdit && (isRefClientMismatch || isMissingGlobal);
   const refClientCellClass = (isRefClientMismatch || isMissingGlobal) ? 'audience-refclient-mismatch' : '';
   const refClientDisplay = isRefClientMismatch
@@ -152,6 +153,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
     : (isRefClientMismatch
       ? 'Ref client audience introuvable dans le dossier global. Modifiez-la ici pour corriger rapidement.'
       : '');
+  const refDossierErrorMessage = audienceImportErrorMessage || (isMissingGlobal ? 'Introuvable dans dossier global' : '');
   const rowColor = (isDuplicate || hasError) ? 'red' : safeColor;
   const procKeyEncoded = encodeURIComponent(String(procKey));
   const keyEncoded = encodeURIComponent(String(key));
@@ -179,7 +181,7 @@ function renderAudienceRowHtml(row, duplicateKeySet){
       <td data-label="Débiteur">${escapeHtml(d.debiteur || '-')}</td>
       <td data-label="Référence dossier">
         <input class="${isMissingGlobal ? 'audience-ref-missing' : ''}" value="${escapeAttr(getAudienceRowDraftReferenceValue(row))}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','refDossier',this.value)" onkeydown="confirmAudienceInlineEditFromEncoded('${keyEncoded}','refDossier',this,event)">
-        ${isMissingGlobal ? '<div class="audience-inline-error">Introuvable dans dossier global</div>' : ''}
+        ${refDossierErrorMessage ? `<div class="audience-inline-error">${escapeHtml(refDossierErrorMessage)}</div>` : ''}
       </td>
       <td data-label="Date d’audience"><input value="${escapeAttr(audienceDateValue)}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','dateAudience',this.value)" onblur="normalizeAudienceDateDraftInputFromEncoded('${keyEncoded}', this)" onkeydown="confirmAudienceInlineEditFromEncoded('${keyEncoded}','dateAudience',this,event)"></td>
       <td data-label="Juge"><input value="${escapeAttr(draft.juge || p.juge || '')}" ${canEdit ? '' : 'readonly'} oninput="updateAudienceDraftFromEncoded('${keyEncoded}','juge',this.value)" onkeydown="confirmAudienceInlineEditFromEncoded('${keyEncoded}','juge',this,event)"></td>

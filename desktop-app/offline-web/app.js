@@ -11541,7 +11541,7 @@ async function applyExcelImport(payload, options = {}){
     return client;
   };
 
-  const buildAudienceOrphanDossierKey = (refKey, row)=>{
+  const buildAudienceOrphanDossierKey = (refKey, row, options = {})=>{
     const safeRef = String(refKey || '').trim();
     const safeRefClient = getClientReferenceMatchKeys(String(row?.refClient || '').trim())[0]
       || normalizeReferenceValue(String(row?.refClient || '').trim());
@@ -11549,11 +11549,18 @@ async function applyExcelImport(payload, options = {}){
       .trim()
       .toLowerCase()
       .replace(/\s+/g, ' ');
+    if(options.forceUnique){
+      const batchId = String(audienceImportEntry?.id || '').trim();
+      const rowKey = Number.isFinite(Number(row?.rowNumber))
+        ? `row-${Number(row.rowNumber)}`
+        : `stamp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return `${safeRef}::${safeRefClient}::${safeDebiteur}::${batchId}::${rowKey}`;
+    }
     return `${safeRef}::${safeRefClient}::${safeDebiteur}`;
   };
 
-  const getOrCreateAudienceOrphanDossier = (refKey, row, preferredProc = 'ASS')=>{
-    const key = buildAudienceOrphanDossierKey(refKey, row);
+  const getOrCreateAudienceOrphanDossier = (refKey, row, preferredProc = 'ASS', options = {})=>{
+    const key = buildAudienceOrphanDossierKey(refKey, row, options);
     const normalizedPreferredProc = parseProcedureToken(preferredProc || '') || 'ASS';
     if(audienceOrphanDossierMap.has(key)){
       const existing = audienceOrphanDossierMap.get(key);
@@ -11603,6 +11610,59 @@ async function applyExcelImport(payload, options = {}){
       audienceImportEntry.createdOrphanDossierUids.push(dossier.importUid);
     }
     return dossier;
+  };
+
+  const importAudienceIssueAsOrphanRow = (row, preferredProc = 'ASS', issueMessage = '')=>{
+    const normalizedPreferredProc = parseProcedureToken(preferredProc || '') || 'ASS';
+    const fallbackRef = String(row?.refDossier || '').trim();
+    const fallbackRefKey = normalizeReferenceForAudienceLookup(fallbackRef)
+      || `__audience_issue__${String(audienceImportEntry?.id || 'local').trim()}::${Number.isFinite(Number(row?.rowNumber)) ? Number(row.rowNumber) : Date.now()}`;
+    const orphanDossier = getOrCreateAudienceOrphanDossier(fallbackRefKey, row, normalizedPreferredProc, { forceUnique: true });
+    if(!orphanDossier.procedureDetails) orphanDossier.procedureDetails = {};
+    if(!orphanDossier.procedureDetails[normalizedPreferredProc]){
+      orphanDossier.procedureDetails[normalizedPreferredProc] = {};
+    }
+    recordAudienceImportOperation(orphanDossier, normalizedPreferredProc);
+    const p = orphanDossier.procedureDetails[normalizedPreferredProc];
+    p._missingGlobal = true;
+    p._audienceImportErrorMessage = String(issueMessage || '').trim();
+    p._audienceImportBatchId = audienceImportEntry ? audienceImportEntry.id : '';
+    if(fallbackRef || !String(p.referenceClient || '').trim()) p.referenceClient = fallbackRef;
+    const audienceRaw = String(row?.audience || '').trim();
+    if(audienceRaw){
+      p.audience = normalizeDateDDMMYYYY(audienceRaw) || audienceRaw;
+    }
+    if(row?.juge) p.juge = row.juge;
+    if(row?.sort) p.sort = row.sort;
+    if(row?.tribunal) p.tribunal = row.tribunal;
+    const dateDepotRaw = String(row?.dateDepot || '').trim();
+    if(dateDepotRaw){
+      p.depotLe = normalizeDateDDMMYYYY(dateDepotRaw) || dateDepotRaw;
+    }
+    const importedOrdonnanceStatus = normalizeDiligenceOrdonnance(row?.sortOrd || '');
+    if(row?.hasSortOrdColumn === true){
+      p._audienceSortOrd = String(row?.sortOrd || '').trim();
+    }
+    if(importedOrdonnanceStatus === 'att') p.attOrdOrOrdOk = 'att ord';
+    if(importedOrdonnanceStatus === 'ok') p.attOrdOrOrdOk = 'ord ok';
+    if(row?.hasStatutColumn === true){
+      const importedStatus = normalizeImportedDossierStatus(row?.statutRaw || '');
+      orphanDossier.statut = importedStatus.statut || orphanDossier.statut || 'En cours';
+      orphanDossier.statutDetails = importedStatus.detail || '';
+    }
+    const normalizedProcedures = normalizeProcedures(orphanDossier);
+    orphanDossier.procedureList = normalizedProcedures;
+    orphanDossier.procedure = normalizedProcedures.join(', ');
+    dossierAudienceRefsCache.delete(orphanDossier);
+    dossierClientRefMatchCache.delete(orphanDossier);
+    return {
+      dossier: orphanDossier,
+      client: getOrCreateAudienceOrphanClient(),
+      proc: normalizedPreferredProc,
+      rowRefClient: getClientReferenceMatchKeys(String(row?.refClient || '').trim())[0]
+        || normalizeReferenceValue(String(row?.refClient || '').trim()),
+      rowDebiteur: String(row?.debiteur || '').trim().toLowerCase()
+    };
   };
 
   const recordAudienceImportOperation = (dossier, procKey)=>{
@@ -12037,20 +12097,27 @@ async function applyExcelImport(payload, options = {}){
     const refKey = normalizeReferenceForAudienceLookup(ref);
     const hint = getReferenceHint(refKey);
     const hintedProc = parseProcedureToken(hint.procedure || '');
+    const explicitProcRaw = String(row?.procedureText || '').trim();
+    const explicitProc = explicitProcRaw ? parseProcedureToken(explicitProcRaw) : '';
+    const preferredIssueProc = explicitProc && knownProcedureSet.has(explicitProc)
+      ? explicitProc
+      : (hintedProc && knownProcedureSet.has(hintedProc) ? hintedProc : 'ASS');
     if(!refKey){
-      skippedAudiencesCount += 1;
-      addSkippedImportIssue(`${rowNumberLabel}: audience ignorée (ref dossier vide) - Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`);
+      const issueMessage = 'Ref dossier vide dans fichier audience';
+      importAudienceIssueAsOrphanRow(row, preferredIssueProc, issueMessage);
+      linkedAudiencesCount += 1;
+      addWarningImportIssue(`${rowNumberLabel}: ${issueMessage} (ajouté à Audience, ligne marquée en rouge)${audienceBaseContext}`);
       return;
     }
     const normalizedAudienceDate = normalizeDateDDMMYYYY(row.audience || '');
     if(String(row.audience || '').trim() && !normalizedAudienceDate){
       addWarningImportIssue(`${rowNumberLabel}: date audience invalide "${row.audience}" (format attendu jj/mm/aaaa)${audienceBaseContext}`);
     }
-    const explicitProcRaw = String(row?.procedureText || '').trim();
-    const explicitProc = explicitProcRaw ? parseProcedureToken(explicitProcRaw) : '';
     if(explicitProcRaw && !knownProcedureSet.has(explicitProc)){
-      skippedAudiencesCount += 1;
-      addSkippedImportIssue(`${rowNumberLabel}: procédure audience inconnue "${explicitProcRaw}"${audienceBaseContext}`);
+      const issueMessage = `Procédure audience inconnue: ${explicitProcRaw}`;
+      importAudienceIssueAsOrphanRow(row, 'ASS', issueMessage);
+      linkedAudiencesCount += 1;
+      addWarningImportIssue(`${rowNumberLabel}: ${issueMessage} (ajouté à Audience, ligne marquée en rouge)${audienceBaseContext}`);
       return;
     }
     const rowRefClientKeys = getClientReferenceMatchKeys(row.refClient || '');
@@ -12088,11 +12155,13 @@ async function applyExcelImport(payload, options = {}){
           ? explicitProc
           : (hintedProc && knownProcedureSet.has(hintedProc) ? hintedProc : 'ASS');
         if(audienceOnlyMode && !isAudienceProcedure(procFallback)){
-          skippedAudiencesCount += 1;
-          addSkippedImportIssue(`${rowNumberLabel}: procédure "${procFallback}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
+          const issueMessage = `Procédure "${procFallback}" ignorée pour import Audience`;
+          importAudienceIssueAsOrphanRow(row, 'ASS', issueMessage);
+          linkedAudiencesCount += 1;
+          addWarningImportIssue(`${rowNumberLabel}: ${issueMessage} (ajouté à Audience, ligne marquée en rouge)${audienceBaseContext}`);
           return;
         }
-        const orphanDossier = getOrCreateAudienceOrphanDossier(refKey, row, procFallback);
+        const orphanDossier = getOrCreateAudienceOrphanDossier(refKey, row, procFallback, { forceUnique: true });
         candidates = [{
           dossier: orphanDossier,
           client: getOrCreateAudienceOrphanClient(),
@@ -12134,8 +12203,10 @@ async function applyExcelImport(payload, options = {}){
       match = bestCandidate || activeCandidates[0];
     }
     if(!match){
-      skippedAudiencesCount += 1;
-      addSkippedImportIssue(`${rowNumberLabel}: audience ignorée (aucun dossier correspondant trouvé) - Réf dossier "${ref || '-'}", Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`);
+      const issueMessage = `Aucun dossier correspondant trouvé pour Réf dossier "${ref || '-'}"`;
+      importAudienceIssueAsOrphanRow(row, preferredIssueProc, issueMessage);
+      linkedAudiencesCount += 1;
+      addWarningImportIssue(`${rowNumberLabel}: ${issueMessage} (ajouté à Audience, ligne marquée en rouge)${audienceBaseContext}`);
       return;
     }
     const { dossier, proc } = match;
@@ -12164,8 +12235,10 @@ async function applyExcelImport(payload, options = {}){
     if(!targetProc) targetProc = 'ASS';
     if(audienceOnlyMode && !isAudienceProcedure(targetProc)){
       if(explicitProc && !isAudienceProcedure(explicitProc)){
-        skippedAudiencesCount += 1;
-        addSkippedImportIssue(`${rowNumberLabel}: procédure "${explicitProc}" ignorée (import Audience réservé aux procédures hors SFDC/S-bien/Injonction)${audienceBaseContext}`);
+        const issueMessage = `Procédure "${explicitProc}" ignorée pour import Audience`;
+        importAudienceIssueAsOrphanRow(row, 'ASS', issueMessage);
+        linkedAudiencesCount += 1;
+        addWarningImportIssue(`${rowNumberLabel}: ${issueMessage} (ajouté à Audience, ligne marquée en rouge)${audienceBaseContext}`);
         return;
       }
       targetProc = 'ASS';
@@ -12174,9 +12247,11 @@ async function applyExcelImport(payload, options = {}){
     const audienceSlotKey = `${targetDossierUid || ''}::${String(targetProc || '').trim()}`;
     const existingAudienceSlot = audienceImportSlotMap.get(audienceSlotKey);
     if(existingAudienceSlot){
-      skippedAudiencesCount += 1;
-      addSkippedImportIssue(
-        `${rowNumberLabel}: audience ignorée (même dossier/procédure déjà importé à ${existingAudienceSlot.rowLabel}) - Réf dossier "${ref || '-'}", Procédure "${targetProc}", Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`
+      const issueMessage = `Même dossier/procédure déjà importé à ${existingAudienceSlot.rowLabel}`;
+      importAudienceIssueAsOrphanRow(row, targetProc, issueMessage);
+      linkedAudiencesCount += 1;
+      addWarningImportIssue(
+        `${rowNumberLabel}: ${issueMessage} (ajouté à Audience, ligne marquée en rouge) - Réf dossier "${ref || '-'}", Procédure "${targetProc}", Débiteur "${row.debiteur || '-'}"${audienceBaseContext}`
       );
       return;
     }
@@ -18601,6 +18676,7 @@ function orderAudienceRowsByWhiteFirst(rows){
 
 function buildAudienceDuplicateKey(row){
   if(typeof row?.__dupKey === 'string') return row.__dupKey;
+  if(row?.p?._missingGlobal || row?.p?._audienceImportErrorMessage) return '';
   const refDossier = normalizeReferenceForAudienceLookup(getAudienceRowDraftReferenceValue(row));
   const procedure = String(row?.procKey || '').trim().toLowerCase();
   const debiteur = String(row?.d?.debiteur || '')
