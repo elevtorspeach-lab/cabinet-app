@@ -16004,6 +16004,15 @@ function isDiligenceAssAudienceDue(details){
   return audienceDay < todayStart.getTime();
 }
 
+function hasDiligenceAudienceValue(row){
+  return String(row?.details?.audience || '').trim().length > 0;
+}
+
+function shouldRestrictDiligenceAssAttOrdToAudience(){
+  return getDiligenceProcedureFilterValue(filterDiligenceProcedure) === 'ASS'
+    && normalizeDiligenceOrdonnance(filterDiligenceOrdonnance) === 'att';
+}
+
 function getDiligenceRows(){
   const viewerKey = getAudienceViewerCacheKey();
   if(
@@ -16705,7 +16714,6 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
 }
 
 const DILIGENCE_BATCH_UPDATE_FIELDS = new Set([
-  'attOrdOrOrdOk',
   'attDelegationOuDelegat',
   'sort'
 ]);
@@ -16854,6 +16862,7 @@ function updateDiligenceFieldEncoded(clientId, dossierIndex, procKeyEncoded, fie
 function getFilteredDiligenceRows(allRows){
   const q = normalizeDiligenceSearchQuery($('diligenceSearchInput')?.value || '');
   const executionOnlyQuery = isDiligenceExecutionOnlyQuery(q);
+  const restrictAssAttOrdToAudience = shouldRestrictDiligenceAssAttOrdToAudience();
   const filterKey = [
     q,
     executionOnlyQuery ? 'execution-only' : 'default',
@@ -16861,7 +16870,8 @@ function getFilteredDiligenceRows(allRows){
     filterDiligenceSort,
     filterDiligenceDelegation,
     filterDiligenceOrdonnance,
-    filterDiligenceTribunal
+    filterDiligenceTribunal,
+    restrictAssAttOrdToAudience ? 'audience-only' : 'all-ass-att-ord'
   ].join('||');
   if(allRows === diligenceFilteredRowsCacheInput && filterKey === diligenceFilteredRowsCacheKey){
     return diligenceFilteredRowsCacheOutput;
@@ -16874,6 +16884,7 @@ function getFilteredDiligenceRows(allRows){
       filterDiligenceOrdonnance !== 'all'
       && normalizeDiligenceOrdonnance(row.ordonnance) !== normalizeDiligenceOrdonnance(filterDiligenceOrdonnance)
     ) return false;
+    if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !hasDiligenceAudienceValue(row)) return false;
     if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
     if(!q) return true;
     if(executionOnlyQuery) return hasDiligenceExecutionNumber(row);
@@ -17949,9 +17960,15 @@ function hasSuiviProcedureHistoryActivity(dossier, procName){
   });
 }
 
+function isPendingDepotReferenceValue(value){
+  return String(value || '').trim().includes('.');
+}
+
 function isSuiviProcedurePendingDepot(dossier, procName, details){
   const procDetails = details && typeof details === 'object' ? details : {};
-  if(String(procDetails.referenceClient || '').trim()) return false;
+  const procedureReference = String(procDetails.referenceClient || '').trim();
+  if(isPendingDepotReferenceValue(procedureReference)) return true;
+  if(procedureReference) return false;
   return hasSuiviProcedureHistoryActivity(dossier, procName);
 }
 

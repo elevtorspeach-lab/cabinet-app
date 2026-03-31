@@ -455,6 +455,7 @@ function renderDiligence(options = {}){
 
   if(diligenceQuery && allRows.length >= 1200 && !!getDiligenceFilterWorker()){
     const executionOnlyQuery = isDiligenceExecutionOnlyQuery(diligenceQuery);
+    const restrictAssAttOrdToAudience = shouldRestrictDiligenceAssAttOrdToAudience();
     const narrowedRows = allRows.filter(row=>{
       if(!matchesDiligenceProcedureFilter(row, filterDiligenceProcedure)) return false;
       if(filterDiligenceSort !== 'all' && row.sort !== filterDiligenceSort) return false;
@@ -463,6 +464,7 @@ function renderDiligence(options = {}){
         filterDiligenceOrdonnance !== 'all'
         && normalizeDiligenceOrdonnance(row.ordonnance) !== normalizeDiligenceOrdonnance(filterDiligenceOrdonnance)
       ) return false;
+      if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !hasDiligenceAudienceValue(row)) return false;
       if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
       return true;
     });
