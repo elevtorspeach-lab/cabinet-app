@@ -13621,6 +13621,21 @@ function setupEvents(){
   audienceColorButtons.forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const color = btn.dataset.color;
+      if(color === 'all'){
+        filterAudienceErrorsOnly = false;
+        const errBtn = $('audienceErrorsBtn');
+        if(errBtn) errBtn.classList.remove('active');
+        clearAudiencePrintSelection({ immediate: true });
+        filterAudienceCheckedFirst = false;
+        if($('filterAudienceCheckedOrder')) $('filterAudienceCheckedOrder').value = 'default';
+        filterAudienceColor = 'all';
+        const colorSel = $('filterAudienceColor');
+        if(colorSel) colorSel.value = 'all';
+        setSelectedAudienceColor('all', false);
+        syncAudienceColorFilterSelectAppearance();
+        renderAudience();
+        return;
+      }
       if(color !== 'all' && !audiencePrintSelection.size){
         syncAudienceColorActionAvailability();
         alert('Cochez d’abord un ou plusieurs dossiers avant de choisir une couleur.');
