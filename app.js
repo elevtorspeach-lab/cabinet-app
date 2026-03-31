@@ -16004,13 +16004,36 @@ function isDiligenceAssAudienceDue(details){
   return audienceDay < todayStart.getTime();
 }
 
-function hasDiligenceAudienceValue(row){
-  return String(row?.details?.audience || '').trim().length > 0;
-}
-
 function shouldRestrictDiligenceAssAttOrdToAudience(){
   return getDiligenceProcedureFilterValue(filterDiligenceProcedure) === 'ASS'
     && normalizeDiligenceOrdonnance(filterDiligenceOrdonnance) === 'att';
+}
+
+function getDiligenceAudienceAssAttOrdKeySet(){
+  const viewerKey = getAudienceViewerCacheKey();
+  if(
+    getDiligenceAudienceAssAttOrdKeySet._cache
+    && getDiligenceAudienceAssAttOrdKeySet._version === audienceRowsRawDataVersion
+    && getDiligenceAudienceAssAttOrdKeySet._viewerKey === viewerKey
+  ){
+    return getDiligenceAudienceAssAttOrdKeySet._cache;
+  }
+  const set = new Set();
+  getAudienceRowsRawCached().forEach((row)=>{
+    if(row?.__procFilterKey !== 'ASS') return;
+    if(!audienceRowMatchesColorFilter(row, 'green')) return;
+    set.add(makeDiligencePrintKey(row?.c?.id, row?.di, row?.procKey));
+  });
+  getDiligenceAudienceAssAttOrdKeySet._cache = set;
+  getDiligenceAudienceAssAttOrdKeySet._version = audienceRowsRawDataVersion;
+  getDiligenceAudienceAssAttOrdKeySet._viewerKey = viewerKey;
+  return set;
+}
+
+function isDiligenceAudienceAssAttOrdRow(row){
+  return getDiligenceAudienceAssAttOrdKeySet().has(
+    makeDiligencePrintKey(row?.clientId, row?.dossierIndex, row?.procedure)
+  );
 }
 
 function getDiligenceRows(){
@@ -16863,6 +16886,7 @@ function getFilteredDiligenceRows(allRows){
   const q = normalizeDiligenceSearchQuery($('diligenceSearchInput')?.value || '');
   const executionOnlyQuery = isDiligenceExecutionOnlyQuery(q);
   const restrictAssAttOrdToAudience = shouldRestrictDiligenceAssAttOrdToAudience();
+  const audienceAssAttOrdKeySet = restrictAssAttOrdToAudience ? getDiligenceAudienceAssAttOrdKeySet() : null;
   const filterKey = [
     q,
     executionOnlyQuery ? 'execution-only' : 'default',
@@ -16871,7 +16895,7 @@ function getFilteredDiligenceRows(allRows){
     filterDiligenceDelegation,
     filterDiligenceOrdonnance,
     filterDiligenceTribunal,
-    restrictAssAttOrdToAudience ? 'audience-only' : 'all-ass-att-ord'
+    restrictAssAttOrdToAudience ? `audience-green-only:${audienceAssAttOrdKeySet?.size || 0}` : 'all-ass-att-ord'
   ].join('||');
   if(allRows === diligenceFilteredRowsCacheInput && filterKey === diligenceFilteredRowsCacheKey){
     return diligenceFilteredRowsCacheOutput;
@@ -16884,7 +16908,7 @@ function getFilteredDiligenceRows(allRows){
       filterDiligenceOrdonnance !== 'all'
       && normalizeDiligenceOrdonnance(row.ordonnance) !== normalizeDiligenceOrdonnance(filterDiligenceOrdonnance)
     ) return false;
-    if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !hasDiligenceAudienceValue(row)) return false;
+    if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !audienceAssAttOrdKeySet?.has(makeDiligencePrintKey(row?.clientId, row?.dossierIndex, row?.procedure))) return false;
     if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
     if(!q) return true;
     if(executionOnlyQuery) return hasDiligenceExecutionNumber(row);

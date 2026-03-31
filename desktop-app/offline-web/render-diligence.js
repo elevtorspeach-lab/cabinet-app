@@ -464,7 +464,7 @@ function renderDiligence(options = {}){
         filterDiligenceOrdonnance !== 'all'
         && normalizeDiligenceOrdonnance(row.ordonnance) !== normalizeDiligenceOrdonnance(filterDiligenceOrdonnance)
       ) return false;
-      if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !hasDiligenceAudienceValue(row)) return false;
+      if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !isDiligenceAudienceAssAttOrdRow(row)) return false;
       if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
       return true;
     });
