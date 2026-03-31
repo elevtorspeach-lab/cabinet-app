@@ -87,6 +87,7 @@ let audiencePrintSelectionPruneDataVersion = -1;
 let audienceTransientPriorityColorRows = new Map();
 let audienceTransientPinnedRowKeys = new Set();
 let audienceTransientPriorityColorResetTimer = null;
+let audienceColorUndoState = null;
 let audienceAutocompleteItems = [];
 let audienceAutocompleteActiveIndex = -1;
 let audienceAutocompleteHideTimer = null;
@@ -6258,6 +6259,41 @@ function hasAudienceOrdonnanceColorSource(procData){
   return !!normalizeDiligenceOrdonnance(ordonnanceValue);
 }
 
+function getAudienceOrdonnanceColorValue(color){
+  const targetColor = String(color || '').trim();
+  if(targetColor === 'green') return 'att ord';
+  if(targetColor === 'yellow') return 'ord ok';
+  return '';
+}
+
+function applyAudienceOrdonnanceColorState(procData, color){
+  const p = procData && typeof procData === 'object' ? procData : null;
+  const ordonnanceValue = getAudienceOrdonnanceColorValue(color);
+  if(!p || !ordonnanceValue) return false;
+  let changed = false;
+  if(String(p.attOrdOrOrdOk || '').trim() !== ordonnanceValue){
+    p.attOrdOrOrdOk = ordonnanceValue;
+    changed = true;
+  }
+  if(String(p._audienceSortOrd || '').trim() !== ordonnanceValue){
+    p._audienceSortOrd = ordonnanceValue;
+    changed = true;
+  }
+  if(['green', 'yellow'].includes(String(p?.color || '').trim())){
+    delete p.color;
+    changed = true;
+  }
+  if(String(p?._disableAudienceRowColor || '').trim()){
+    delete p._disableAudienceRowColor;
+    changed = true;
+  }
+  if(String(p?._suppressAudienceOrdonnanceColor || '').trim()){
+    delete p._suppressAudienceOrdonnanceColor;
+    changed = true;
+  }
+  return changed;
+}
+
 function applyAudienceWhiteColorState(procData, dossier, currentEffectiveColor = ''){
   const p = procData && typeof procData === 'object' ? procData : null;
   if(!p || !dossier || typeof dossier !== 'object') return false;
@@ -11423,6 +11459,21 @@ function syncAudienceSelectionTone(){
   });
 }
 
+function syncAudienceColorUndoAvailability(){
+  const btn = $('undoAudienceColorBtn');
+  if(!btn) return;
+  const enabled = !!(audienceColorUndoState && Array.isArray(audienceColorUndoState.entries) && audienceColorUndoState.entries.length && canEditData());
+  btn.disabled = !enabled;
+  btn.classList.toggle('is-disabled', !enabled);
+  if(enabled){
+    btn.removeAttribute('aria-disabled');
+    btn.removeAttribute('title');
+  }else{
+    btn.setAttribute('aria-disabled', 'true');
+    btn.title = 'Aucun changement de couleur à annuler.';
+  }
+}
+
 function syncAudienceColorActionAvailability(){
   const buttons = audienceColorButtons.length ? audienceColorButtons : Array.from(document.querySelectorAll('.color-btn[data-color]'));
   const hasSelection = audiencePrintSelection.size > 0;
@@ -11442,6 +11493,116 @@ function syncAudienceColorActionAvailability(){
       btn.removeAttribute('title');
     }
   });
+  syncAudienceColorUndoAvailability();
+}
+
+function captureAudienceColorFieldSnapshot(target, field){
+  const source = target && typeof target === 'object' ? target : {};
+  return {
+    present: Object.prototype.hasOwnProperty.call(source, field),
+    value: source[field]
+  };
+}
+
+function restoreAudienceColorFieldSnapshot(target, field, snapshot){
+  if(!target || typeof target !== 'object' || !field || !snapshot) return;
+  if(snapshot.present){
+    target[field] = snapshot.value;
+  }else{
+    delete target[field];
+  }
+}
+
+function buildAudienceColorUndoEntry(ci, di, procKey){
+  const dossier = AppState.clients?.[ci]?.dossiers?.[di];
+  if(!dossier) return null;
+  const p = getAudienceProcedure(ci, di, procKey);
+  return {
+    ci,
+    di,
+    procKey,
+    fields: {
+      color: captureAudienceColorFieldSnapshot(p, 'color'),
+      attOrdOrOrdOk: captureAudienceColorFieldSnapshot(p, 'attOrdOrOrdOk'),
+      _audienceSortOrd: captureAudienceColorFieldSnapshot(p, '_audienceSortOrd'),
+      _disableAudienceRowColor: captureAudienceColorFieldSnapshot(p, '_disableAudienceRowColor'),
+      _suppressAudienceOrdonnanceColor: captureAudienceColorFieldSnapshot(p, '_suppressAudienceOrdonnanceColor'),
+      statut: captureAudienceColorFieldSnapshot(dossier, 'statut')
+    }
+  };
+}
+
+function rememberAudienceColorUndoState(entries, options = {}){
+  const safeEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  audienceColorUndoState = safeEntries.length ? {
+    entries: safeEntries,
+    selectionKeys: [...audiencePrintSelection],
+    filterAudienceColor: normalizeAudienceFilterColorValue(options.filterAudienceColor ?? filterAudienceColor),
+    selectedAudienceColor: String(options.selectedAudienceColor ?? selectedAudienceColor ?? 'all').trim() || 'all',
+    filterAudienceCheckedFirst: options.filterAudienceCheckedFirst ?? filterAudienceCheckedFirst
+  } : null;
+  syncAudienceColorUndoAvailability();
+}
+
+function clearAudienceColorUndoState(){
+  if(!audienceColorUndoState) return;
+  audienceColorUndoState = null;
+  syncAudienceColorUndoAvailability();
+}
+
+function undoLastAudienceColorChange(){
+  if(!audienceColorUndoState || !Array.isArray(audienceColorUndoState.entries) || !audienceColorUndoState.entries.length){
+    syncAudienceColorUndoAvailability();
+    return;
+  }
+  if(!canEditData()) return alert('Accès refusé');
+  const undoState = audienceColorUndoState;
+  audienceColorUndoState = null;
+  let changed = false;
+  let lastClientId = null;
+  let lastDossier = null;
+  undoState.entries.forEach((entry)=>{
+    const client = AppState.clients?.[entry?.ci];
+    const dossier = AppState.clients?.[entry?.ci]?.dossiers?.[entry?.di];
+    if(!client || !dossier) return;
+    const p = getAudienceProcedure(entry.ci, entry.di, entry.procKey);
+    detachAudienceImportBatchOwnership(p);
+    restoreAudienceColorFieldSnapshot(p, 'color', entry.fields?.color);
+    restoreAudienceColorFieldSnapshot(p, 'attOrdOrOrdOk', entry.fields?.attOrdOrOrdOk);
+    restoreAudienceColorFieldSnapshot(p, '_audienceSortOrd', entry.fields?._audienceSortOrd);
+    restoreAudienceColorFieldSnapshot(p, '_disableAudienceRowColor', entry.fields?._disableAudienceRowColor);
+    restoreAudienceColorFieldSnapshot(p, '_suppressAudienceOrdonnanceColor', entry.fields?._suppressAudienceOrdonnanceColor);
+    restoreAudienceColorFieldSnapshot(dossier, 'statut', entry.fields?.statut);
+    rememberAudienceTransientPriorityColor(entry.ci, entry.di, entry.procKey, '');
+    pinAudienceRowTemporarily(entry.ci, entry.di, entry.procKey);
+    changed = true;
+    lastClientId = client.id;
+    lastDossier = dossier;
+  });
+  audiencePrintSelection = new Set(Array.isArray(undoState.selectionKeys) ? undoState.selectionKeys : []);
+  audiencePrintSelectionVersion += 1;
+  filterAudienceColor = normalizeAudienceFilterColorValue(undoState.filterAudienceColor || 'all');
+  filterAudienceCheckedFirst = undoState.filterAudienceCheckedFirst === true;
+  if($('filterAudienceCheckedOrder')){
+    $('filterAudienceCheckedOrder').value = filterAudienceCheckedFirst ? 'checked-first' : 'default';
+  }
+  if($('filterAudienceColor')) $('filterAudienceColor').value = filterAudienceColor;
+  setSelectedAudienceColor(undoState.selectedAudienceColor || 'all', false);
+  syncAudienceColorFilterSelectAppearance();
+  if(changed){
+    markAudienceColorCachesDirty();
+    queueAudienceColorBatchUpdate({
+      persist: true,
+      persistClientId: lastClientId,
+      persistDossier: lastDossier,
+      dashboard: true,
+      suivi: true
+    });
+  }
+  paginationState.audience = 1;
+  queueAudienceCheckedCountRender();
+  syncAudienceColorUndoAvailability();
+  renderAudience();
 }
 
 function resetAudienceFiltersUi(){
@@ -12193,10 +12354,15 @@ async function applyExcelImport(payload, options = {}){
       || row.refClient
       || ''
     ).trim();
+    const shouldPropagateSharedProcedureReference = orderedImportedProcs.length === 1;
 
     orderedImportedProcs.forEach((proc, idx)=>{
       if(!dossier.procedureDetails[proc]) dossier.procedureDetails[proc] = {};
-      if(sharedReferenceCandidate && !String(dossier.procedureDetails[proc].referenceClient || '').trim()){
+      if(
+        shouldPropagateSharedProcedureReference
+        && sharedReferenceCandidate
+        && !String(dossier.procedureDetails[proc].referenceClient || '').trim()
+      ){
         dossier.procedureDetails[proc].referenceClient = sharedReferenceCandidate;
       }
       if(importedDateDepotValue && !String(dossier.procedureDetails[proc].dateDepot || '').trim()){
@@ -13240,6 +13406,7 @@ function setupEvents(){
     const procedureChanged = nextProcedure !== filterDiligenceProcedure;
     filterDiligenceProcedure = nextProcedure;
     if(procedureChanged){
+      clearDiligencePrintSelection({ immediate: true });
       resetDiligenceAuxFilters();
       paginationState.diligence = 1;
     }
@@ -13353,8 +13520,42 @@ function setupEvents(){
     restoreRecycleItem(idx);
   });
   $('filterAudienceColor')?.addEventListener('change', (e)=>{
-    filterAudienceColor = normalizeAudienceFilterColorValue(e.target.value);
-    clearAudiencePrintSelection({ immediate: true });
+    const previousColor = normalizeAudienceFilterColorValue(filterAudienceColor);
+    const nextColor = normalizeAudienceFilterColorValue(e.target.value);
+    const previousIsOrdonnanceColor = previousColor === 'green' || previousColor === 'yellow';
+    const nextIsOrdonnanceColor = nextColor === 'green' || nextColor === 'yellow';
+    const previousIsAudienceSortColor = previousColor === 'blue' || previousIsOrdonnanceColor;
+    const nextIsAudienceSortColor = nextColor === 'blue' || nextIsOrdonnanceColor;
+    filterAudienceColor = nextColor;
+    const canApplyOrdonnanceTransitionFromFilter =
+      audiencePrintSelection.size
+      && nextIsOrdonnanceColor
+      && !previousIsOrdonnanceColor;
+    if(canApplyOrdonnanceTransitionFromFilter){
+      const appliedToCheckedRows = applyColorToSelectedAudienceRows(nextColor);
+      if(appliedToCheckedRows){
+        filterAudienceCheckedFirst = true;
+        if($('filterAudienceCheckedOrder')) $('filterAudienceCheckedOrder').value = 'checked-first';
+        paginationState.audience = 1;
+      }
+      syncAudienceColorFilterSelectAppearance();
+      renderAudience();
+      return;
+    }
+    if(nextColor === 'all'){
+      clearAudiencePrintSelection({ immediate: true });
+      syncAudienceColorFilterSelectAppearance();
+      renderAudience();
+      return;
+    }
+    const shouldPreserveAudienceSelection =
+      audiencePrintSelection.size
+      && (previousIsAudienceSortColor || nextIsAudienceSortColor);
+    if(!shouldPreserveAudienceSelection){
+      clearAudiencePrintSelection({ immediate: true });
+    }else{
+      queueAudienceCheckedCountRender();
+    }
     syncAudienceColorFilterSelectAppearance();
     renderAudience();
   });
@@ -13381,6 +13582,7 @@ function setupEvents(){
     filterAudienceCheckedFirst = String(e.target?.value || 'default') === 'checked-first';
     renderAudience();
   });
+  $('undoAudienceColorBtn')?.addEventListener('click', undoLastAudienceColorChange);
 
   document.addEventListener('keydown', handleAudienceSaveShortcut);
   $('saveAudienceBtn')?.addEventListener('click', ()=>saveAllAudience({ feedback: true }));
@@ -13429,23 +13631,39 @@ function setupEvents(){
       const errBtn = $('audienceErrorsBtn');
       if(errBtn) errBtn.classList.remove('active');
       setSelectedAudienceColor(color, false);
+      const undoEntries = color === 'all'
+        ? []
+        : getAudienceRows({ ignoreSearch: true, ignoreColor: true })
+          .filter(row=>audiencePrintSelection.has(makeAudiencePrintKey(row.ci, row.di, row.procKey)))
+          .map(row=>buildAudienceColorUndoEntry(row.ci, row.di, row.procKey));
       const appliedToCheckedRows = applyColorToSelectedAudienceRows(color);
       if(appliedToCheckedRows){
+        rememberAudienceColorUndoState(undoEntries, {
+          filterAudienceColor,
+          selectedAudienceColor: color,
+          filterAudienceCheckedFirst
+        });
+      }
+      const keepAudienceColorFilter = appliedToCheckedRows && (color === 'green' || color === 'yellow');
+      if(appliedToCheckedRows && !keepAudienceColorFilter){
         setSelectedAudienceColor('all', false);
       }
-      filterAudienceColor = 'all';
-      const colorSel = $('filterAudienceColor');
-      if(colorSel) colorSel.value = 'all';
-      syncAudienceColorFilterSelectAppearance();
-      if(appliedToCheckedRows && filterAudienceCheckedFirst){
+      if(appliedToCheckedRows){
+        filterAudienceCheckedFirst = true;
+        if($('filterAudienceCheckedOrder')) $('filterAudienceCheckedOrder').value = 'checked-first';
         paginationState.audience = 1;
       }
+      filterAudienceColor = keepAudienceColorFilter ? color : 'all';
+      const colorSel = $('filterAudienceColor');
+      if(colorSel) colorSel.value = keepAudienceColorFilter ? color : 'all';
+      syncAudienceColorFilterSelectAppearance();
       renderAudience();
     });
   });
   syncAudienceColorFilterSelectAppearance();
   syncAudienceSelectionTone();
   syncAudienceColorActionAvailability();
+  syncAudienceColorUndoAvailability();
   window.addEventListener('beforeunload', ()=>{
     if(hasLoadedState) persistAppStateNow();
   });
@@ -15573,6 +15791,22 @@ function updateDiligenceCheckedCount(){
   const node = $('diligenceCheckedCountValue');
   if(node) node.textContent = String(diligencePrintSelection.size);
   syncDiligencePageSelectionToggle();
+}
+
+function clearDiligencePrintSelection(options = {}){
+  if(!diligencePrintSelection.size){
+    if(options.immediate) updateDiligenceCheckedCount();
+    return false;
+  }
+  diligencePrintSelection = new Set();
+  diligencePrintSelectionVersion += 1;
+  lastDiligenceRenderedSelectedCount = 0;
+  if(options.immediate){
+    updateDiligenceCheckedCount();
+    return true;
+  }
+  queueDiligenceCheckedCountRender();
+  return true;
 }
 
 function queueDiligenceCheckedCountRender(){
@@ -18293,13 +18527,6 @@ function getFilteredAudienceRows(allRows = null){
   const strictPriorityColorFilter = (!filterAudienceErrorsOnly && filterAudienceColor === 'all' && priorityColor === 'closed')
     ? priorityColor
     : '';
-  const isDefaultView =
-    filterAudienceProcedure === 'all'
-    && filterAudienceTribunal === 'all'
-    && !filterAudienceDate
-    && !filterAudienceErrorsOnly
-    && !strictPriorityColorFilter
-    && (!priorityColor || priorityColor === 'all');
   const filterKey = [
     filterAudienceProcedure,
     filterAudienceTribunal,
@@ -18309,52 +18536,6 @@ function getFilteredAudienceRows(allRows = null){
   ].join('||');
   if(rows === audienceFilteredRowsCacheInput && filterKey === audienceFilteredRowsCacheKey){
     return orderAudienceRowsByCheckedSelection(audienceFilteredRowsCacheOutput);
-  }
-  if(isDefaultView){
-    if(rows.length > AUDIENCE_DEFAULT_SORT_MAX_ROWS){
-      const whiteFirstRows = orderAudienceRowsByWhiteFirst(rows);
-      audienceFilteredRowsCacheInput = rows;
-      audienceFilteredRowsCacheKey = filterKey;
-      audienceFilteredRowsCacheOutput = whiteFirstRows;
-      return orderAudienceRowsByCheckedSelection(whiteFirstRows);
-    }
-    const decorated = rows.map(row=>({
-      row,
-      sortMeta: buildAudienceSortMeta(row)
-    }));
-    decorated.sort((a, b)=>{
-      return compareAudienceSortMeta(a.sortMeta, b.sortMeta);
-    });
-    const out = decorated.map(item=>item.row);
-    audienceFilteredRowsCacheInput = rows;
-    audienceFilteredRowsCacheKey = filterKey;
-    audienceFilteredRowsCacheOutput = out;
-    return orderAudienceRowsByCheckedSelection(out);
-  }
-  const canUsePriorityPartition =
-    !filterAudienceErrorsOnly
-    && filterAudienceProcedure === 'all'
-    && filterAudienceTribunal === 'all'
-    && !filterAudienceDate
-    && !strictPriorityColorFilter
-    && priorityColor
-    && priorityColor !== 'all'
-    && rows.length > AUDIENCE_DEFAULT_SORT_MAX_ROWS;
-  if(canUsePriorityPartition){
-    const matched = [];
-    const others = [];
-    rows.forEach(row=>{
-      if(audienceRowMatchesColorFilter(row, priorityColor)){
-        matched.push(row);
-      }else{
-        others.push(row);
-      }
-    });
-    const out = applyAudienceTransientPinnedRowOrder(matched.concat(others));
-    audienceFilteredRowsCacheInput = rows;
-    audienceFilteredRowsCacheKey = filterKey;
-    audienceFilteredRowsCacheOutput = out;
-    return orderAudienceRowsByCheckedSelection(out);
   }
   const duplicateKeySet = getAudienceDuplicateKeySet(rows);
   const mismatchRefClientSet = buildAudienceMismatchRefClientSet(rows);
@@ -18371,18 +18552,16 @@ function getFilteredAudienceRows(allRows = null){
     return true;
   });
   const decorated = filtered.map(row=>{
-    const bucket = getAudiencePriorityBucket(row, duplicateKeySet, mismatchRefClientSet);
-    const colorMatch = (!filterAudienceErrorsOnly && priorityColor && priorityColor !== 'all')
-      ? (audienceRowMatchesColorFilter(row, priorityColor) ? 1 : 0)
+    const bucket = getAudienceDisplayOrderBucket(row, duplicateKeySet, mismatchRefClientSet);
+    const priorityRank = (!filterAudienceErrorsOnly && priorityColor && priorityColor !== 'all' && !strictPriorityColorFilter)
+      ? (audienceRowMatchesColorFilter(row, priorityColor) ? 0 : 1)
       : 0;
     const sortMeta = buildAudienceSortMeta(row);
-    return { row, bucket, colorMatch, sortMeta };
+    return { row, bucket, priorityRank, sortMeta };
   });
   decorated.sort((a, b)=>{
-    if(priorityColor && priorityColor !== 'all' && a.colorMatch !== b.colorMatch){
-      return b.colorMatch - a.colorMatch;
-    }
     if(a.bucket !== b.bucket) return a.bucket - b.bucket;
+    if(a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
     return compareAudienceSortMeta(a.sortMeta, b.sortMeta);
   });
   const out = applyAudienceTransientPinnedRowOrder(decorated.map(item=>item.row));
@@ -18429,7 +18608,6 @@ function applyColorToSelectedAudienceRows(color){
   let changed = false;
   let lastClientId = null;
   let lastDossier = null;
-  const changedKeys = [];
   rows.forEach(row=>{
     const key = makeAudiencePrintKey(row.ci, row.di, row.procKey);
     if(!audiencePrintSelection.has(key)) return;
@@ -18443,6 +18621,9 @@ function applyColorToSelectedAudienceRows(color){
     if(targetColor === 'white'){
       rowChanged = applyAudienceWhiteColorState(p, dossier, currentEffectiveColor);
       if(!rowChanged && !currentEffectiveColor) return;
+    }else if(targetColor === 'green' || targetColor === 'yellow'){
+      rowChanged = applyAudienceOrdonnanceColorState(p, targetColor);
+      if(!rowChanged && getAudienceRowOrdonnanceColor(row) === targetColor) return;
     }else{
       const appliedColor = targetColor === 'closed' ? 'purple-dark' : targetColor;
       delete p._disableAudienceRowColor;
@@ -18458,17 +18639,8 @@ function applyColorToSelectedAudienceRows(color){
     changed = changed || rowChanged;
     lastClientId = client.id;
     lastDossier = dossier;
-    changedKeys.push(key);
   });
   if(!changed) return false;
-  changedKeys.forEach((key)=>{
-    audiencePrintSelection.delete(key);
-  });
-  if(changedKeys.length){
-    audiencePrintSelectionVersion += 1;
-    lastAudienceRenderedSelectedCount = countSelectedAudienceRows(lastAudienceRenderedRows);
-    queueAudienceCheckedCountRender();
-  }
   markAudienceColorCachesDirty();
   queueAudienceColorBatchUpdate({
     persist: true,
@@ -18850,7 +19022,21 @@ function buildAudienceSortMeta(row){
 
 function getAudienceSortColorPriority(row){
   const color = String(row?.__effectiveColor || getAudienceRowEffectiveColor(row) || '').trim();
-  return color ? 1 : 0;
+  if(!color) return 0;
+  if(color === 'blue') return 1;
+  if(color === 'green') return 2;
+  if(color === 'yellow') return 3;
+  if(color === 'document-ok') return 4;
+  if(color === 'purple-dark' || color === 'purple-light') return 5;
+  return 6;
+}
+
+function getAudienceDisplayOrderBucket(row, duplicateKeySet, mismatchRefClientSet){
+  const errorBucket = getAudiencePriorityBucket(row, duplicateKeySet, mismatchRefClientSet);
+  if(errorBucket === 0) return 9;
+  if(errorBucket === 1) return 10;
+  if(errorBucket === 2) return 11;
+  return 3 + getAudienceSortColorPriority(row);
 }
 
 function orderAudienceRowsByCheckedSelection(rows){
@@ -19600,10 +19786,16 @@ function setAudienceColor(ci, di, procKey, checked){
   const dossier = AppState.clients?.[ci]?.dossiers?.[di];
   if(!dossier) return;
   const p = getAudienceProcedure(ci, di, procKey);
+  const undoEntry = buildAudienceColorUndoEntry(ci, di, procKey);
   const allowed = new Set(['white', 'blue', 'green', 'red', 'yellow', 'document-ok', 'purple-dark', 'purple-light', 'closed']);
   if(!checked){
     detachAudienceImportBatchOwnership(p);
     applyAudienceWhiteColorState(p, dossier, '');
+    rememberAudienceColorUndoState([undoEntry], {
+      filterAudienceColor,
+      selectedAudienceColor,
+      filterAudienceCheckedFirst
+    });
     markAudienceColorCachesDirty();
     queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: false });
     return;
@@ -19624,15 +19816,38 @@ function setAudienceColor(ci, di, procKey, checked){
       ci,
       di
     }));
+    rememberAudienceColorUndoState([undoEntry], {
+      filterAudienceColor,
+      selectedAudienceColor,
+      filterAudienceCheckedFirst
+    });
     markAudienceColorCachesDirty();
     queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: true });
     return;
   }
   delete p._disableAudienceRowColor;
   delete p._suppressAudienceOrdonnanceColor;
+  if(appliedColor === 'green' || appliedColor === 'yellow'){
+    if(!applyAudienceOrdonnanceColorState(p, appliedColor)){
+      return;
+    }
+    rememberAudienceColorUndoState([undoEntry], {
+      filterAudienceColor,
+      selectedAudienceColor,
+      filterAudienceCheckedFirst
+    });
+    markAudienceColorCachesDirty();
+    queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: true });
+    return;
+  }
   p.color = appliedColor;
   if(appliedColor === 'purple-dark') dossier.statut = 'Soldé';
   if(appliedColor === 'purple-light') dossier.statut = 'Arrêt définitif';
+  rememberAudienceColorUndoState([undoEntry], {
+    filterAudienceColor,
+    selectedAudienceColor,
+    filterAudienceCheckedFirst
+  });
   markAudienceColorCachesDirty();
   queueAudienceColorBatchUpdate({ persist: true, persistClientId: client.id, persistDossier: dossier, dashboard: true, suivi: true });
 }

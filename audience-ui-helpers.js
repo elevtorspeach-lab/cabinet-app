@@ -93,7 +93,6 @@ function getAudienceRowEffectiveColor(row){
 function audienceRowMatchesColorFilter(row, color){
   const targetColor = String(color || '').trim();
   if(!targetColor || targetColor === 'all') return true;
-  if(getAudienceTransientPriorityColorForRow(row) === targetColor) return true;
   if(targetColor === 'closed'){
     return !!getAudienceStatusDerivedColor(row?.__resolvedStatus || row?.d?.statut || '');
   }
