@@ -41,6 +41,7 @@ jobs:
           cp render-audience-suivi.js dist/
           cp render-diligence.js dist/
           cp audience-ui-helpers.js dist/
+          cp -R assets dist/assets
           cp -R vendor dist/vendor
           cp -R workers dist/workers
 

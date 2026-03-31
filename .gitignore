@@ -4,6 +4,7 @@ dist/
 desktop-app/node_modules/
 desktop-app/dist/
 desktop-app/build/
+server/node_modules/
 
 .DS_Store
 *.log
@@ -21,3 +22,5 @@ release/
 snapshot-*/
 tmp/
 .tmp-tests/
+.env
+.env.*
