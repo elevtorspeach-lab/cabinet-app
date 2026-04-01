@@ -13822,6 +13822,13 @@ async function login(){
       openPasswordSetupModal({ mode: PASSWORD_SETUP_MODE_BOOTSTRAP_LOCAL });
       return;
     }
+
+    if(remoteLoginState === 'ok'){
+      // A successful server login must refresh the in-memory state first so
+      // stale offline/test caches do not leak into the remote web session.
+      await loadPersistedState();
+    }
+
     let userIndex = USERS.findIndex(
       x=>String(x.username || '').trim().toLowerCase() === usernameInput
     );
