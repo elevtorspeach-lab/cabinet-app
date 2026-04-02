@@ -2604,12 +2604,13 @@ function getExportXlsxWorker(){
   }
 }
 
-function createXlsxBlobInWorker({ headers, rows, subtitle = '', sheetName = 'Audience', colWidths = [] }){
+function createXlsxBlobInWorker({ headers, rows, subtitle = '', editionLabel = '', sheetName = 'Audience', colWidths = [] }){
   const worker = getExportXlsxWorker();
   if(!worker) return Promise.resolve(null);
   const requestId = ++exportXlsxWorkerRequestSeq;
   const aoa = [
     ['CABINET ARAQUI HOUSSAINI'],
+    [String(editionLabel || '').trim()],
     [String(subtitle || '').trim()],
     [],
     Array.isArray(headers) ? headers : [],
@@ -3214,46 +3215,31 @@ function getSelectedSuiviRowsForExport(){
 function buildSuiviSelectedExportDatasetBase(){
   const rows = getSelectedSuiviRowsForExport();
   const omitWwAndMarque = shouldOmitSuiviWwAndMarqueColumns(rows);
-  const headers = [
-    'Client',
-    'date affectation',
-    'Type',
-    'ref client',
-    'Procédure',
-    'debiteur ',
-    'Adresse',
-    'Ville',
-    'Caution',
-    'Adresse  caution',
-    'Date depot',
-    'Réf Ass',
-    'Audience',
-    'Sort',
-    'Tribunal'
+  const omitCaution = shouldOmitSuiviExportColumn(rows, (row)=>row?.d?.caution);
+  const omitCautionAdresse = shouldOmitSuiviExportColumn(rows, (row)=>row?.d?.cautionAdresse);
+  const columnDefs = [
+    { header: 'Client', width: 22 },
+    { header: 'date affectation', width: 21 },
+    { header: 'Type', width: 13 },
+    { header: 'ref client', width: 30 },
+    { header: 'Procédure', width: 22 },
+    { header: 'debiteur ', width: 34 },
+    { header: 'Adresse', width: 42 },
+    { header: 'Ville', width: 22 },
+    ...(!omitWwAndMarque ? [
+      { header: 'WW', width: 20 },
+      { header: 'Marque', width: 24 }
+    ] : []),
+    ...(!omitCaution ? [{ header: 'Caution', width: 28 }] : []),
+    ...(!omitCautionAdresse ? [{ header: 'Adresse  caution', width: 36 }] : []),
+    { header: 'Date depot', width: 18 },
+    { header: 'Réf Ass', width: 26 },
+    { header: 'Audience', width: 18 },
+    { header: 'Sort', width: 24 },
+    { header: 'Tribunal', width: 42 }
   ];
-  if(!omitWwAndMarque){
-    headers.splice(8, 0, 'WW', 'Marque');
-  }
-  const colWidths = [
-    { wch: 22 },
-    { wch: 18 },
-    { wch: 13 },
-    { wch: 30 },
-    { wch: 22 },
-    { wch: 34 },
-    { wch: 42 },
-    { wch: 22 },
-    { wch: 28 },
-    { wch: 36 },
-    { wch: 18 },
-    { wch: 26 },
-    { wch: 18 },
-    { wch: 24 },
-    { wch: 42 }
-  ];
-  if(!omitWwAndMarque){
-    colWidths.splice(8, 0, { wch: 20 }, { wch: 24 });
-  }
+  const headers = columnDefs.map((column)=>column.header);
+  const colWidths = columnDefs.map((column)=>({ wch: column.width }));
   const wrapColumnIndexes = headers.reduce((indexes, header, index)=>{
     const normalizedHeader = String(header || '').trim().toLowerCase();
     if(
@@ -3278,6 +3264,8 @@ function buildSuiviSelectedExportDatasetBase(){
     rows,
     headers,
     omitWwAndMarque,
+    omitCaution,
+    omitCautionAdresse,
     colWidths,
     wrapColumnIndexes
   };
@@ -3332,9 +3320,17 @@ function shouldOmitSuiviWwAndMarqueColumns(rows){
   });
 }
 
+function shouldOmitSuiviExportColumn(rows, getter){
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  if(!sourceRows.length) return false;
+  return sourceRows.every((row)=>!String(getter(row) || '').trim());
+}
+
 function buildSuiviExportTableRows(rows, options = {}){
   const sourceRows = Array.isArray(rows) ? rows : [];
   const omitWwAndMarque = options?.omitWwAndMarque === true;
+  const omitCaution = options?.omitCaution === true;
+  const omitCautionAdresse = options?.omitCautionAdresse === true;
   return sourceRows.flatMap((row)=>{
     const procedures = getSuiviExportProcedureNames(row);
     return procedures.map((procedureName)=>{
@@ -3350,18 +3346,20 @@ function buildSuiviExportTableRows(rows, options = {}){
         procedureName || '-',
         row.d?.debiteur || '-',
         row.d?.adresse || '-',
-        row.d?.ville || '-',
-        row.d?.caution || '-',
-        row.d?.cautionAdresse || '-',
+        row.d?.ville || '-'
+      ];
+      if(!omitWwAndMarque){
+        exportRow.push(row.d?.ww || '-', row.d?.marque || '-');
+      }
+      if(!omitCaution) exportRow.push(row.d?.caution || '-');
+      if(!omitCautionAdresse) exportRow.push(row.d?.cautionAdresse || '-');
+      exportRow.push(
         procedureValues.dateDepot || '',
         procedureValues.reference || '',
         procedureValues.audience || '',
         procedureValues.sort || '',
         procedureValues.tribunal || fallbackTribunal || ''
-      ];
-      if(!omitWwAndMarque){
-        exportRow.splice(8, 0, row.d?.ww || '-', row.d?.marque || '-');
-      }
+      );
       return exportRow;
     });
   });
@@ -3371,14 +3369,22 @@ function buildSuiviSelectedExportDataset(){
   const dataset = buildSuiviSelectedExportDatasetBase();
   return {
     ...dataset,
-    tableRows: buildSuiviExportTableRows(dataset.rows, { omitWwAndMarque: dataset.omitWwAndMarque })
+    tableRows: buildSuiviExportTableRows(dataset.rows, {
+      omitWwAndMarque: dataset.omitWwAndMarque,
+      omitCaution: dataset.omitCaution,
+      omitCautionAdresse: dataset.omitCautionAdresse
+    })
   };
 }
 
 async function buildSuiviSelectedExportDatasetAsync(){
   const dataset = buildSuiviSelectedExportDatasetBase();
   const rowGroups = await mapChunked(dataset.rows, async (row)=>{
-    return buildSuiviExportTableRows([row], { omitWwAndMarque: dataset.omitWwAndMarque });
+    return buildSuiviExportTableRows([row], {
+      omitWwAndMarque: dataset.omitWwAndMarque,
+      omitCaution: dataset.omitCaution,
+      omitCautionAdresse: dataset.omitCautionAdresse
+    });
   }, { chunkSize: 80, onProgress: makeProgressReporter('Export suivi') });
   return {
     ...dataset,
@@ -4742,7 +4748,11 @@ function applyAudienceTribunalFilterFromInput(value, options = {}){
   if(!selection){
     return false;
   }
+  const changed = filterAudienceTribunal !== selection.key;
   filterAudienceTribunal = selection.key;
+  if(changed && opts.clearSelection !== false){
+    clearAudiencePrintSelection({ immediate: true });
+  }
   const tribunalInput = $('filterAudienceTribunal');
   if(tribunalInput){
     tribunalInput.value = selection.key === 'all' ? '' : selection.label;
@@ -5505,6 +5515,38 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     && !wrapColumnIndexSet.size
     && (preferWorker === true || shouldPreferFastWorkbookPath(rowCount));
   const subtitleText = String(subtitle || '').trim();
+  const editionDateText = formatDateDDMMYYYY(new Date());
+  const editionLabelText = editionDateText ? `Edition le ${editionDateText}` : 'Edition le';
+  const compactAudienceHeaderText = useAudienceCompactReferenceLayout ? '' : editionLabelText;
+  const compactAudienceSubtitleText = useAudienceCompactReferenceLayout ? editionLabelText : subtitleText;
+  const genericHeaderText = useSuiviReferenceLayout ? editionLabelText : compactAudienceHeaderText;
+  const genericSubtitleText = useSuiviReferenceLayout ? '' : compactAudienceSubtitleText;
+  const hasGenericSubtitleRow = !useSuiviReferenceLayout;
+  const genericHeaderRowNumber = hasGenericSubtitleRow ? 5 : 4;
+  const genericDataStartRowNumber = genericHeaderRowNumber + 1;
+  const createAudienceSubtitleCellValue = ()=>{
+    const richText = [];
+    if(subtitleText){
+      richText.push({
+        text: subtitleText,
+        font: { name: 'Arial', size: 16, bold: true, color: { argb: 'FF1A4590' } }
+      });
+    }
+    if(editionLabelText){
+      if(richText.length){
+        richText.push({
+          text: '   ',
+          font: { name: 'Arial', size: 11, color: { argb: 'FF111111' } }
+        });
+      }
+      richText.push({
+        text: editionLabelText,
+        font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FF111111' } }
+      });
+    }
+    if(!richText.length) return '';
+    return { richText };
+  };
   const excelReady = await ensureExcelLibraries({ needXlsx: true, needExcelJs: !useFastWorkbookPath });
   if(!excelReady) return;
   if(useFastWorkbookPath){
@@ -5512,6 +5554,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
       headers,
       rows,
       subtitle: subtitleText,
+      editionLabel: editionLabelText,
       sheetName,
       colWidths
     });
@@ -5532,13 +5575,22 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
       return;
     }
     await yieldToMainThread();
-    const aoa = [
-      ['CABINET ARAQUI HOUSSAINI'],
-      [subtitleText],
-      [],
-      headers,
-      ...rows
-    ];
+    const aoa = hasGenericSubtitleRow
+      ? [
+        ['CABINET ARAQUI HOUSSAINI'],
+        [genericHeaderText],
+        [genericSubtitleText],
+        [],
+        headers,
+        ...rows
+      ]
+      : [
+        ['CABINET ARAQUI HOUSSAINI'],
+        [genericHeaderText],
+        [],
+        headers,
+        ...rows
+      ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = colWidths.length ? colWidths : new Array(headers.length).fill({ wch: 20 });
     const wb = XLSX.utils.book_new();
@@ -5640,10 +5692,13 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         if(rows.length > 1){
           templateSheet.duplicateRow(9, rows.length - 1, true);
         }
-        templateSheet.getCell('A6').value = subtitleText;
+        templateSheet.getCell('A5').value = '';
+        templateSheet.getCell('A6').value = createAudienceSubtitleCellValue();
         templateSheet.views = [{ showGridLines: false }];
         templateSheet.columns = audienceReferenceLayout.columnWidths.map(width=>({ width }));
         templateSheet.getRow(8).height = 38;
+        const templateSubtitleCell = templateSheet.getCell('A6');
+        templateSubtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
         await runChunked(rows, async (row, index)=>{
           const rowIndex = index + 9;
           const sheetRow = templateSheet.getRow(rowIndex);
@@ -5651,7 +5706,8 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
           sheetRow.height = Math.max(sampleRowHeight, getAudienceReferenceRowHeight(row));
           for(let c = 1; c <= colCount; c++){
             const cell = sheetRow.getCell(c);
-            cell.font = { name: 'Calibri', size: 16, color: { argb: 'FF111111' } };
+            const bodyFontSize = c === 2 ? 14 : 16;
+            cell.font = { name: 'Calibri', size: bodyFontSize, color: { argb: 'FF111111' } };
             cell.fill = {
               type: 'pattern',
               pattern: 'solid',
@@ -5697,7 +5753,8 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
 
       sheet.mergeCells(`A5:${lastColLetter}5`);
       sheet.mergeCells(`A6:${lastColLetter}6`);
-      sheet.getCell('A6').value = subtitleText;
+      sheet.getCell('A5').value = '';
+      sheet.getCell('A6').value = createAudienceSubtitleCellValue();
       Object.entries(audienceReferenceLayout.rowHeights).forEach(([rowNumber, height])=>{
         sheet.getRow(Number(rowNumber)).height = Number(height);
       });
@@ -5736,7 +5793,6 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
       }
 
       const subtitleCell = sheet.getCell('A6');
-      subtitleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: 'FF1A4590' } };
       subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
       await runChunked(rows, async (row, index)=>{
@@ -5746,7 +5802,8 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         for(let c = 1; c <= colCount; c++){
           const cell = sheetRow.getCell(c);
           cell.value = Array.isArray(row) ? (row[c - 1] ?? '') : '';
-          cell.font = { name: 'Calibri', size: 16, color: { argb: 'FF111111' } };
+          const bodyFontSize = c === 2 ? 14 : 16;
+          cell.font = { name: 'Calibri', size: bodyFontSize, color: { argb: 'FF111111' } };
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
@@ -5793,9 +5850,13 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
   }
 
   sheet.getCell('A1').value = 'CABINET ARAQUI HOUSSAINI';
-  sheet.getCell('A2').value = subtitleText;
+  sheet.getCell('A2').value = genericHeaderText;
   sheet.mergeCells(`A1:${lastColLetter}1`);
   sheet.mergeCells(`A2:${lastColLetter}2`);
+  if(hasGenericSubtitleRow){
+    sheet.getCell('A3').value = genericSubtitleText;
+    sheet.mergeCells(`A3:${lastColLetter}3`);
+  }
   sheet.addRow([]);
   sheet.addRow(headers);
   await runChunked(rows, async (row)=>{
@@ -5809,10 +5870,10 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
 
   const genericLayoutConfig = useSuiviReferenceLayout
     ? {
-      titleRowHeight: 35.25,
-      subtitleRowHeight: 24,
-      headerRowHeight: 36.75,
-      baseDataRowHeight: 35.25,
+      titleRowHeight: 28.25,
+      subtitleRowHeight: 19.25,
+      headerRowHeight: 34.75,
+      baseDataRowHeight: 28.25,
       titleFontSize: 24,
       subtitleFontSize: 17,
       headerFontSize: 16,
@@ -5821,15 +5882,15 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     }
     : useAudienceCompactReferenceLayout
       ? {
-        titleRowHeight: 35.25,
-        subtitleRowHeight: 24,
-        headerRowHeight: 36.75,
-        baseDataRowHeight: 35.25,
+        titleRowHeight: 28.2,
+        subtitleRowHeight: 19.2,
+        headerRowHeight: 29.4,
+        baseDataRowHeight: 28.2,
         titleFontSize: 20,
         subtitleFontSize: 16,
         headerFontSize: 14,
         bodyFontSize: 14,
-        wrapLineHeight: 17.25
+        wrapLineHeight: 16.8
       }
       : {
         titleRowHeight: 44,
@@ -5858,11 +5919,14 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
 
   sheet.getRow(1).height = genericLayoutConfig.titleRowHeight;
   sheet.getRow(2).height = genericLayoutConfig.subtitleRowHeight;
-  sheet.getRow(4).height = genericLayoutConfig.headerRowHeight;
-  await runChunked(Array.from({ length: rows.length }, (_, index)=>index + 5), async (rowIndex)=>{
+  if(hasGenericSubtitleRow){
+    sheet.getRow(3).height = genericLayoutConfig.subtitleRowHeight;
+  }
+  sheet.getRow(genericHeaderRowNumber).height = genericLayoutConfig.headerRowHeight;
+  await runChunked(Array.from({ length: rows.length }, (_, index)=>index + genericDataStartRowNumber), async (rowIndex)=>{
     let nextHeight = genericLayoutConfig.baseDataRowHeight;
     if(wrapColumnIndexSet.size){
-      const rowValues = Array.isArray(rows[rowIndex - 5]) ? rows[rowIndex - 5] : [];
+      const rowValues = Array.isArray(rows[rowIndex - genericDataStartRowNumber]) ? rows[rowIndex - genericDataStartRowNumber] : [];
       normalizedWrapColumnIndexes.forEach((colIndex)=>{
         const estimatedLines = estimateWrappedLineCount(rowValues[colIndex], widthValues[colIndex]);
         if(estimatedLines > 1){
@@ -5885,11 +5949,20 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
 
   sheet.getCell('A1').font = { name: 'Arial', size: genericLayoutConfig.titleFontSize, bold: true, color: { argb: 'FF1F3B8F' } };
   sheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
-  sheet.getCell('A2').font = { name: 'Arial', size: genericLayoutConfig.subtitleFontSize, bold: true, color: { argb: 'FF1A4590' } };
-  sheet.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+  sheet.getCell('A2').font = {
+    name: 'Arial',
+    size: useSuiviReferenceLayout ? genericLayoutConfig.subtitleFontSize : Math.max(13, genericLayoutConfig.subtitleFontSize - 1),
+    bold: true,
+    color: { argb: useSuiviReferenceLayout ? 'FF111111' : 'FF1A4590' }
+  };
+  sheet.getCell('A2').alignment = { horizontal: useSuiviReferenceLayout ? 'center' : 'left', vertical: 'middle' };
+  if(hasGenericSubtitleRow){
+    sheet.getCell('A3').font = { name: 'Arial', size: genericLayoutConfig.subtitleFontSize, bold: true, color: { argb: 'FF1A4590' } };
+    sheet.getCell('A3').alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  }
 
   for(let c=1; c<=colCount; c++){
-    const cell = sheet.getRow(4).getCell(c);
+    const cell = sheet.getRow(genericHeaderRowNumber).getCell(c);
     cell.font = { name: 'Arial', size: genericLayoutConfig.headerFontSize, bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = {
       type: 'pattern',
@@ -5900,10 +5973,13 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     cell.border = border;
   }
 
-  await runChunked(Array.from({ length: rows.length }, (_, index)=>index + 5), async (rowIndex)=>{
+  await runChunked(Array.from({ length: rows.length }, (_, index)=>index + genericDataStartRowNumber), async (rowIndex)=>{
     for(let c=1; c<=colCount; c++){
       const cell = sheet.getRow(rowIndex).getCell(c);
-      cell.font = { name: 'Arial', size: genericLayoutConfig.bodyFontSize, color: { argb: 'FF111111' } };
+      const bodyFontSize = useAudienceReferenceLayout && c === 2
+        ? Math.max(13, genericLayoutConfig.bodyFontSize - 1)
+        : genericLayoutConfig.bodyFontSize;
+      cell.font = { name: 'Arial', size: bodyFontSize, color: { argb: 'FF111111' } };
       const isArabicColumn = c === colCount;
       const headerLabel = String(headers[c - 1] || '').trim().toLowerCase();
       const align = useAudienceReferenceLayout
@@ -13624,8 +13700,6 @@ function setupEvents(){
     const nextColor = normalizeAudienceFilterColorValue(e.target.value);
     const previousIsOrdonnanceColor = previousColor === 'green' || previousColor === 'yellow';
     const nextIsOrdonnanceColor = nextColor === 'green' || nextColor === 'yellow';
-    const previousIsAudienceSortColor = previousColor === 'blue' || previousIsOrdonnanceColor;
-    const nextIsAudienceSortColor = nextColor === 'blue' || nextIsOrdonnanceColor;
     filterAudienceColor = nextColor;
     const canApplyOrdonnanceTransitionFromFilter =
       audiencePrintSelection.size
@@ -13638,24 +13712,12 @@ function setupEvents(){
         if($('filterAudienceCheckedOrder')) $('filterAudienceCheckedOrder').value = 'checked-first';
         paginationState.audience = 1;
       }
-      syncAudienceColorFilterSelectAppearance();
-      renderAudience();
-      return;
-    }
-    if(nextColor === 'all'){
       clearAudiencePrintSelection({ immediate: true });
       syncAudienceColorFilterSelectAppearance();
       renderAudience();
       return;
     }
-    const shouldPreserveAudienceSelection =
-      audiencePrintSelection.size
-      && (previousIsAudienceSortColor || nextIsAudienceSortColor);
-    if(!shouldPreserveAudienceSelection){
-      clearAudiencePrintSelection({ immediate: true });
-    }else{
-      queueAudienceCheckedCountRender();
-    }
+    clearAudiencePrintSelection({ immediate: true });
     syncAudienceColorFilterSelectAppearance();
     renderAudience();
   });
@@ -13664,15 +13726,15 @@ function setupEvents(){
     renderAudience();
   });
   $('filterAudienceTribunal')?.addEventListener('change', (e)=>{
-    applyAudienceTribunalFilterFromInput(e.target.value, { allowApproximate: true });
+    applyAudienceTribunalFilterFromInput(e.target.value, { allowApproximate: true, clearSelection: true });
   });
   $('filterAudienceTribunal')?.addEventListener('keydown', (e)=>{
     if(e.key !== 'Enter') return;
     e.preventDefault();
-    applyAudienceTribunalFilterFromInput(e.target.value, { allowApproximate: true });
+    applyAudienceTribunalFilterFromInput(e.target.value, { allowApproximate: true, clearSelection: true });
   });
   $('filterAudienceTribunal')?.addEventListener('search', (e)=>{
-    applyAudienceTribunalFilterFromInput(e.target.value, { allowApproximate: false });
+    applyAudienceTribunalFilterFromInput(e.target.value, { allowApproximate: false, clearSelection: true });
   });
   $('filterAudienceDate')?.addEventListener('change', (e)=>{
     filterAudienceDate = String(e.target?.value || '').trim();
@@ -19012,10 +19074,31 @@ function formatAudienceExportWrappedName(value){
   const text = normalizeLooseText(value);
   if(!text || /\r?\n/.test(text)) return text;
   const tokens = text.split(/\s+/).filter(Boolean);
-  if(tokens.length <= 2) return text;
+  if(tokens.length <= 1) return text;
+  const maxLineLength = 14;
+  const maxWordsPerLine = 2;
   const lines = [];
-  for(let index = 0; index < tokens.length; index += 2){
-    lines.push(tokens.slice(index, index + 2).join(' '));
+  let currentLineTokens = [];
+  let currentLineLength = 0;
+  tokens.forEach((token)=>{
+    const nextLineLength = currentLineTokens.length
+      ? currentLineLength + 1 + token.length
+      : token.length;
+    const shouldWrap = currentLineTokens.length > 0 && (
+      currentLineTokens.length >= maxWordsPerLine
+      || nextLineLength > maxLineLength
+    );
+    if(shouldWrap){
+      lines.push(currentLineTokens.join(' '));
+      currentLineTokens = [token];
+      currentLineLength = token.length;
+      return;
+    }
+    currentLineTokens.push(token);
+    currentLineLength = nextLineLength;
+  });
+  if(currentLineTokens.length){
+    lines.push(currentLineTokens.join(' '));
   }
   return lines.join('\n');
 }
@@ -19034,9 +19117,7 @@ function buildAudienceSelectedExportTableRow(row, options = {}){
   const jugeValue = draft.juge || p.juge || '';
   const sortValue = blankSort ? '' : formatMixedDirectionExportText(rawSortValue);
   const clientValue = formatAudienceExportWrappedName(row?.c?.name || '');
-  const adversaireValue = blankSort && String(rawSortValue || '').trim()
-    ? formatMixedDirectionExportText(rawSortValue)
-    : formatAudienceExportWrappedName(d.debiteur || '');
+  const adversaireValue = formatAudienceExportWrappedName(d.debiteur || '');
   const out = [
     clientValue,
     adversaireValue,
