@@ -3038,12 +3038,12 @@ function getAllFilteredSuiviRowsForPrintSelection(){
 }
 
 function syncSuiviPageSelectionToggle(){
-  const rows = getVisibleSuiviPageRowsForPrintSelection();
+  const rows = getAllFilteredSuiviRowsForPrintSelection();
   const selected = (
-    rows === lastSuiviRenderedPageRows
+    rows === lastSuiviRenderedRows
     && getSuiviRenderStateKey() === lastSuiviRenderedStateKey
   )
-    ? countSelectedSuiviRows(lastSuiviRenderedPageRows)
+    ? countSelectedSuiviRows(lastSuiviRenderedRows)
     : countSelectedSuiviRows(rows);
   syncPageSelectionToggleControl('suiviPageSelectionToggle', 'suiviCheckedCount', rows.length, selected);
 }
@@ -5498,8 +5498,11 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
   const useAudienceReferenceLayout = layoutPreset === 'audience-reference';
   const useAudienceCompactReferenceLayout = useAudienceReferenceLayout && colCount === 6;
   const useSuiviReferenceLayout = layoutPreset === 'suivi-reference';
+  const instructionColumnIndex = Array.isArray(headers)
+    ? headers.findIndex((header)=>String(header || '').trim().toLowerCase() === 'instruction')
+    : -1;
   const defaultWrapColumnIndexes = useAudienceReferenceLayout
-    ? [0, 1, Math.max(0, colCount - 1)]
+    ? [0, 1, Math.max(0, colCount - 1), instructionColumnIndex]
     : [];
   const normalizedWrapColumnIndexes = [...new Set(
     [
@@ -5631,7 +5634,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
     pageMargins: { left: 0, right: 0, top: 0, bottom: 0, header: 0, footer: 0 },
     pageSetup: { orientation: 'landscape' },
     columnAlignments: ['center', 'left', 'center', 'center', 'center', 'left', 'center'],
-    columnWrap: [true, true, false, false, false, false, true],
+    columnWrap: [true, true, false, false, true, false, true],
     columnShrinkToFit: [false, false, false, false, true, false, false]
   };
   const estimateWrappedLineCountForWidth = (value, width)=>{
@@ -5706,8 +5709,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
           sheetRow.height = Math.max(sampleRowHeight, getAudienceReferenceRowHeight(row));
           for(let c = 1; c <= colCount; c++){
             const cell = sheetRow.getCell(c);
-            const bodyFontSize = c === 2 ? 14 : 16;
-            cell.font = { name: 'Calibri', size: bodyFontSize, color: { argb: 'FF111111' } };
+            cell.font = { name: 'Calibri', size: 14, color: { argb: 'FF111111' } };
             cell.fill = {
               type: 'pattern',
               pattern: 'solid',
@@ -5782,7 +5784,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         };
 
         const headerCell = sheet.getRow(8).getCell(c);
-        headerCell.font = { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
+        headerCell.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
         headerCell.fill = {
           type: 'pattern',
           pattern: 'solid',
@@ -5802,8 +5804,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         for(let c = 1; c <= colCount; c++){
           const cell = sheetRow.getCell(c);
           cell.value = Array.isArray(row) ? (row[c - 1] ?? '') : '';
-          const bodyFontSize = c === 2 ? 14 : 16;
-          cell.font = { name: 'Calibri', size: bodyFontSize, color: { argb: 'FF111111' } };
+          cell.font = { name: 'Calibri', size: 14, color: { argb: 'FF111111' } };
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
@@ -5899,8 +5900,8 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         baseDataRowHeight: 44,
         titleFontSize: useAudienceReferenceLayout ? 20 : 24,
         subtitleFontSize: useAudienceReferenceLayout ? 16 : 17,
-        headerFontSize: useAudienceReferenceLayout ? 16 : 20,
-        bodyFontSize: useAudienceReferenceLayout ? 16 : 18,
+        headerFontSize: useAudienceReferenceLayout ? 14 : 20,
+        bodyFontSize: useAudienceReferenceLayout ? 14 : 18,
         wrapLineHeight: 20
       };
 
@@ -5976,10 +5977,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
   await runChunked(Array.from({ length: rows.length }, (_, index)=>index + genericDataStartRowNumber), async (rowIndex)=>{
     for(let c=1; c<=colCount; c++){
       const cell = sheet.getRow(rowIndex).getCell(c);
-      const bodyFontSize = useAudienceReferenceLayout && c === 2
-        ? Math.max(13, genericLayoutConfig.bodyFontSize - 1)
-        : genericLayoutConfig.bodyFontSize;
-      cell.font = { name: 'Arial', size: bodyFontSize, color: { argb: 'FF111111' } };
+      cell.font = { name: 'Arial', size: genericLayoutConfig.bodyFontSize, color: { argb: 'FF111111' } };
       const isArabicColumn = c === colCount;
       const headerLabel = String(headers[c - 1] || '').trim().toLowerCase();
       const align = useAudienceReferenceLayout
@@ -13561,7 +13559,7 @@ function setupEvents(){
   bindDashboardShortcutCard('dashboardClotureCard', openDashboardSuiviClosedView);
   $('selectAllSuiviBtn')?.addEventListener('click', ()=>setAllVisibleSuiviRowsForPrint(true));
   $('clearAllSuiviBtn')?.addEventListener('click', ()=>setAllVisibleSuiviRowsForPrint(false));
-  $('suiviPageSelectionToggle')?.addEventListener('change', (e)=>setAllVisibleSuiviRowsForPrint(!!e.target?.checked));
+  $('suiviPageSelectionToggle')?.addEventListener('change', (e)=>setAllFilteredSuiviRowsForPrint(!!e.target?.checked));
   $('exportSuiviBtn')?.addEventListener('click', exportSuiviSelectedXLS);
   $('previewSuiviBtn')?.addEventListener('click', previewSuiviSelectedRows);
   $('filterAudience')?.addEventListener('input', renderAudienceDebounced);
