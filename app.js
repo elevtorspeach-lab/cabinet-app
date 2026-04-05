@@ -6566,9 +6566,7 @@ async function exportAudienceWorkbookXlsxStyled({ headers, rows, subtitle = '', 
         ? ((c === 1 || c === 3 || c === 4 || c === 5 || isArabicColumn) ? 'center' : 'left')
         : useSuiviReferenceLayout
           ? (
-            headerLabel === 'ref client'
-            || headerLabel === 'procédure'
-            || headerLabel === 'tribunal'
+            ['ref client', 'procédure', 'tribunal', 'client', 'type', 'ville', 'marque', 'audience', 'sort', 'date affectation'].includes(headerLabel)
               ? 'center'
               : 'left'
           )
@@ -21114,6 +21112,17 @@ function getAudienceRowsForSidebarProjectedCached(){
     const ordonnanceValue = getAudienceExportOrdonnanceValue(row);
     return {
       judgeKeys,
+      calendarDateKey,
+      calendarEvent: {
+        client: String(row?.c?.name || '').trim() || '-',
+        procedure: String(row?.draft?.procedure || row?.p?.nature || row?.d?.natureProcedure || '').trim() || '-',
+        debiteur: String(row?.d?.debiteur || '').trim() || '-',
+        ref: String(row?.draft?.refDossier || row?.p?.referenceClient || row?.d?.referenceClient || '').trim() || '-',
+        juge: judgeValue || '-',
+        tribunal: tribunalValue || '-',
+        sort: sortValue || '-',
+        statut: statutValue || 'En cours'
+      },
       session: judgeKeys.length ? {
         date: normalizeDateDDMMYYYY(audienceDateRaw) || String(audienceDateRaw || '').trim() || '-',
         dateKey: calendarDateKey,
