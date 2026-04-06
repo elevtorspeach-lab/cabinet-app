@@ -20242,6 +20242,35 @@ function getAudienceDateDepotDisplayValue(row){
   return normalizedDepot;
 }
 
+function compareAudienceRowsForExport(a, b) {
+  const getTrib = (row) => String(row?.draft?.tribunal || row?.p?.tribunal || row?.d?.tribunal || '').trim();
+  const tribA = getTrib(a);
+  const tribB = getTrib(b);
+  if (tribA !== tribB) {
+    if (!tribA) return 1;
+    if (!tribB) return -1;
+    return tribA.localeCompare(tribB, 'fr');
+  }
+
+  const getYear = (row) => {
+    const ref = String(row?.draft?.refDossier || row?.p?.referenceClient || row?.d?.referenceClient || '').trim();
+    const match = ref.match(/\/(20\d{2})$|\/(19\d{2})$/);
+    if (match) return parseInt(match[1] || match[2], 10);
+    const parts = ref.split('/');
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i].trim();
+      if (p.length === 4 && !isNaN(p)) return parseInt(p, 10);
+    }
+    return 9999;
+  };
+  
+  const yearA = getYear(a);
+  const yearB = getYear(b);
+  if (yearA !== yearB) return yearA - yearB;
+
+  return compareAudienceRowsByReferenceProximity(a, b);
+}
+
 function getSelectedAudienceRowsForExport(){
   const rows = getAudienceRows({ ignoreSearch: true, ignoreColor: true });
   if(
@@ -20252,7 +20281,7 @@ function getSelectedAudienceRowsForExport(){
   }
   const out = rows
     .filter(row=>isAudienceSelectedForPrint(row.ci, row.di, row.procKey))
-    .sort(compareAudienceRowsByReferenceProximity);
+    .sort(compareAudienceRowsForExport);
   audienceSelectedExportRowsCacheInput = rows;
   audienceSelectedExportRowsCacheVersion = audiencePrintSelectionVersion;
   audienceSelectedExportRowsCacheOutput = out;
@@ -21307,7 +21336,7 @@ function getAudienceRowsForRegularExport(){
   ){
     return rows;
   }
-  return rows.slice().sort(compareAudienceRowsByReferenceProximity);
+  return rows.slice().sort(compareAudienceRowsForExport);
 }
 
 async function exportAudienceRegularXLS(options = {}){
