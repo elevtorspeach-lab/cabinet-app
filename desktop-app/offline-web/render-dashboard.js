@@ -294,6 +294,14 @@ function queueDashboardHeavyRender(options = {}){
   dashboardHeavyRenderTimer = setTimeout(render, 80);
 }
 
+function renderDashboardLiveLite(){
+  const metricOptions = { immediate: true };
+  const snapshot = getDashboardSnapshot();
+  animateDashboardMetric('totalClients', getVisibleClients().length, metricOptions);
+  animateDashboardMetric('dossiersEnCours', snapshot.enCours, metricOptions);
+  animateDashboardMetric('dossiersTermines', snapshot.clotureCount, metricOptions);
+}
+
 function renderDashboard(options = {}){
   if(!shouldRenderDeferredSection('dashboard', options)) return;
   const immediateMetrics = options.immediate === true || isLargeDatasetMode() || heavyUiOperationCount > 0;
