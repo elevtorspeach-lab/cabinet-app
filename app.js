@@ -176,6 +176,7 @@ let audienceColorBatchNeedsPersist = false;
 let audienceColorBatchNeedsDashboard = false;
 let audienceColorBatchNeedsSuivi = false;
 let hasLoadedState = false;
+let applicationBootFailed = false;
 let importInProgress = false;
 let heavyUiOperationCount = 0;
 let remoteSyncTimer = null;
@@ -4445,6 +4446,27 @@ async function refreshServerConnectionStatus(options = {}){
   }finally{
     remoteSyncHealthCheckInFlight = false;
   }
+}
+
+async function refreshPreLoginServerStatus(){
+  if(LOCAL_ONLY_MODE){
+    setSyncStatus('error', 'Mode local (offline)');
+    return false;
+  }
+  const connected = await refreshServerConnectionStatus({ force: true });
+  if(hasRemoteAuthSession()) return connected;
+  if(connected){
+    setSyncStatus(
+      'pending',
+      remoteBootstrapSetupRequired ? 'Initialisation serveur requise' : 'Connexion serveur en attente'
+    );
+    return true;
+  }
+  setSyncStatus(
+    remoteBootstrapSetupRequired ? 'pending' : 'error',
+    remoteBootstrapSetupRequired ? 'Initialisation serveur requise' : 'Mode local (serveur indisponible)'
+  );
+  return false;
 }
 
 function isManager(){
@@ -14307,6 +14329,7 @@ async function initApplication(){
   if(startupAudienceReconciliation.matchedDossiers > 0){
     handleDossierDataChange({ audience: true });
   }
+  applicationBootFailed = false;
   scheduleInitialDesktopStatePersist();
   hasLoadedState = true;
   if(startupAudienceReconciliation.matchedDossiers > 0){
@@ -14341,6 +14364,20 @@ async function initApplication(){
   }
   if(pendingLoginRetryAfterInit){
     setTimeout(()=>login(), 0);
+  }
+}
+
+async function bootstrapApplication(){
+  try{
+    await initApplication();
+    if(!hasRemoteAuthSession()){
+      await refreshPreLoginServerStatus();
+    }
+  }catch(err){
+    applicationBootFailed = true;
+    console.error('Initialisation application impossible', err);
+    setSyncStatus('error', LOCAL_ONLY_MODE ? 'Mode local (offline)' : 'Mode local (serveur indisponible)');
+    showLoginError('Initialisation impossible. Rechargez la page ou verifiez le serveur.');
   }
 }
 
@@ -14947,6 +14984,10 @@ function showView(v, options = {}){
 
 // ================== LOGIN ==================
 async function login(){
+  if(applicationBootFailed){
+    showLoginError('Initialisation impossible. Rechargez la page ou verifiez le serveur.');
+    return;
+  }
   if(!hasLoadedState){
     pendingLoginRetryAfterInit = true;
     showLoginError('Chargement des donnees en cours...');
@@ -22251,9 +22292,9 @@ function renderCustomProcedures(){
 
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApplication);
+  document.addEventListener('DOMContentLoaded', bootstrapApplication);
 } else {
-  initApplication();
+  bootstrapApplication();
 }
 function getApiAuthLoginTimeoutMs(){
   let timeoutMs = API_AUTH_LOGIN_TIMEOUT_MS;

@@ -19,14 +19,14 @@ const PLAYWRIGHT_NODE_MODULES = process.env.PLAYWRIGHT_NODE_MODULES
 const CHROME_EXECUTABLE = process.env.BENCH_BROWSER_PATH
   || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
-const TOTAL_MANAGERS = 5;
-const TOTAL_ADMINS = 15;
-const TOTAL_CLIENTS = 10;
+const TOTAL_MANAGERS = Number(process.env.TOTAL_MANAGERS || 5);
+const TOTAL_ADMINS = Number(process.env.TOTAL_ADMINS || 15);
+const TOTAL_CLIENTS = Number(process.env.TOTAL_CLIENTS || 10);
 const TOTAL_SESSIONS = TOTAL_MANAGERS + TOTAL_ADMINS + TOTAL_CLIENTS;
-const TARGET_CLIENTS = 300;
-const TARGET_DOSSIERS = 40000;
-const TARGET_AUDIENCE = 60000;
-const TARGET_DILIGENCE = 40000;
+const TARGET_CLIENTS = Number(process.env.TARGET_CLIENTS || 300);
+const TARGET_DOSSIERS = Number(process.env.TARGET_DOSSIERS || 40000);
+const TARGET_AUDIENCE = Number(process.env.TARGET_AUDIENCE || 60000);
+const TARGET_DILIGENCE = Number(process.env.TARGET_DILIGENCE || 40000);
 const TEST_DURATION_MS = Number(process.env.BENCH_DURATION_MS || (15 * 60 * 1000));
 const SESSION_OPEN_BATCH = 4;
 const SESSION_OPEN_PAUSE_MS = 1500;
@@ -153,6 +153,33 @@ function isAudienceProcedure(procName) {
   return value !== 'sfdc' && value !== 'sbien' && value !== 'injonction';
 }
 
+function parseProcedureToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return '';
+  const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (compact === 'ass') return 'ASS';
+  if (compact === 'commandement' || compact === 'cmd' || compact === 'com') return 'Commandement';
+  if (compact === 'sfdc') return 'SFDC';
+  if (compact === 'sbien') return 'S/bien';
+  if (compact === 'inj' || compact === 'injonction') return 'Injonction';
+  return raw;
+}
+
+function getProcedureBaseName(procName) {
+  const raw = String(procName || '').trim();
+  if (!raw) return '';
+  return raw.replace(/\d+$/, '').trim() || raw;
+}
+
+function isDiligenceProcedure(procName) {
+  const base = getProcedureBaseName(parseProcedureToken(procName));
+  return base === 'ASS'
+    || base === 'SFDC'
+    || base === 'S/bien'
+    || base === 'Injonction'
+    || base === 'Commandement';
+}
+
 function computeStateStats(state) {
   const stats = {
     clients: Array.isArray(state?.clients) ? state.clients.length : 0,
@@ -170,7 +197,7 @@ function computeStateStats(state) {
         if (isAudienceProcedure(procKey)) {
           stats.audience += 1;
         }
-        if (String(procKey || '').trim()) {
+        if (isDiligenceProcedure(procKey)) {
           stats.diligence += 1;
         }
       }
@@ -195,7 +222,7 @@ function addExtraAudienceProcedures(state, targetAudienceCount) {
   const currentStats = computeStateStats(state);
   let missing = Math.max(0, targetAudienceCount - currentStats.audience);
   if (!missing) return { added: 0, finalAudience: currentStats.audience };
-  const extraNames = ['Audience Extra A', 'Audience Extra B', 'Audience Extra C'];
+  const extraNames = ['ASS NB 1', 'ASS NB 2', 'ASS NB 3'];
   let added = 0;
   let dossierCursor = 0;
   const allDossiers = [];
@@ -401,7 +428,7 @@ function createSummaryStore() {
   return {
     runId: RUN_ID,
     startedAt: new Date().toISOString(),
-    assumption: 'Le user a écrit 25 utilisateurs mais le découpage demandé fait 30 sessions (15 admins + 5 gestionnaires + 10 clients). Le test a été lancé sur 30 sessions.',
+    assumption: `Scenario lance sur ${TOTAL_SESSIONS} sessions (${TOTAL_MANAGERS} gestionnaires, ${TOTAL_ADMINS} admins, ${TOTAL_CLIENTS} clients).`,
     baseUrl: BASE_URL,
     durationMs: TEST_DURATION_MS,
     scenario: {

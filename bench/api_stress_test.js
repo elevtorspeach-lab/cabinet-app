@@ -18,19 +18,20 @@ const http = require('http');
 const os = require('os');
 
 // ─── CONFIG ────────────────────────────────────────────────────
-const TARGET_CLIENTS       = 700;
-const TARGET_DOSSIERS      = 100_000;
-const TARGET_AUDIENCE      = 200_000;
-const TARGET_DILIGENCE     = 100_000;
-const TOTAL_MANAGERS       = 10;
-const TOTAL_ADMINS         = 50;
-const TOTAL_CLIENT_USERS   = 40;
-const SERVER_PORT          = 3620;
+const TARGET_CLIENTS       = Number(process.env.TARGET_CLIENTS || 700);
+const TARGET_DOSSIERS      = Number(process.env.TARGET_DOSSIERS || 100_000);
+const TARGET_AUDIENCE      = Number(process.env.TARGET_AUDIENCE || 200_000);
+const TARGET_DILIGENCE     = Number(process.env.TARGET_DILIGENCE || 100_000);
+const TOTAL_MANAGERS       = Number(process.env.TOTAL_MANAGERS || 10);
+const TOTAL_ADMINS         = Number(process.env.TOTAL_ADMINS || 50);
+const TOTAL_CLIENT_USERS   = Number(process.env.TOTAL_CLIENT_USERS || 40);
+const SERVER_PORT          = Number(process.env.BENCH_PORT || 3620);
 const BASE_URL             = `http://127.0.0.1:${SERVER_PORT}`;
-const CONCURRENT_REQUESTS  = 20;      // simultaneous HTTP requests
+const CONCURRENT_REQUESTS  = Number(process.env.CONCURRENT_REQUESTS || 20);      // simultaneous HTTP requests
 const ROOT_DIR             = path.resolve(__dirname, '..');
 const SERVER_DIR           = path.join(ROOT_DIR, 'server');
 const SERVER_ENTRY         = path.join(SERVER_DIR, 'index.js');
+const FIXTURE_SOURCE       = process.env.FIXTURE_SOURCE || '';
 
 // ─── HELPERS ───────────────────────────────────────────────────
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -43,6 +44,59 @@ function log(msg) { console.log(`[${new Date().toISOString().slice(11,19)}] ${ms
 function logOk(msg) { console.log(`[${new Date().toISOString().slice(11,19)}] ✅ ${msg}`); }
 function logWarn(msg) { console.log(`[${new Date().toISOString().slice(11,19)}] ⚠️  ${msg}`); }
 function logFail(msg) { console.log(`[${new Date().toISOString().slice(11,19)}] ❌ ${msg}`); }
+
+function parseProcedureToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return '';
+  const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (compact === 'ass') return 'ASS';
+  if (compact === 'commandement' || compact === 'cmd' || compact === 'com') return 'Commandement';
+  if (compact === 'sfdc') return 'SFDC';
+  if (compact === 'sbien') return 'S/bien';
+  if (compact === 'inj' || compact === 'injonction') return 'Injonction';
+  return raw;
+}
+
+function getProcedureBaseName(procName) {
+  const raw = String(procName || '').trim();
+  if (!raw) return '';
+  return raw.replace(/\d+$/, '').trim() || raw;
+}
+
+function isAudienceProcedure(procName) {
+  const value = String(procName || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!value) return false;
+  return value !== 'sfdc' && value !== 'sbien' && value !== 'injonction';
+}
+
+function isDiligenceProcedure(procName) {
+  const base = getProcedureBaseName(parseProcedureToken(procName));
+  return base === 'ASS'
+    || base === 'SFDC'
+    || base === 'S/bien'
+    || base === 'Injonction'
+    || base === 'Commandement';
+}
+
+function computeStateStats(state) {
+  const stats = {
+    clients: Array.isArray(state?.clients) ? state.clients.length : 0,
+    dossiers: 0,
+    audience: 0,
+    diligence: 0,
+    users: Array.isArray(state?.users) ? state.users.length : 0
+  };
+  for (const client of Array.isArray(state?.clients) ? state.clients : []) {
+    for (const dossier of Array.isArray(client?.dossiers) ? client.dossiers : []) {
+      stats.dossiers += 1;
+      for (const procKey of Object.keys(dossier?.procedureDetails || {})) {
+        if (isAudienceProcedure(procKey)) stats.audience += 1;
+        if (isDiligenceProcedure(procKey)) stats.diligence += 1;
+      }
+    }
+  }
+  return stats;
+}
 
 // ─── DATA GENERATOR ───────────────────────────────────────────
 function generateFixture() {
@@ -228,12 +282,16 @@ async function startTestServer(tmpDir) {
 
   log('Serializing state to disk...');
   const serializeStart = process.hrtime.bigint();
-  const state = generateFixture();
+  const state = FIXTURE_SOURCE
+    ? JSON.parse(await fsp.readFile(path.resolve(FIXTURE_SOURCE), 'utf8'))
+    : generateFixture();
+  const stats = computeStateStats(state);
   const json = JSON.stringify(state);
   const jsonSizeMB = (Buffer.byteLength(json) / 1024 / 1024).toFixed(1);
   await fsp.writeFile(path.join(dataDir, 'state.json'), json, 'utf8');
   await fsp.writeFile(path.join(dataDir, 'state.journal'), '', 'utf8');
   log(`State file: ${jsonSizeMB} MB written in ${fmtMs(hrMs(serializeStart))}`);
+  log(`Loaded stats: ${stats.clients} clients, ${stats.dossiers} dossiers, ${stats.audience} audience, ${stats.diligence} diligence, ${stats.users} users`);
 
   // Copy server files to temp
   const serverFiles = await fsp.readdir(SERVER_DIR);
@@ -425,10 +483,11 @@ async function runBenchmark(token) {
   log('── Test 8: Write (save single dossier) ──');
   await bench('POST /api/state/dossiers (single)', async () => {
     const res = await httpPost(`${BASE_URL}/api/state/dossiers?token=${token}`, {
+      action: 'create',
       clientId: 1,
       dossier: {
-        referenceClient: 'REF-1-1',
-        debiteur: 'Débiteur Test Updated',
+        referenceClient: `BENCH-SINGLE-${Date.now()}`,
+        debiteur: 'Debiteur Test Updated',
         procedure: 'ASS',
         ville: 'Casablanca',
         montant: '99999',
@@ -442,13 +501,15 @@ async function runBenchmark(token) {
   await bench(`POST /api/state/dossiers x${CONCURRENT_REQUESTS} concurrent`, async () => {
     const promises = Array.from({ length: CONCURRENT_REQUESTS }, (_, i) =>
       httpPost(`${BASE_URL}/api/state/dossiers?token=${token}`, {
+        action: 'create',
         clientId: (i % TARGET_CLIENTS) + 1,
         dossier: {
-          referenceClient: `REF-${(i % TARGET_CLIENTS) + 1}-1`,
+          referenceClient: `BENCH-CONCURRENT-${Date.now()}-${i}`,
           debiteur: `Concurrent Write ${i}`,
           procedure: 'ASS',
           ville: 'Rabat',
-          montant: String(i * 1000)
+          montant: String(i * 1000),
+          procedureDetails: { ASS: { sort: 'En cours', juge: `Juge ${i}` } }
         }
       }, 60000)
     );
