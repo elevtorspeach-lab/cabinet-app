@@ -18361,6 +18361,14 @@ function getFilteredDiligenceRows(allRows){
   });
   
   filteredRows.sort((a, b) => {
+    const tribA = String(a.tribunal || '').trim();
+    const tribB = String(b.tribunal || '').trim();
+    if (tribA !== tribB) {
+      if (!tribA) return 1;
+      if (!tribB) return -1;
+      return tribA.localeCompare(tribB, 'fr');
+    }
+
     const refA = getDiligenceReferenceDossierValue(a);
     const refB = getDiligenceReferenceDossierValue(b);
     const yearA = extractYearFromReferenceDiligence(refA);
