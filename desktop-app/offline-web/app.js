@@ -13441,6 +13441,7 @@ async function applyExcelImport(payload, options = {}){
   };
 
   if(importDossiers){
+    const { diligenceMode } = opts;
     const reportDossiersProgress = makeProgressReporter('Import Excel - dossiers');
     await runChunked(dossiers, async (row)=>{
     const rowNumberLabel = Number.isFinite(Number(row?.rowNumber)) ? `Ligne ${Number(row.rowNumber)}` : 'Ligne ?';
@@ -14060,6 +14061,19 @@ async function handleAudienceImportFile(file){
   renderAudience();
 }
 
+async function handleDiligenceImportFile(file){
+  if(!canImportData()){
+    alert('Accès refusé');
+    return;
+  }
+  await handleExcelImportFile(file, {
+    importDossiers: true,
+    importAudiences: false,
+    diligenceMode: true
+  });
+  renderDiligence({ force: true });
+}
+
 async function exportBackupExcelImportable(){
   if(!canExportData()){
     alert('Accès refusé');
@@ -14570,6 +14584,14 @@ function setupEvents(){
     const file = e.target?.files?.[0];
     if(!file) return;
     handleAudienceImportFile(file).catch(err=>console.error(err));
+    e.target.value = '';
+  });
+  $('importDiligenceBtn')?.addEventListener('click', ()=> $('diligenceImportInput')?.click());
+  $('diligenceImportInput')?.addEventListener('change', (e)=>{
+    if(!canEditData()) return alert('Accès refusé');
+    const file = e.target?.files?.[0];
+    if(!file) return;
+    handleDiligenceImportFile(file).catch(err=>console.error(err));
     e.target.value = '';
   });
   $('addDossierBtn').onclick = addDossier;
@@ -17710,12 +17732,12 @@ function normalizeDiligenceNotificationSort(value){
   return String(value ?? '').trim();
 }
 
-function getDiligenceNotificationSortValue(value, procedure = ''){
+function getDiligenceNotificationSortValue(value, procedure = '', notificationNo = ''){
+  if(!String(notificationNo || '').trim()) return '-';
   const normalized = normalizeDiligenceNotificationSort(value);
   if(normalized === '-') return '-';
   if(normalized) return normalized;
-  if(isDiligenceAssProcedure(procedure)) return 'notifier';
-  return '';
+  return '-';
 }
 
 function getDiligenceReferenceDossierValue(row){
@@ -17753,7 +17775,7 @@ function getDiligenceNotificationSortCellValue(row){
   if(isDiligenceCommandementProcedure(row?.procedure)){
     return String(row?.details?.notifDebiteur || '').trim();
   }
-  return getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure);
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure, row?.details?.notificationNo || '');
 }
 
 function getDiligenceDelegationCellValue(row){
@@ -17796,7 +17818,7 @@ function getDiligenceTribunalCellValue(row){
 
 function isDiligenceAssNbLayout(row){
   return isDiligenceAssProcedure(row?.procedure)
-    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'NB';
+    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure, row?.details?.notificationNo || '') === 'NB';
 }
 
 function getDiligenceAssHeaderMode(rows){
@@ -18013,7 +18035,7 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
     `;
   }
   if(field === 'notificationSort'){
-    const status = getDiligenceNotificationSortValue(normalized, row?.procedure);
+    const status = getDiligenceNotificationSortValue(normalized, row?.procedure, row?.details?.notificationNo || '');
     const isAssProcedure = isDiligenceAssProcedure(row?.procedure);
     if(!row?.canEdit){
       return escapeHtml(status || '-');
