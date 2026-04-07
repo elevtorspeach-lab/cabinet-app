@@ -2596,16 +2596,29 @@ function setSyncStatus(status, message){
   const text = $('syncStatusText');
   if(!badge || !text) return;
   badge.classList.remove('is-ok', 'is-error', 'is-syncing', 'is-pending', 'is-conflict');
-  const next = ['ok', 'error', 'syncing', 'pending', 'conflict'].includes(status) ? status : 'pending';
+  
+  let next = ['ok', 'error', 'syncing', 'pending', 'conflict'].includes(status) ? status : 'pending';
+  
+  // Si on est en mode local seulement, on ne veut pas effrayer l'utilisateur avec
+  // des messages de "Synchronisation serveur" qui n'auront pas lieu immédiatement.
+  const isLocal = LOCAL_ONLY_MODE || !remoteServerReachable;
+
+  if(isLocal && next === 'syncing'){
+    next = 'ok';
+  }
+
   badge.classList.add(`is-${next}`);
+  
   const fallbackText = {
-    pending: 'Modification detectee...',
+    pending: 'Modification détectée...',
     syncing: 'Synchronisation serveur...',
-    ok: 'Connecte au serveur (actif)',
+    ok: isLocal ? 'Mode local (actif)' : 'Connecté au serveur (actif)',
     error: 'Serveur indisponible (local)',
-    conflict: 'Conflit detecte, rechargement...'
+    conflict: 'Conflit détecté, rechargement...'
   };
-  text.innerText = String(message || fallbackText[next]);
+  
+  const displayMessage = message || fallbackText[next];
+  text.innerText = String(displayMessage);
 }
 
 function formatSyncMetricMs(value){
@@ -11104,7 +11117,12 @@ function updateSyncStatusLabel(){
     if(!items.length){
       setSyncStatus('ok');
     } else {
-      setSyncStatus('syncing', `Synchronisation: ${items.length} modification(s) en attente`);
+      const isLocal = LOCAL_ONLY_MODE || !remoteServerReachable;
+      if (isLocal) {
+        setSyncStatus('ok', 'Mode local (données sauvegardées)');
+      } else {
+        setSyncStatus('syncing', `Synchronisation: ${items.length} modification(s) en attente`);
+      }
     }
   });
 }
