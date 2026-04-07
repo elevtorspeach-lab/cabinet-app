@@ -20589,7 +20589,7 @@ function compareAudienceRowsByReferenceProximity(a, b){
   const pb = metaB.parts;
 
   if(pa && pb){
-    if(pa.year !== pb.year) return pb.year - pa.year;
+    if(pa.year !== pb.year) return pa.year - pb.year;
     if(pa.middle !== pb.middle) return pa.middle - pb.middle;
     if(pa.first !== pb.first) return pa.first - pb.first;
   }else if(pa){
@@ -20685,7 +20685,7 @@ function compareAudienceSortMeta(aMeta, bMeta){
   const pa = aMeta?.parts;
   const pb = bMeta?.parts;
   if(pa && pb){
-    if(pa.year !== pb.year) return pb.year - pa.year;
+    if(pa.year !== pb.year) return pa.year - pb.year;
     if(pa.middle !== pb.middle) return pa.middle - pb.middle;
     if(pa.first !== pb.first) return pa.first - pb.first;
   }else if(pa){

@@ -20350,8 +20350,8 @@ function getAudienceDateDepotDisplayValue(row){
 
 function compareAudienceRowsForExport(a, b) {
   // Use the reference-based sorting logic which handles the YYYY/8104/XXXX format.
-  // Requirement: YYYY Descending, XXXX Descending.
-  return compareAudienceRowsByReferenceProximity(a, b, { direction: -1 });
+  // Requirement: YYYY Ascending, XXXX Ascending.
+  return compareAudienceRowsByReferenceProximity(a, b, { direction: 1 });
 }
 
 function getSelectedAudienceRowsForExport(){
@@ -20658,7 +20658,7 @@ function parseAudienceReferenceParts(value){
 }
 
 function compareAudienceRowsByReferenceProximity(a, b, options = {}){
-  const direction = options.direction === 1 ? 1 : -1; // Default to DESC (-1) as requested first
+  const direction = options.direction === -1 ? -1 : 1; // Default to ASC (1) as per newest local setup
   const metaA = buildAudienceSortMeta(a);
   const metaB = buildAudienceSortMeta(b);
   const refA = metaA.ref;
