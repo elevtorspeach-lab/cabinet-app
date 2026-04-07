@@ -20637,15 +20637,17 @@ function getAudienceRowReferenceValue(row){
 
 function parseAudienceReferenceParts(value){
   const ref = normalizeReferenceForAudienceLookup(value);
-  const m = ref.match(/^(\d+)\/(\d+)\/(\d{2,4})$/);
+  // On assouplit la regex pour accepter des caractères de fin (ex: *, espaces)
+  const m = ref.match(/^(\d+)\/(\d+)\/(\d{2,4})/);
   if(!m) return null;
   const first = Number(m[1]);
   const middle = Number(m[2]);
-  const rawYear = Number(m[3]);
+  const rawYearStr = m[3];
+  const rawYear = Number(rawYearStr);
   if(!Number.isFinite(first) || !Number.isFinite(middle) || !Number.isFinite(rawYear)){
     return null;
   }
-  const year = m[3].length === 2
+  const year = rawYearStr.length === 2
     ? (rawYear >= 70 ? 1900 + rawYear : 2000 + rawYear)
     : rawYear;
   return { first, middle, year };
