@@ -13407,9 +13407,11 @@ async function applyExcelImport(payload, options = {}){
       .filter(Boolean);
   };
   const resolveAudienceDepotDateForRef = (dossier, refKey, targetProc, importedValue = '')=>{
+    const targetDetails = dossier?.procedureDetails?.[targetProc];
+    const existingDepotDate = normalizeAudienceDepotDateValue(targetDetails?.depotLe || targetDetails?.dateDepot || '');
+    if(existingDepotDate) return existingDepotDate;
     const importedDepotDate = normalizeAudienceDepotDateValue(importedValue);
     if(importedDepotDate) return importedDepotDate;
-    const targetDetails = dossier?.procedureDetails?.[targetProc];
     const targetDepotDate = normalizeAudienceDepotDateValue(targetDetails?.depotLe || targetDetails?.dateDepot || '');
     if(targetDepotDate) return targetDepotDate;
     const detailsMap = dossier?.procedureDetails && typeof dossier.procedureDetails === 'object'
@@ -13889,10 +13891,10 @@ async function applyExcelImport(payload, options = {}){
       p.referenceClient = ref;
       dossierAudienceRefsCache.delete(dossier);
     }
-    if(normalizedAudienceDate) p.audience = normalizedAudienceDate;
-    if(row.juge) p.juge = row.juge;
-    if(row.sort) p.sort = row.sort;
-    if(row.tribunal) p.tribunal = row.tribunal;
+    if(!String(p.audience || '').trim() && normalizedAudienceDate) p.audience = normalizedAudienceDate;
+    if(!String(p.juge || '').trim() && row.juge) p.juge = row.juge;
+    if(!String(p.sort || '').trim() && row.sort) p.sort = row.sort;
+    if(!String(p.tribunal || '').trim() && row.tribunal) p.tribunal = row.tribunal;
     // Keep "date depot" synchronized across repeated audience imports for the same ref dossier.
     const resolvedAudienceDepotDate = resolveAudienceDepotDateForRef(dossier, refKey, targetProc, row.dateDepot);
     if(resolvedAudienceDepotDate){
@@ -13921,8 +13923,13 @@ async function applyExcelImport(payload, options = {}){
     if(importedOrdonnanceStatus === 'ok') p.attOrdOrOrdOk = 'ord ok';
     if(row.hasStatutColumn === true){
       const importedStatus = normalizeImportedDossierStatus(row.statutRaw || '');
-      dossier.statut = importedStatus.statut || 'En cours';
-      dossier.statutDetails = importedStatus.detail || '';
+      const currentStatut = String(dossier.statut || '').trim().toLowerCase();
+      if(!currentStatut || currentStatut === 'en cours'){
+        dossier.statut = importedStatus.statut || dossier.statut || 'En cours';
+        if(!String(dossier.statutDetails || '').trim()){
+          dossier.statutDetails = importedStatus.detail || '';
+        }
+      }
     }
     if(!p.executionNo && hint.executionNo) p.executionNo = hint.executionNo;
     if(!p.sort && hint.sort) p.sort = hint.sort;
