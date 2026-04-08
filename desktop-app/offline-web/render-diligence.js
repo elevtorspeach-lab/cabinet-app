@@ -182,7 +182,9 @@ function renderDiligenceRowHtml(row){
     ? getDiligenceAssHeaderMode(diligenceVirtualRows)
     : 'default';
   const showAssFollowupColumns = isAssProcedure && assHeaderMode !== 'default';
-  const shouldHideTail = !String(row.details?.notificationNo || '').trim() || String(row.details?.notificationSort || '').trim() === '-';
+  const isAssNbLayoutValue = isDiligenceAssNbLayout(row);
+  const isAssNotifierLayoutValue = isDiligenceAssNotifierLayout(row);
+  const shouldHideTail = !(isAssNbLayoutValue || isAssNotifierLayoutValue);
   const hideWrap = (html)=> shouldHideTail ? `<div style="display:none">${html}</div>` : html;
   if(diligenceVirtualShowCommandementColumns && isCommandementProcedure){
     return `
@@ -212,14 +214,14 @@ function renderDiligenceRowHtml(row){
       </tr>
     `;
   }
-  const isAssNbLayout = isDiligenceAssNbLayout(row);
+  const isAssExpandedLayout = isAssNbLayoutValue || isAssNotifierLayoutValue;
   const notificationCells = showSharedNotificationColumns
     ? `
       <td>${renderDiligenceEditableCell(row, procEncoded, notificationNoField, notificationNoValue)}</td>
       <td>${renderDiligenceEditableCell(row, procEncoded, notificationSortField, notificationSortValue)}</td>
     `
     : '';
-  const nbFollowupCells = isAssNbLayout
+  const nbFollowupCells = isAssExpandedLayout
     ? `
       <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'lettreRec', row.details?.lettreRec || ''))}</td>
       <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'curateurNo', row.details?.curateurNo || ''))}</td>

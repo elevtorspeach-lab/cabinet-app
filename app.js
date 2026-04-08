@@ -505,7 +505,7 @@ let dossierHistoryObjectIdCounter = 1;
 const SIDEBAR_COLLAPSED_KEY = 'cabinet-avocat-sidebar-collapsed';
 const CONTENT_ZOOM_STORAGE_KEY = 'cabinet-avocat-content-zoom-v1';
 const CONTENT_ZOOM_DEFAULT = 1;
-const CONTENT_ZOOM_MIN = 0.6;
+const CONTENT_ZOOM_MIN = 0.3;
 const CONTENT_ZOOM_MAX = 1.4;
 const CONTENT_ZOOM_STEP = 0.05;
 const REMOTE_SYNC_POLL_INTERVAL_MS = 5000;
@@ -17912,7 +17912,7 @@ function normalizeDiligenceSort(value){
 function normalizeDiligenceNotificationSort(value){
   const raw = String(value ?? '').trim().toLowerCase();
   if(!raw) return '';
-  if(raw === 'nb') return 'NB';
+  if(raw === 'nb' || raw.startsWith('nb ')) return 'NB';
   if(raw.includes('notif')) return 'notifier';
   return String(value ?? '').trim();
 }
@@ -18006,12 +18006,17 @@ function isDiligenceAssNbLayout(row){
     && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'NB';
 }
 
+function isDiligenceAssNotifierLayout(row){
+  return isDiligenceAssProcedure(row?.procedure)
+    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'notifier';
+}
+
 function getDiligenceAssHeaderMode(rows){
   const list = Array.isArray(rows) ? rows.filter(row=>isDiligenceAssProcedure(row?.procedure)) : [];
   if(!list.length) return 'default';
-  const nbCount = list.reduce((count, row)=>count + (isDiligenceAssNbLayout(row) ? 1 : 0), 0);
-  if(nbCount === 0) return 'default';
-  if(nbCount === list.length) return 'nb';
+  const expandedCount = list.reduce((count, row)=>count + (isDiligenceAssNbLayout(row) ? 1 : 0), 0);
+  if(expandedCount === 0) return 'default';
+  if(expandedCount === list.length) return 'nb';
   return 'mixed';
 }
 

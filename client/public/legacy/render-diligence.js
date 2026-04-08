@@ -40,7 +40,13 @@ function buildDiligenceCountLabel(totalRows){
 }
 
 function renderDiligenceRowsHtml(rows){
-  return rows.map(row=>renderDiligenceRowHtml(row)).join('');
+  try{
+    const showPlieColumn = hasDiligenceCasablancaTpiAssRow(diligenceVirtualRows);
+    return rows.map(row=>renderDiligenceRowHtml(row, showPlieColumn)).join('');
+  }catch(err){
+    console.error('Erreur renderDiligenceRowsHtml:', err);
+    return `<tr><td colspan="${getDiligenceColCount()}">Erreur d'affichage des lignes.</td></tr>`;
+  }
 }
 
 function maybeApplyDiligenceAutoSizing(root = document){
@@ -64,7 +70,10 @@ function getDiligenceColCount(){
   if(diligenceVirtualShowCommandementColumns) return 13;
   if(diligenceVirtualCompactProcedureMode === 'sfdc' || diligenceVirtualCompactProcedureMode === 'sbien') return 13;
   if(diligenceVirtualShowAssColumns){
-    return getDiligenceAssHeaderMode(diligenceVirtualRows) === 'default' ? 17 : 23;
+    const assMode = getDiligenceAssHeaderMode(diligenceVirtualRows);
+    if(assMode !== 'default') return 23;
+    const hasNotifier = Array.isArray(diligenceVirtualRows) && diligenceVirtualRows.some(row => isDiligenceAssNotifierLayout(row));
+    return hasNotifier ? 23 : 17;
   }
   return 16;
 }
@@ -109,7 +118,9 @@ function buildDiligenceHeadHtml(){
     ? getDiligenceAssHeaderMode(diligenceVirtualRows)
     : 'default';
   const showAssFollowupColumns = diligenceVirtualShowAssColumns && assHeaderMode !== 'default';
-  const avisHeader = diligenceVirtualShowAssColumns ? '' : 'Sort exécution';
+  const hasNotifierRows = diligenceVirtualShowAssColumns && Array.isArray(diligenceVirtualRows) && diligenceVirtualRows.some(row => isDiligenceAssNotifierLayout(row));
+  const showStandardContinuation = showAssFollowupColumns || hasNotifierRows;
+  const avisHeader = (diligenceVirtualShowAssColumns && !hasNotifierRows) ? '' : 'Sort exécution';
   const compactMode = diligenceVirtualCompactProcedureMode;
   const showCompactInjonctionColumns = !diligenceVirtualShowAssColumns && compactMode !== 'sfdc' && compactMode !== 'sbien';
   const showSharedNotificationColumns = diligenceVirtualShowAssColumns || showCompactInjonctionColumns;
@@ -121,20 +132,20 @@ function buildDiligenceHeadHtml(){
     <th>Référence dossier</th>
     ${diligenceVirtualShowAssColumns ? '<th>Juge</th><th>Sort</th>' : ''}
     <th>Ordonnance</th>
-    ${showSharedNotificationColumns ? '<th>Notification N°</th><th>Sort notification</th>' : ''}
+    ${showSharedNotificationColumns ? `<th>Notification N°</th>${hasDiligenceCasablancaTpiAssRow(diligenceVirtualRows) ? '<th>Plie</th>' : ''}<th>Sort notification</th><th>Observation</th>` : ''}
     ${showAssFollowupColumns ? '<th>Lettre Rec</th><th>Curateur N°</th><th>ORD</th><th>Notif curateur</th><th>Sort notif</th><th>Avis curateur</th><th>PV Police</th>' : ''}
-    ${showSharedNotificationColumns ? '<th>Certificat non appel</th>' : ''}
-    <th>Execution N°</th>
-    <th>Ville</th>
-    <th>Délégation</th>
-    <th>Huissier</th>
+    ${showStandardContinuation ? '<th>Certificat non appel</th>' : (showSharedNotificationColumns && !diligenceVirtualShowAssColumns ? '<th>Certificat non appel</th>' : '')}
+    ${diligenceVirtualShowAssColumns ? (showStandardContinuation ? '<th>Execution N°</th>' : '') : '<th>Execution N°</th>'}
+    ${diligenceVirtualShowAssColumns ? (showStandardContinuation ? '<th>Ville</th>' : '') : '<th>Ville</th>'}
+    ${diligenceVirtualShowAssColumns ? (showStandardContinuation ? '<th>Délégation</th>' : '') : '<th>Délégation</th>'}
+    ${diligenceVirtualShowAssColumns ? (showStandardContinuation ? '<th>Huissier</th>' : '') : '<th>Huissier</th>'}
     ${avisHeader ? `<th>${avisHeader}</th>` : ''}
     <th>Tribunal</th>
     <th>Boîte N°</th>
   `;
 }
 
-function renderDiligenceRowHtml(row){
+function renderDiligenceRowHtml(row, showPlieColumn){
   const procEncoded = encodeURIComponent(String(row.procedure || ''));
   const isAssProcedure = isDiligenceAssProcedure(row?.procedure);
   const isCommandementProcedure = isDiligenceCommandementProcedure(row?.procedure);
@@ -182,7 +193,10 @@ function renderDiligenceRowHtml(row){
     ? getDiligenceAssHeaderMode(diligenceVirtualRows)
     : 'default';
   const showAssFollowupColumns = isAssProcedure && assHeaderMode !== 'default';
-  const shouldHideTail = !String(row.details?.notificationNo || '').trim() || String(row.details?.notificationSort || '').trim() === '-';
+  const isAssNbLayoutValue = isDiligenceAssNbLayout(row);
+  const isAssNotifierLayoutValue = isDiligenceAssNotifierLayout(row);
+  const avisHeader = (diligenceVirtualShowAssColumns && !isAssNotifierLayoutValue) ? '' : 'Sort exécution';
+  const shouldHideTail = isAssProcedure && !(isAssNbLayoutValue || isAssNotifierLayoutValue);
   const hideWrap = (html)=> shouldHideTail ? `<div style="display:none">${html}</div>` : html;
   if(diligenceVirtualShowCommandementColumns && isCommandementProcedure){
     return `
@@ -212,14 +226,17 @@ function renderDiligenceRowHtml(row){
       </tr>
     `;
   }
-  const isAssNbLayout = isDiligenceAssNbLayout(row);
+  const isAssExpandedLayout = isAssNbLayoutValue;
+  const isCasaRow = isDiligenceAssProcedure(row?.procedure) && isCasablancaTpiTribunal(tribunalValue);
   const notificationCells = showSharedNotificationColumns
     ? `
       <td>${renderDiligenceEditableCell(row, procEncoded, notificationNoField, notificationNoValue)}</td>
+      ${showPlieColumn ? `<td>${isCasaRow ? renderDiligenceEditableCell(row, procEncoded, 'plie', row.details?.plie || '') : ''}</td>` : ''}
       <td>${renderDiligenceEditableCell(row, procEncoded, notificationSortField, notificationSortValue)}</td>
+      <td>${renderDiligenceEditableCell(row, procEncoded, 'observation', row.details?.observation || '')}</td>
     `
     : '';
-  const nbFollowupCells = isAssNbLayout
+  const nbFollowupCells = isAssExpandedLayout
     ? `
       <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'lettreRec', row.details?.lettreRec || ''))}</td>
       <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'curateurNo', row.details?.curateurNo || ''))}</td>
@@ -231,17 +248,17 @@ function renderDiligenceRowHtml(row){
     `
     : (showAssFollowupColumns ? '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>' : '');
   const standardCells = `
-    ${showSharedNotificationColumns ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue))}</td>` : ''}
-    <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue))}</td>
-    <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue))}</td>
-    <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, delegationField, delegationValue))}</td>
-    <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, huissierField, huissierValue))}</td>
-    ${!isAssProcedure
+    ${(showAssFollowupColumns || isAssNotifierLayoutValue) ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue))}</td>` : (showSharedNotificationColumns && !isAssProcedure ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', certificatNonAppelValue))}</td>` : '')}
+    ${isAssProcedure ? ((showAssFollowupColumns || isAssNotifierLayoutValue) ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue))}</td>` : '') : `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'executionNo', executionValue))}</td>`}
+    ${isAssProcedure ? ((showAssFollowupColumns || isAssNotifierLayoutValue) ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue))}</td>` : '') : `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'ville', villeValue))}</td>`}
+    ${isAssProcedure ? ((showAssFollowupColumns || isAssNotifierLayoutValue) ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, delegationField, delegationValue))}</td>` : '') : `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, delegationField, delegationValue))}</td>`}
+    ${isAssProcedure ? ((showAssFollowupColumns || isAssNotifierLayoutValue) ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, huissierField, huissierValue))}</td>` : '') : `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, huissierField, huissierValue))}</td>`}
+    ${avisHeader
       ? `<td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'sort', executionSortValue))}</td>`
       : ''
     }
-    <td>${isCommandementProcedure ? '' : hideWrap(renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue))}</td>
-    <td>${hideWrap(renderDiligenceEditableCell(row, procEncoded, 'boiteNo', row.dossier?.boiteNo || ''))}</td>
+    <td>${isCommandementProcedure ? '' : renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
+    <td>${renderDiligenceEditableCell(row, procEncoded, 'boiteNo', row.dossier?.boiteNo || '')}</td>
   `;
   return `
     <tr>
@@ -349,72 +366,84 @@ function renderDiligence(options = {}){
   syncDiligenceOrdonnanceFilter(auxFilterRows);
   syncDiligenceTribunalFilter(auxFilterRows);
   const finalizeDiligenceRender = (rows)=>{
-    const orderedRows = orderDiligenceRowsByCheckedSelection(rows);
-    diligenceVirtualShowCommandementColumns = shouldShowDiligenceCommandementColumns(orderedRows);
-    diligenceVirtualShowAssColumns = shouldShowDiligenceAssColumns(orderedRows);
-    diligenceVirtualCompactProcedureMode = getDiligenceCompactProcedureMode(orderedRows);
-    const pageData = orderedRows.length
-      ? paginateRows(orderedRows, 'diligence')
-      : { rows: [], page: 1, totalPages: 1, from: 0, to: 0 };
-    syncDiligenceRenderedSelectionCache(orderedRows, pageData.rows, diligenceFilterStateKey, pageData.page);
-    diligenceVirtualRows = pageData.rows;
-    const colCount = getDiligenceColCount();
+    try{
+      const sortedByYearRows = [...rows].sort((a, b) => {
+        try{
+          const yearA = extractYearFromReferenceDiligence(getDiligenceReferenceDossierValue(a));
+          const yearB = extractYearFromReferenceDiligence(getDiligenceReferenceDossierValue(b));
+          return yearA - yearB;
+        }catch(_){ return 0; }
+      });
+      const orderedRows = orderDiligenceRowsByCheckedSelection(sortedByYearRows);
+      diligenceVirtualShowCommandementColumns = shouldShowDiligenceCommandementColumns(orderedRows);
+      diligenceVirtualShowAssColumns = shouldShowDiligenceAssColumns(orderedRows);
+      diligenceVirtualCompactProcedureMode = getDiligenceCompactProcedureMode(orderedRows);
+      const pageData = orderedRows.length
+        ? paginateRows(orderedRows, 'diligence')
+        : { rows: [], page: 1, totalPages: 1, from: 0, to: 0 };
+      syncDiligenceRenderedSelectionCache(orderedRows, pageData.rows, diligenceFilterStateKey, pageData.page);
+      diligenceVirtualRows = pageData.rows;
+      const colCount = getDiligenceColCount();
 
-    if(headRow){
-      const headMode = diligenceVirtualShowCommandementColumns
-        ? 'commandement-columns'
-        : (diligenceVirtualShowAssColumns ? 'ass-columns' : 'compact-columns');
-      const headVariant = diligenceVirtualShowCommandementColumns
-        ? 'commandement'
-        : (diligenceVirtualShowAssColumns ? getDiligenceAssHeaderMode(pageData.rows) : diligenceVirtualCompactProcedureMode);
-      setElementHtmlWithRenderKey(
-        headRow,
-        buildDiligenceHeadHtml(),
-        `diligence-head::${headMode}::${headVariant}`,
-        { trustRenderKey: true }
-      );
-    }
+      if(headRow){
+        const headMode = diligenceVirtualShowCommandementColumns
+          ? 'commandement-columns'
+          : (diligenceVirtualShowAssColumns ? 'ass-columns' : 'compact-columns');
+        const headVariant = diligenceVirtualShowCommandementColumns
+          ? 'commandement'
+          : (diligenceVirtualShowAssColumns ? getDiligenceAssHeaderMode(pageData.rows) : diligenceVirtualCompactProcedureMode);
+        setElementHtmlWithRenderKey(
+          headRow,
+          buildDiligenceHeadHtml(),
+          `diligence-head::${headMode}::${headVariant}`,
+          { trustRenderKey: true }
+        );
+      }
 
-    if(count){
-      setElementTextIfChanged(count, buildDiligenceCountLabel(orderedRows.length));
-    }
+      if(count){
+        setElementTextIfChanged(count, buildDiligenceCountLabel(orderedRows.length));
+      }
 
-    if(!orderedRows.length){
-      diligenceVirtualRows = [];
+      if(!orderedRows.length){
+        diligenceVirtualRows = [];
+        diligenceVirtualLastRange = { start: -1, end: -1 };
+        setDiligenceStatusRow(body, DILIGENCE_EMPTY_MESSAGE, 'diligence-empty', colCount);
+        renderPagination('diligence', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
+        updateDiligenceCheckedCount();
+        return;
+      }
+
+      const useVirtual = pageData.rows.length >= DILIGENCE_VIRTUAL_MIN_ROWS;
+      diligenceVirtualRows = pageData.rows;
+      diligenceVirtualShowInjonctionColumns = false;
+      diligenceVirtualShowCommandementColumns = shouldShowDiligenceCommandementColumns(pageData.rows);
+      diligenceVirtualCompactProcedureMode = getDiligenceCompactProcedureMode(pageData.rows);
       diligenceVirtualLastRange = { start: -1, end: -1 };
-      setDiligenceStatusRow(body, DILIGENCE_EMPTY_MESSAGE, 'diligence-empty', colCount);
-      renderPagination('diligence', { totalRows: 0, page: 1, totalPages: 1, from: 0, to: 0 });
+      if(useVirtual){
+        renderDiligenceVirtualWindow(true);
+      }else{
+        setElementHtmlWithRenderKey(
+          body,
+          renderDiligenceRowsHtml(pageData.rows),
+          [
+            'diligence-rows',
+            dossierDataVersion,
+            diligencePrintSelectionVersion,
+            pageData.page,
+            pageData.rows.length,
+            'comprehensive',
+            diligenceFilterStateKey
+          ].join('::'),
+          { trustRenderKey: true }
+        );
+        maybeApplyDiligenceAutoSizing(body);
+      }
+      renderPagination('diligence', pageData);
       updateDiligenceCheckedCount();
-      return;
+    }catch(err){
+      console.error('Erreur finalizeDiligenceRender:', err);
+      setDiligenceStatusRow(body, 'Une erreur est survenue lors de l\'affichage.', 'diligence-error', getDiligenceColCount());
     }
-
-    const useVirtual = pageData.rows.length >= DILIGENCE_VIRTUAL_MIN_ROWS;
-    diligenceVirtualRows = pageData.rows;
-    diligenceVirtualShowInjonctionColumns = false;
-    diligenceVirtualShowCommandementColumns = shouldShowDiligenceCommandementColumns(pageData.rows);
-    diligenceVirtualCompactProcedureMode = getDiligenceCompactProcedureMode(pageData.rows);
-    diligenceVirtualLastRange = { start: -1, end: -1 };
-    if(useVirtual){
-      renderDiligenceVirtualWindow(true);
-    }else{
-      setElementHtmlWithRenderKey(
-        body,
-        renderDiligenceRowsHtml(pageData.rows),
-        [
-          'diligence-rows',
-          dossierDataVersion,
-          diligencePrintSelectionVersion,
-          pageData.page,
-          pageData.rows.length,
-          'comprehensive',
-          diligenceFilterStateKey
-        ].join('::'),
-        { trustRenderKey: true }
-      );
-      maybeApplyDiligenceAutoSizing(body);
-    }
-    renderPagination('diligence', pageData);
-    updateDiligenceCheckedCount();
   };
   const queueFinalizeDiligenceRender = (rows, expectedStateKey = diligenceFilterStateKey, expectedRequestId = null)=>{
     const run = ()=>{

@@ -85,7 +85,9 @@ function DiligenceSection() {
                   <th>Sort</th>
                   <th>Ordonnance</th>
                   <th>Notification N°</th>
+                  <th>Plie</th>
                   <th>Sort notification</th>
+                  <th>Observation</th>
                   <th>Lettre Rec</th>
                   <th>Curateur N°</th>
                   <th>ORD</th>

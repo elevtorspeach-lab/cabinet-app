@@ -8,7 +8,7 @@ function ZoomDock() {
         id="zoomRange"
         className="zoom-dock-range"
         type="range"
-        min="60"
+        min="30"
         max="140"
         step="5"
         defaultValue="100"
