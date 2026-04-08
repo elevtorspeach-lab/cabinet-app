@@ -71,11 +71,11 @@ function getDiligenceColCount(){
   if(diligenceVirtualCompactProcedureMode === 'sfdc' || diligenceVirtualCompactProcedureMode === 'sbien') return 13;
   if(diligenceVirtualShowAssColumns){
     const assMode = getDiligenceAssHeaderMode(diligenceVirtualRows);
-    if(assMode !== 'default') return 24;
+    if(assMode !== 'default') return 25;
     const hasNotifier = Array.isArray(diligenceVirtualRows) && diligenceVirtualRows.some(row => isDiligenceAssNotifierLayout(row));
-    return hasNotifier ? 24 : 17;
+    return hasNotifier ? 25 : 18;
   }
-  return 16;
+  return 17;
 }
 
 function getDiligenceCompactProcedureMode(rows = []){
@@ -126,6 +126,7 @@ function buildDiligenceHeadHtml(){
   const showSharedNotificationColumns = diligenceVirtualShowAssColumns || showCompactInjonctionColumns;
   return `
     <th>Client</th>
+    <th>Type</th>
     <th>Référence client</th>
     <th>Nom</th>
     <th>Date dépôt</th>
@@ -211,6 +212,7 @@ function renderDiligenceRowHtml(row, showPlieColumn){
             <span>${escapeHtml(row.clientName || '-')}</span>
           </label>
         </td>
+        <td>${escapeHtml(row.dossier?.type || '-')}</td>
         <td>${escapeHtml(refClientValue || '-')}</td>
         <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
         <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
@@ -272,6 +274,7 @@ function renderDiligenceRowHtml(row, showPlieColumn){
           <span>${escapeHtml(row.clientName || '-')}</span>
         </label>
       </td>
+      <td>${escapeHtml(row.dossier?.type || '-')}</td>
       <td>${escapeHtml(refClientValue || '-')}</td>
       <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
       <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
