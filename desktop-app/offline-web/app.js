@@ -136,10 +136,11 @@ let dashboardCalendarCursor = new Date(new Date().getFullYear(), new Date().getM
 let procedureMontantGroups = [];
 const STORAGE_KEY = 'cabinet-avocat-state-v1';
 const INDEXED_DB_NAME = 'cabinet-avocat-db-v1';
-const INDEXED_DB_VERSION = 3;
+const INDEXED_DB_VERSION = 4;
 const INDEXED_DB_STORE = 'state_store';
 const INDEXED_DB_BACKUP_STORE = 'backup_store';
 const INDEXED_DB_EXPORT_STORE = 'export_store';
+const INDEXED_DB_SYNC_STORE = 'sync_queue';
 const INDEXED_DB_STATE_KEY = 'app_state';
 const INDEXED_DB_EXPORT_DIRECTORY_KEY = 'preferred_export_directory';
 const API_BASE_STORAGE_KEY = 'applicationversion1-api-base-v1';
@@ -2595,16 +2596,29 @@ function setSyncStatus(status, message){
   const text = $('syncStatusText');
   if(!badge || !text) return;
   badge.classList.remove('is-ok', 'is-error', 'is-syncing', 'is-pending', 'is-conflict');
-  const next = ['ok', 'error', 'syncing', 'pending', 'conflict'].includes(status) ? status : 'pending';
+  
+  let next = ['ok', 'error', 'syncing', 'pending', 'conflict'].includes(status) ? status : 'pending';
+  
+  // Si on est en mode local seulement, on ne veut pas effrayer l'utilisateur avec
+  // des messages de "Synchronisation serveur" qui n'auront pas lieu immédiatement.
+  const isLocal = LOCAL_ONLY_MODE || !remoteServerReachable;
+
+  if(isLocal && next === 'syncing'){
+    next = 'ok';
+  }
+
   badge.classList.add(`is-${next}`);
+  
   const fallbackText = {
-    pending: 'Modification detectee...',
+    pending: 'Modification détectée...',
     syncing: 'Synchronisation serveur...',
-    ok: 'Connecte au serveur (actif)',
+    ok: isLocal ? 'Mode local (actif)' : 'Connecté au serveur (actif)',
     error: 'Serveur indisponible (local)',
-    conflict: 'Conflit detecte, rechargement...'
+    conflict: 'Conflit détecté, rechargement...'
   };
-  text.innerText = String(message || fallbackText[next]);
+  
+  const displayMessage = message || fallbackText[next];
+  text.innerText = String(displayMessage);
 }
 
 function formatSyncMetricMs(value){
@@ -10288,6 +10302,9 @@ function getIndexedDbConnection(){
         if(!db.objectStoreNames.contains(INDEXED_DB_EXPORT_STORE)){
           db.createObjectStore(INDEXED_DB_EXPORT_STORE);
         }
+        if(!db.objectStoreNames.contains(INDEXED_DB_SYNC_STORE)){
+          db.createObjectStore(INDEXED_DB_SYNC_STORE, { autoIncrement: true });
+        }
       };
       req.onsuccess = ()=>resolve(req.result || null);
       req.onerror = ()=>{
@@ -10321,6 +10338,45 @@ async function readIndexedDbValue(storeName, key){
     }
   });
 }
+
+function getSyncQueueItems(){
+  return new Promise((resolve)=>{
+    getIndexedDbConnection().then(db=>{
+      if(!db) return resolve([]);
+      try{
+        const tx = db.transaction(INDEXED_DB_SYNC_STORE, 'readonly');
+        const store = tx.objectStore(INDEXED_DB_SYNC_STORE);
+        const req = store.getAll();
+        req.onsuccess = ()=>resolve(req.result || []);
+        req.onerror = ()=>resolve([]);
+      }catch(err){
+        resolve([]);
+      }
+    });
+  });
+}
+
+async function enqueueSyncAction(pathname, body){
+  const db = await getIndexedDbConnection();
+  if(!db) return false;
+  return new Promise((resolve)=>{
+    try{
+      const tx = db.transaction(INDEXED_DB_SYNC_STORE, 'readwrite');
+      const store = tx.objectStore(INDEXED_DB_SYNC_STORE);
+      store.add({ pathname, body, timestamp: Date.now() });
+      tx.oncomplete = ()=>{
+        resolve(true);
+        triggerSyncQueueFlush();
+      };
+      tx.onerror = ()=>resolve(false);
+    }catch(err){
+      resolve(false);
+    }
+  });
+}
+
+let isSyncingQueue = false;
+let persistSyncQueueTimer = null;
 
 async function writeIndexedDbValue(storeName, key, value){
   const db = await getIndexedDbConnection();
@@ -10763,12 +10819,11 @@ async function persistLocalStateSnapshot(payload = null, options = {}){
     || importInProgress
     || shouldSkipFullLocalStorageCache(safePayload)
     || isLargeDatasetMode()
+    || source === 'diligence'
+    || source === 'audience'
   );
   if(preferDeferredCacheWrite){
-    queueDeferredStateCacheWrite(safePayload, {
-      indexedDb: true,
-      localStorage: true
-    });
+    queueDeferredLocalStateSnapshot(safePayload, { source, signature: nextSignature });
   }else{
     await writeStateToIndexedDb(safePayload);
     writeStateToLocalStorage(safePayload);
@@ -11000,7 +11055,77 @@ function requeueQueuedDossierPatchEntries(entries){
     });
   });
   setSyncStatus('syncing');
-  scheduleDossierPatchRetry();
+  // scheduleDossierPatchRetry(); // No longer needed, handled by SyncQueue heartbeat
+}
+
+function triggerSyncQueueFlush(){
+  if(persistSyncQueueTimer) clearTimeout(persistSyncQueueTimer);
+  persistSyncQueueTimer = setTimeout(()=>{
+    persistSyncQueueTimer = null;
+    flushSyncQueueNow();
+  }, 100);
+}
+
+async function flushSyncQueueNow(){
+  if(isSyncingQueue) return;
+  if(!remoteServerReachable || !hasRemoteAuthSession()) return;
+  if(LOCAL_ONLY_MODE) return;
+
+  const db = await getIndexedDbConnection();
+  if(!db) return;
+
+  isSyncingQueue = true;
+  let hasFailures = false;
+  
+  try {
+    const tx = db.transaction(INDEXED_DB_SYNC_STORE, 'readwrite');
+    const store = tx.objectStore(INDEXED_DB_SYNC_STORE);
+    const req = store.openCursor();
+    
+    return new Promise((resolve)=>{
+      req.onsuccess = async (event) => {
+        const cursor = event.target.result;
+        if(!cursor || hasFailures){
+          tx.oncomplete = ()=>resolve(true);
+          return;
+        }
+        
+        const item = cursor.value;
+        try {
+          const success = await persistRemoteRequestNow(item.pathname, item.body);
+          if(success){
+            cursor.delete();
+            cursor.continue();
+          } else {
+            hasFailures = true;
+            resolve(false);
+          }
+        } catch(err){
+          hasFailures = true;
+          resolve(false);
+        }
+      };
+      req.onerror = ()=>resolve(false);
+    });
+  } finally {
+    isSyncingQueue = false;
+    updateSyncStatusLabel();
+  }
+}
+
+function updateSyncStatusLabel(){
+  getSyncQueueItems().then(items=>{
+    if(!items.length){
+      setSyncStatus('ok');
+    } else {
+      const isLocal = LOCAL_ONLY_MODE || !remoteServerReachable;
+      if (isLocal) {
+        setSyncStatus('ok', 'Mode local (données sauvegardées)');
+      } else {
+        setSyncStatus('syncing', `Synchronisation: ${items.length} modification(s) en attente`);
+      }
+    }
+  });
 }
 
 async function flushQueuedDossierPatchesNow(){
@@ -11015,39 +11140,21 @@ async function flushQueuedDossierPatchesNow(){
   queuedDossierPatchEntries = new Map();
   const results = [];
   try{
+    const [entry] = entries;
     if(entries.length === 1){
-      const [entry] = entries;
-      const result = await persistRemoteRequestNow('/state/dossiers', entry.patch);
-      if(result){
-        resetDossierPatchRetryState();
-      }else{
-        requeueQueuedDossierPatchEntries(entries);
-      }
+      const result = await enqueueSyncAction('/state/dossiers', entry.patch);
       entry.resolvers.forEach(resolve=>resolve(result));
       results.push(result);
       return results;
     }
-    const result = await persistRemoteRequestNow('/state/dossiers/batch', {
-      patches: entries.map(entry=>entry.patch)
+    const result = await enqueueSyncAction('/state/dossiers/batch', {
+      patches: entries.map(e=>e.patch)
     });
-    if(result){
-      resetDossierPatchRetryState();
-    }else{
-      requeueQueuedDossierPatchEntries(entries);
-    }
-    entries.forEach((entry)=>{
-      entry.resolvers.forEach(resolve=>resolve(result));
+    entries.forEach((e)=>{
+      e.resolvers.forEach(resolve=>resolve(result));
     });
     results.push(result);
   }catch(err){
-    if(isRecoverableDossierPersistFailure(err)){
-      console.warn('Persistance dossier saturée, replanification en arrière-plan', err);
-      requeueQueuedDossierPatchEntries(entries);
-      entries.forEach((entry)=>{
-        entry.resolvers.forEach(resolve=>resolve(false));
-      });
-      return [false];
-    }
     entries.forEach((entry)=>{
       entry.rejecters.forEach(reject=>reject(err));
     });
@@ -11061,7 +11168,7 @@ async function persistDossierPatchNow(patch, options = {}){
   const queueKey = getDossierPatchQueueKey(patch);
   if(!queueKey){
     await flushQueuedDossierPatchesNow();
-    return persistRemoteRequestNow('/state/dossiers', patch);
+    return enqueueSyncAction('/state/dossiers', patch);
   }
   return new Promise((resolve, reject)=>{
     const existing = queuedDossierPatchEntries.get(queueKey);
@@ -11098,22 +11205,19 @@ async function persistAppStateNow(payload = null){
     : buildAppStatePayload();
   queuedPersistPayload = null;
   await persistLocalStateSnapshot(nextPayload, { source: 'persist', signature: '' });
-  return persistRemoteRequestNow('/state', nextPayload);
+  return enqueueSyncAction('/state', nextPayload);
 }
 
 function queuePersistAppState(){
   markAudienceRowsCacheDirty();
   queuedPersistPayload = buildAppStatePayload();
-  // Only show 'syncing' indicator if the server is actually reachable;
-  // otherwise keep the local-mode status so the UI never freezes.
-  if(remoteServerReachable && !LOCAL_ONLY_MODE && hasRemoteAuthSession()){
-    setSyncStatus('syncing');
-  }
+  setSyncStatus('syncing');
+
   if(persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(()=>{
     persistTimer = null;
     persistLocalStateSnapshot(queuedPersistPayload, { source: 'persist', signature: '' })
-      .then(()=>persistRemoteRequestNow('/state', queuedPersistPayload))
+      .then(()=>enqueueSyncAction('/state', queuedPersistPayload))
       .catch((err)=>{
       console.warn('Impossible de sauvegarder l’état applicatif', err);
     });
@@ -11761,6 +11865,7 @@ function parseExcelData(rows, sheet = null){
     sort: ['sort'],
     sortExecution: ['sort execution', 'sort exécution', 'sort exec', 'sort exéc'],
     sortOrd: ['sort ord', 'sord ord', 'sort ordonnance', 'ordonnance', 'statut ordonnance'],
+    observation: ['observation', 'observations', 'obs', 'remarque', 'remarques'],
     tribunal: ['tribunal', 'trib', 'tr'],
     statut: ['statut', 'status', 'etat', 'état', 'statut dossier', 'etat dossier', 'état dossier', 'solde', 'soldé', 'soldée']
   };
@@ -11994,6 +12099,7 @@ function parseExcelData(rows, sheet = null){
       gestionnaire: getColIndex(dossierColMap, dossierHeaderKeys.gestionnaire),
       type: getColIndex(dossierColMap, dossierHeaderKeys.type),
       procedure: getColIndex(dossierColMap, dossierHeaderKeys.procedure),
+      observation: getColIndex(dossierColMap, dossierHeaderKeys.observation),
       refClient: getColIndex(dossierColMap, dossierHeaderKeys.refClient),
       debiteur: getColIndex(dossierColMap, dossierHeaderKeys.debiteur),
       montant: getColIndex(dossierColMap, dossierHeaderKeys.montant),
@@ -13442,7 +13548,6 @@ async function applyExcelImport(payload, options = {}){
   };
 
   if(importDossiers){
-    const { diligenceMode } = opts;
     const reportDossiersProgress = makeProgressReporter('Import Excel - dossiers');
     await runChunked(dossiers, async (row)=>{
     const rowNumberLabel = Number.isFinite(Number(row?.rowNumber)) ? `Ligne ${Number(row.rowNumber)}` : 'Ligne ?';
@@ -13638,6 +13743,7 @@ async function applyExcelImport(payload, options = {}){
     setProcRef('Injonction', injonctionReference);
     const executionNoValue = String(row.executionNo || '').trim();
     const importedDateDepotValue = normalizeDateDDMMYYYY(row.dateDepot || '') || String(row.dateDepot || '').trim();
+    const observationValue = String(row.observation || '').trim();
     let notificationSortValue = String(row.notificationSort || '').trim();
     let notificationNoValue = String(row.notificationNo || '').trim();
 
@@ -13647,13 +13753,14 @@ async function applyExcelImport(payload, options = {}){
         notificationSortValue = '-';
         notificationNoValue = '';
       } else {
-        const notifMatch = rawNotif.match(/^(notifier|nb)\s*(.*)$/i);
-        if(notifMatch){
-          notificationSortValue = notifMatch[1].toLowerCase() === 'nb' ? 'NB' : 'notifier';
-          notificationNoValue = notifMatch[2].trim();
+        const type = getDiligenceNotificationSortType(rawNotif);
+        if(type){
+          notificationSortValue = type;
+          notificationNoValue = rawNotif;
         }
       }
     }
+
     const sortValue = String(row.sortExecution || row.sort || '').trim();
     const importedOrdonnanceStatus = normalizeDiligenceOrdonnance(row.sortOrd || '');
     const tribunalValue = String(row.tribunal || '').trim();
@@ -13662,10 +13769,12 @@ async function applyExcelImport(payload, options = {}){
         !(
           executionNoValue
           || importedDateDepotValue
+          || observationValue
           || sortValue
           || tribunalValue
           || ((proc === 'SFDC' || proc === 'Injonction') && importedOrdonnanceStatus)
-          || (proc === 'Injonction' && (notificationSortValue || notificationNoValue))
+          || notificationSortValue
+          || notificationNoValue
         )
       ) return;
       if(!procedureSet.has(proc)) return;
@@ -13675,14 +13784,17 @@ async function applyExcelImport(payload, options = {}){
       }
       if(executionNoValue) targetDossier.procedureDetails[proc].executionNo = executionNoValue;
       if(importedDateDepotValue) targetDossier.procedureDetails[proc].dateDepot = importedDateDepotValue;
+      if(observationValue) targetDossier.procedureDetails[proc].observation = observationValue;
       if(sortValue) targetDossier.procedureDetails[proc].sort = sortValue;
       if(tribunalValue) targetDossier.procedureDetails[proc].tribunal = tribunalValue;
       if((proc === 'SFDC' || proc === 'Injonction') && importedOrdonnanceStatus){
         targetDossier.procedureDetails[proc].attOrdOrOrdOk = importedOrdonnanceStatus === 'ok' ? 'ord ok' : 'att ord';
       }
-      if(proc === 'Injonction' && notificationSortValue) targetDossier.procedureDetails[proc].notificationSort = notificationSortValue;
-      if(proc === 'Injonction' && notificationNoValue) targetDossier.procedureDetails[proc].notificationNo = notificationNoValue;
+      if(notificationSortValue) targetDossier.procedureDetails[proc].notificationSort = notificationSortValue;
+      if(notificationNoValue) targetDossier.procedureDetails[proc].notificationNo = notificationNoValue;
     };
+    assignProcedureMeta('ASS', assReference);
+    assignProcedureMeta('Restitution', restitutionReference);
     assignProcedureMeta('SFDC', sfdcReference);
     assignProcedureMeta('Injonction', injonctionReference);
     const normalizedImportedProcs = [...procedureSet];
@@ -14551,6 +14663,8 @@ async function bootstrapApplication(){
     console.error('Initialisation application impossible', err);
     setSyncStatus('error', LOCAL_ONLY_MODE ? 'Mode local (offline)' : 'Mode local (serveur indisponible)');
   }
+  updateSyncStatusLabel();
+  setInterval(flushSyncQueueNow, 30000);
 }
 
 // ================== EVENTS ==================
@@ -14661,14 +14775,6 @@ function setupEvents(){
     const file = e.target?.files?.[0];
     if(!file) return;
     handleAudienceImportFile(file).catch(err=>console.error(err));
-    e.target.value = '';
-  });
-  $('importDiligenceBtn')?.addEventListener('click', ()=> $('diligenceImportInput')?.click());
-  $('diligenceImportInput')?.addEventListener('change', (e)=>{
-    if(!canEditData()) return alert('Accès refusé');
-    const file = e.target?.files?.[0];
-    if(!file) return;
-    handleDiligenceImportFile(file).catch(err=>console.error(err));
     e.target.value = '';
   });
   $('addDossierBtn').onclick = addDossier;
@@ -16328,6 +16434,8 @@ function getDiligenceSearchValues(row){
     details.notificationNo,
     details.notificationStatus,
     details.notificationSort,
+    details.observation,
+    details.plie,
     details.lettreRec,
     details.curateurNo,
     details.notifCurateur,
@@ -17483,6 +17591,22 @@ function isDiligenceAssProcedure(procedure){
   return getDiligenceProcedureFilterValue(procedure) === 'ASS';
 }
 
+function isCasablancaTpiTribunal(tribunal){
+  const raw = String(tribunal || '').trim().toLowerCase();
+  if(!raw) return false;
+  const variations = [
+    'tribunal de première instance de casablanca',
+    'tpi casablanca',
+    'المحكمة الابتدائية بالدار البيضاء'
+  ];
+  return variations.map(v => v.toLowerCase()).includes(raw);
+}
+
+function hasDiligenceCasablancaTpiAssRow(rows){
+  if(!Array.isArray(rows)) return false;
+  return rows.some(row => isDiligenceAssProcedure(row?.procedure) && isCasablancaTpiTribunal(row?.details?.tribunal));
+}
+
 function isDiligenceCommandementProcedure(procedure){
   return getDiligenceProcedureFilterValue(procedure) === 'Commandement';
 }
@@ -17808,6 +17932,14 @@ function normalizeDiligenceSort(value){
   return 'Att PV';
 }
 
+function getDiligenceNotificationSortType(value){
+  const raw = String(value ?? '').trim().toLowerCase();
+  if(!raw) return '';
+  if(/^nb(\s|$)/.test(raw)) return 'NB';
+  if(/^notif(ier)?(\s|$)/.test(raw)) return 'notifier';
+  return '';
+}
+
 function normalizeDiligenceNotificationSort(value){
   const raw = String(value ?? '').trim().toLowerCase();
   if(!raw) return '';
@@ -17901,13 +18033,13 @@ function getDiligenceTribunalCellValue(row){
 }
 
 function isDiligenceAssNbLayout(row){
-  return isDiligenceAssProcedure(row?.procedure)
-    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'NB';
+  if (!isDiligenceAssProcedure(row?.procedure)) return false;
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort, row?.procedure) === 'NB';
 }
 
 function isDiligenceAssNotifierLayout(row){
-  return isDiligenceAssProcedure(row?.procedure)
-    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'notifier';
+  if (!isDiligenceAssProcedure(row?.procedure)) return false;
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort, row?.procedure) === 'notifier';
 }
 
 function getDiligenceAssHeaderMode(rows){
@@ -18124,28 +18256,17 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
     `;
   }
   if(field === 'notificationSort'){
-    const status = getDiligenceNotificationSortValue(normalized, row?.procedure, row?.details?.notificationNo || '');
-    const isAssProcedure = isDiligenceAssProcedure(row?.procedure);
+    const val = String(value || '').trim();
     if(!row?.canEdit){
-      return escapeHtml(status || '-');
+      if(!String(row?.details?.notificationNo || '').trim()) return '-';
+      return escapeHtml(val || '-');
     }
-    if(!isAssProcedure){
-      return `
+    return `
       <input
         type="text"
         class="diligence-inline-input"
-        value="${escapeAttr(value || '')}"
-        oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
-    `;
-    }
-    return `
-      <select
-        class="diligence-inline-select"
-        onchange="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
-        <option value="-" ${status === '-' ? 'selected' : ''}>-</option>
-        <option value="notifier" ${status === 'notifier' ? 'selected' : ''}>notifier</option>
-        <option value="NB" ${status === 'NB' ? 'selected' : ''}>NB</option>
-      </select>
+        value="${escapeAttr(val)}"
+        onkeydown="if(event.key === 'Enter'){ updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value); }">
     `;
   }
   if(field === 'lettreRec'){
@@ -18214,6 +18335,21 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
         class="diligence-inline-input"
         value="${escapeAttr(normalized)}"
         oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+    `;
+  }
+  if(field === 'plie'){
+    const val = String(value || '').trim();
+    if(!row?.canEdit){
+      return escapeHtml(val || '-');
+    }
+    return `
+      <select
+        class="diligence-inline-select"
+        onchange="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="" ${val === '' ? 'selected' : ''}>-</option>
+        <option value="att plie" ${val === 'att plie' ? 'selected' : ''}>att plie</option>
+        <option value="plie ok" ${val === 'plie ok' ? 'selected' : ''}>plie ok</option>
+      </select>
     `;
   }
   if(field === 'ord'){
@@ -18304,7 +18440,7 @@ function applyDiligenceFieldValue(clientId, dossierIndex, procKey, field, value)
       ? normalizeDiligenceSort(value)
       : String(value ?? '').trim();
   }else if(field === 'notificationSort'){
-    nextValue = normalizeDiligenceNotificationSort(value);
+    nextValue = String(value ?? '').trim();
   }else if(field === 'lettreRec'){
     nextValue = normalizeDiligenceLettreRec(value);
   }else if(field === 'avisCurateur'){
@@ -18435,15 +18571,18 @@ function updateDiligenceFieldEncoded(clientId, dossierIndex, procKeyEncoded, fie
 function extractYearFromReferenceDiligence(ref) {
   if (!ref) return 9999;
   const str = String(ref).trim();
-  const match = str.match(/\/(20\d{2})$|\/(19\d{2})$/);
+  // On cherche une année 19xx ou 20xx précédée d'un slash
+  const match = str.match(/\/((20\d{2})|(19\d{2}))($|[\s\*\/])/);
   if (match) {
-    return parseInt(match[1] || match[2], 10);
+    return parseInt(match[1], 10);
   }
   const parts = str.split('/');
+  // On cherche dans les parties, en ignorant le code tribunal 8104
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i].trim();
-    if (p.length === 4 && !isNaN(p)) {
-      return parseInt(p, 10);
+    if (p.length === 4 && !isNaN(p) && p !== '8104') {
+      const year = parseInt(p, 10);
+      if (year >= 1900 && year <= 2100) return year;
     }
   }
   return 9999;
@@ -18483,21 +18622,22 @@ function getFilteredDiligenceRows(allRows){
     return searchValues.some(value=>value.includes(q));
   });
   
-  filteredRows.sort((a, b) => {
-    const tribA = String(a.tribunal || '').trim();
-    const tribB = String(b.tribunal || '').trim();
-    if (tribA !== tribB) {
-      if (!tribA) return 1;
-      if (!tribB) return -1;
-      return tribA.localeCompare(tribB, 'fr');
-    }
-
-    const refA = getDiligenceReferenceDossierValue(a);
-    const refB = getDiligenceReferenceDossierValue(b);
-    const yearA = extractYearFromReferenceDiligence(refA);
-    const yearB = extractYearFromReferenceDiligence(refB);
-    return yearA - yearB;
-  });
+  // Tri chronologique
+  try {
+    filteredRows.sort((a, b) => {
+      try {
+        const refA = getDiligenceReferenceDossierValue(a);
+        const refB = getDiligenceReferenceDossierValue(b);
+        const yearA = extractYearFromReferenceDiligence(refA);
+        const yearB = extractYearFromReferenceDiligence(refB);
+        return yearA - yearB;
+      } catch (e) {
+        return 0;
+      }
+    });
+  } catch (err) {
+    console.error('Erreur lors du tri des diligences:', err);
+  }
 
   diligenceFilteredRowsCacheInput = allRows;
   diligenceFilteredRowsCacheKey = filterKey;
@@ -20374,32 +20514,9 @@ function getAudienceDateDepotDisplayValue(row){
 }
 
 function compareAudienceRowsForExport(a, b) {
-  const getTrib = (row) => String(row?.draft?.tribunal || row?.p?.tribunal || row?.d?.tribunal || '').trim();
-  const tribA = getTrib(a);
-  const tribB = getTrib(b);
-  if (tribA !== tribB) {
-    if (!tribA) return 1;
-    if (!tribB) return -1;
-    return tribA.localeCompare(tribB, 'fr');
-  }
-
-  const getYear = (row) => {
-    const ref = String(row?.draft?.refDossier || row?.p?.referenceClient || row?.d?.referenceClient || '').trim();
-    const match = ref.match(/\/(20\d{2})$|\/(19\d{2})$/);
-    if (match) return parseInt(match[1] || match[2], 10);
-    const parts = ref.split('/');
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const p = parts[i].trim();
-      if (p.length === 4 && !isNaN(p)) return parseInt(p, 10);
-    }
-    return 9999;
-  };
-  
-  const yearA = getYear(a);
-  const yearB = getYear(b);
-  if (yearA !== yearB) return yearA - yearB;
-
-  return compareAudienceRowsByReferenceProximity(a, b);
+  // Use the reference-based sorting logic which handles the YYYY/8104/XXXX format.
+  // Requirement: YYYY Ascending, XXXX Ascending.
+  return compareAudienceRowsByReferenceProximity(a, b, { direction: 1 });
 }
 
 function getSelectedAudienceRowsForExport(){
@@ -20689,21 +20806,24 @@ function getAudienceRowReferenceValue(row){
 
 function parseAudienceReferenceParts(value){
   const ref = normalizeReferenceForAudienceLookup(value);
-  const m = ref.match(/^(\d+)\/(\d+)\/(\d{2,4})$/);
+  // On assouplit la regex pour accepter des caractères de fin (ex: *, espaces)
+  const m = ref.match(/^(\d+)\/(\d+)\/(\d{2,4})/);
   if(!m) return null;
   const first = Number(m[1]);
   const middle = Number(m[2]);
-  const rawYear = Number(m[3]);
+  const rawYearStr = m[3];
+  const rawYear = Number(rawYearStr);
   if(!Number.isFinite(first) || !Number.isFinite(middle) || !Number.isFinite(rawYear)){
     return null;
   }
-  const year = m[3].length === 2
+  const year = rawYearStr.length === 2
     ? (rawYear >= 70 ? 1900 + rawYear : 2000 + rawYear)
     : rawYear;
   return { first, middle, year };
 }
 
-function compareAudienceRowsByReferenceProximity(a, b){
+function compareAudienceRowsByReferenceProximity(a, b, options = {}){
+  const direction = options.direction === -1 ? -1 : 1; // Default to ASC (1) as per newest local setup
   const metaA = buildAudienceSortMeta(a);
   const metaB = buildAudienceSortMeta(b);
   const refA = metaA.ref;
@@ -20712,9 +20832,10 @@ function compareAudienceRowsByReferenceProximity(a, b){
   const pb = metaB.parts;
 
   if(pa && pb){
-    if(pa.year !== pb.year) return pa.year - pb.year;
-    if(pa.middle !== pb.middle) return pa.middle - pb.middle;
-    if(pa.first !== pb.first) return pa.first - pb.first;
+    // Priority 1: YYYY
+    if(pa.year !== pb.year) return (pa.year - pb.year) * direction;
+    // Priority 2: XXXX (First part)
+    if(pa.first !== pb.first) return (pa.first - pb.first) * direction;
   }else if(pa){
     return -1;
   }else if(pb){
@@ -20808,6 +20929,7 @@ function compareAudienceSortMeta(aMeta, bMeta){
   const pa = aMeta?.parts;
   const pb = bMeta?.parts;
   if(pa && pb){
+    // Board view sorting: Always ASC (Oldest first) as per user request for consistency
     if(pa.year !== pb.year) return pa.year - pb.year;
     if(pa.middle !== pb.middle) return pa.middle - pb.middle;
     if(pa.first !== pb.first) return pa.first - pb.first;

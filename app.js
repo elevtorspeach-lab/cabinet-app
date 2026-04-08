@@ -11865,6 +11865,7 @@ function parseExcelData(rows, sheet = null){
     sort: ['sort'],
     sortExecution: ['sort execution', 'sort exécution', 'sort exec', 'sort exéc'],
     sortOrd: ['sort ord', 'sord ord', 'sort ordonnance', 'ordonnance', 'statut ordonnance'],
+    observation: ['observation', 'observations', 'obs', 'remarque', 'remarques'],
     tribunal: ['tribunal', 'trib', 'tr'],
     statut: ['statut', 'status', 'etat', 'état', 'statut dossier', 'etat dossier', 'état dossier', 'solde', 'soldé', 'soldée']
   };
@@ -12098,6 +12099,7 @@ function parseExcelData(rows, sheet = null){
       gestionnaire: getColIndex(dossierColMap, dossierHeaderKeys.gestionnaire),
       type: getColIndex(dossierColMap, dossierHeaderKeys.type),
       procedure: getColIndex(dossierColMap, dossierHeaderKeys.procedure),
+      observation: getColIndex(dossierColMap, dossierHeaderKeys.observation),
       refClient: getColIndex(dossierColMap, dossierHeaderKeys.refClient),
       debiteur: getColIndex(dossierColMap, dossierHeaderKeys.debiteur),
       montant: getColIndex(dossierColMap, dossierHeaderKeys.montant),
@@ -13741,6 +13743,7 @@ async function applyExcelImport(payload, options = {}){
     setProcRef('Injonction', injonctionReference);
     const executionNoValue = String(row.executionNo || '').trim();
     const importedDateDepotValue = normalizeDateDDMMYYYY(row.dateDepot || '') || String(row.dateDepot || '').trim();
+    const observationValue = String(row.observation || '').trim();
     let notificationSortValue = String(row.notificationSort || '').trim();
     let notificationNoValue = String(row.notificationNo || '').trim();
 
@@ -13750,10 +13753,10 @@ async function applyExcelImport(payload, options = {}){
         notificationSortValue = '-';
         notificationNoValue = '';
       } else {
-        const notifMatch = rawNotif.match(/^(notifier|nb)\s*(.*)$/i);
-        if(notifMatch){
-          notificationSortValue = notifMatch[1].toLowerCase() === 'nb' ? 'NB' : 'notifier';
-          notificationNoValue = notifMatch[2].trim();
+        const type = getDiligenceNotificationSortType(rawNotif);
+        if(type){
+          notificationSortValue = type;
+          notificationNoValue = rawNotif;
         }
       }
     }
@@ -13766,6 +13769,7 @@ async function applyExcelImport(payload, options = {}){
         !(
           executionNoValue
           || importedDateDepotValue
+          || observationValue
           || sortValue
           || tribunalValue
           || ((proc === 'SFDC' || proc === 'Injonction') && importedOrdonnanceStatus)
@@ -13780,6 +13784,7 @@ async function applyExcelImport(payload, options = {}){
       }
       if(executionNoValue) targetDossier.procedureDetails[proc].executionNo = executionNoValue;
       if(importedDateDepotValue) targetDossier.procedureDetails[proc].dateDepot = importedDateDepotValue;
+      if(observationValue) targetDossier.procedureDetails[proc].observation = observationValue;
       if(sortValue) targetDossier.procedureDetails[proc].sort = sortValue;
       if(tribunalValue) targetDossier.procedureDetails[proc].tribunal = tribunalValue;
       if((proc === 'SFDC' || proc === 'Injonction') && importedOrdonnanceStatus){
@@ -16429,6 +16434,8 @@ function getDiligenceSearchValues(row){
     details.notificationNo,
     details.notificationStatus,
     details.notificationSort,
+    details.observation,
+    details.plie,
     details.lettreRec,
     details.curateurNo,
     details.notifCurateur,
@@ -17584,6 +17591,22 @@ function isDiligenceAssProcedure(procedure){
   return getDiligenceProcedureFilterValue(procedure) === 'ASS';
 }
 
+function isCasablancaTpiTribunal(tribunal){
+  const raw = String(tribunal || '').trim().toLowerCase();
+  if(!raw) return false;
+  const variations = [
+    'tribunal de première instance de casablanca',
+    'tpi casablanca',
+    'المحكمة الابتدائية بالدار البيضاء'
+  ];
+  return variations.map(v => v.toLowerCase()).includes(raw);
+}
+
+function hasDiligenceCasablancaTpiAssRow(rows){
+  if(!Array.isArray(rows)) return false;
+  return rows.some(row => isDiligenceAssProcedure(row?.procedure) && isCasablancaTpiTribunal(row?.details?.tribunal));
+}
+
 function isDiligenceCommandementProcedure(procedure){
   return getDiligenceProcedureFilterValue(procedure) === 'Commandement';
 }
@@ -17909,6 +17932,14 @@ function normalizeDiligenceSort(value){
   return 'Att PV';
 }
 
+function getDiligenceNotificationSortType(value){
+  const raw = String(value ?? '').trim().toLowerCase();
+  if(!raw) return '';
+  if(/^nb(\s|$)/.test(raw)) return 'NB';
+  if(/^notif(ier)?(\s|$)/.test(raw)) return 'notifier';
+  return '';
+}
+
 function normalizeDiligenceNotificationSort(value){
   const raw = String(value ?? '').trim().toLowerCase();
   if(!raw) return '';
@@ -17917,7 +17948,7 @@ function normalizeDiligenceNotificationSort(value){
   return String(value ?? '').trim();
 }
 
-function getDiligenceNotificationSortValue(value, procedure = ''){
+function getDiligenceNotificationSortValue(value, procedure = '', notificationNo = ''){
   const normalized = normalizeDiligenceNotificationSort(value);
   if(normalized === '-') return '-';
   if(normalized) return normalized;
@@ -17960,7 +17991,7 @@ function getDiligenceNotificationSortCellValue(row){
   if(isDiligenceCommandementProcedure(row?.procedure)){
     return String(row?.details?.notifDebiteur || '').trim();
   }
-  return getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure);
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure, row?.details?.notificationNo || '');
 }
 
 function getDiligenceDelegationCellValue(row){
@@ -18002,13 +18033,13 @@ function getDiligenceTribunalCellValue(row){
 }
 
 function isDiligenceAssNbLayout(row){
-  return isDiligenceAssProcedure(row?.procedure)
-    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'NB';
+  if (!isDiligenceAssProcedure(row?.procedure)) return false;
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort, row?.procedure) === 'NB';
 }
 
 function isDiligenceAssNotifierLayout(row){
-  return isDiligenceAssProcedure(row?.procedure)
-    && getDiligenceNotificationSortValue(row?.details?.notificationSort || '', row?.procedure) === 'notifier';
+  if (!isDiligenceAssProcedure(row?.procedure)) return false;
+  return getDiligenceNotificationSortValue(row?.details?.notificationSort, row?.procedure) === 'notifier';
 }
 
 function getDiligenceAssHeaderMode(rows){
@@ -18225,28 +18256,17 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
     `;
   }
   if(field === 'notificationSort'){
-    const status = getDiligenceNotificationSortValue(normalized, row?.procedure);
-    const isAssProcedure = isDiligenceAssProcedure(row?.procedure);
+    const val = String(value || '').trim();
     if(!row?.canEdit){
-      return escapeHtml(status || '-');
+      if(!String(row?.details?.notificationNo || '').trim()) return '-';
+      return escapeHtml(val || '-');
     }
-    if(!isAssProcedure){
-      return `
+    return `
       <input
         type="text"
         class="diligence-inline-input"
-        value="${escapeAttr(value || '')}"
-        oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
-    `;
-    }
-    return `
-      <select
-        class="diligence-inline-select"
-        onchange="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
-        <option value="-" ${status === '-' ? 'selected' : ''}>-</option>
-        <option value="notifier" ${status === 'notifier' ? 'selected' : ''}>notifier</option>
-        <option value="NB" ${status === 'NB' ? 'selected' : ''}>NB</option>
-      </select>
+        value="${escapeAttr(val)}"
+        onkeydown="if(event.key === 'Enter'){ updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value); }">
     `;
   }
   if(field === 'lettreRec'){
@@ -18315,6 +18335,21 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
         class="diligence-inline-input"
         value="${escapeAttr(normalized)}"
         oninput="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+    `;
+  }
+  if(field === 'plie'){
+    const val = String(value || '').trim();
+    if(!row?.canEdit){
+      return escapeHtml(val || '-');
+    }
+    return `
+      <select
+        class="diligence-inline-select"
+        onchange="updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value)">
+        <option value="" ${val === '' ? 'selected' : ''}>-</option>
+        <option value="att plie" ${val === 'att plie' ? 'selected' : ''}>att plie</option>
+        <option value="plie ok" ${val === 'plie ok' ? 'selected' : ''}>plie ok</option>
+      </select>
     `;
   }
   if(field === 'ord'){
@@ -18405,7 +18440,7 @@ function applyDiligenceFieldValue(clientId, dossierIndex, procKey, field, value)
       ? normalizeDiligenceSort(value)
       : String(value ?? '').trim();
   }else if(field === 'notificationSort'){
-    nextValue = normalizeDiligenceNotificationSort(value);
+    nextValue = String(value ?? '').trim();
   }else if(field === 'lettreRec'){
     nextValue = normalizeDiligenceLettreRec(value);
   }else if(field === 'avisCurateur'){
@@ -18536,16 +18571,18 @@ function updateDiligenceFieldEncoded(clientId, dossierIndex, procKeyEncoded, fie
 function extractYearFromReferenceDiligence(ref) {
   if (!ref) return 9999;
   const str = String(ref).trim();
-  // On enlève l'ancre $ pour accepter des caractères comme l'étoile * après l'année
-  const match = str.match(/\/((20\d{2})|(19\d{2}))($|[\s\*])/);
+  // On cherche une année 19xx ou 20xx précédée d'un slash
+  const match = str.match(/\/((20\d{2})|(19\d{2}))($|[\s\*\/])/);
   if (match) {
-    return parseInt(match[2] || match[3], 10);
+    return parseInt(match[1], 10);
   }
   const parts = str.split('/');
+  // On cherche dans les parties, en ignorant le code tribunal 8104
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i].trim();
-    if (p.length === 4 && !isNaN(p)) {
-      return parseInt(p, 10);
+    if (p.length === 4 && !isNaN(p) && p !== '8104') {
+      const year = parseInt(p, 10);
+      if (year >= 1900 && year <= 2100) return year;
     }
   }
   return 9999;
@@ -18585,13 +18622,22 @@ function getFilteredDiligenceRows(allRows){
     return searchValues.some(value=>value.includes(q));
   });
   
-  filteredRows.sort((a, b) => {
-    const refA = getDiligenceReferenceDossierValue(a);
-    const refB = getDiligenceReferenceDossierValue(b);
-    const yearA = extractYearFromReferenceDiligence(refA);
-    const yearB = extractYearFromReferenceDiligence(refB);
-    return yearA - yearB;
-  });
+  // Tri chronologique
+  try {
+    filteredRows.sort((a, b) => {
+      try {
+        const refA = getDiligenceReferenceDossierValue(a);
+        const refB = getDiligenceReferenceDossierValue(b);
+        const yearA = extractYearFromReferenceDiligence(refA);
+        const yearB = extractYearFromReferenceDiligence(refB);
+        return yearA - yearB;
+      } catch (e) {
+        return 0;
+      }
+    });
+  } catch (err) {
+    console.error('Erreur lors du tri des diligences:', err);
+  }
 
   diligenceFilteredRowsCacheInput = allRows;
   diligenceFilteredRowsCacheKey = filterKey;
