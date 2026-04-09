@@ -22689,6 +22689,11 @@ if (document.readyState === 'loading') {
 } else {
   bootstrapApplication();
 }
+
+window.showView = typeof showView === 'function' ? showView : null;
+window.logout = typeof logout === 'function' ? logout : null;
+window.openDesktopStateFile = typeof openDesktopStateFile === 'function' ? openDesktopStateFile : null;
+
 function getApiAuthLoginTimeoutMs(){
   let timeoutMs = API_AUTH_LOGIN_TIMEOUT_MS;
   try{
