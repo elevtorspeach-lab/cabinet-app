@@ -15625,6 +15625,8 @@ function applyRoleUI(options = {}){
   const canImport = canImportData();
   const canExport = canExportData();
 
+  window.dispatchEvent(new CustomEvent('role_changed'));
+
   // Sidebar and Dashboard visibility is now handled by React components (Sidebar.jsx, Dashboard.jsx, etc.)
   // No more manual style.display manipulations here to avoid conflicts.
   setRoleControlledVisibility(['importExcelBtn', 'importAudienceExcelBtn', 'exportBackupExcelBtn'], canImport);

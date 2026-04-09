@@ -1,9 +1,25 @@
+import { useState, useEffect } from 'react';
+
 function Sidebar() {
-  const isClient = typeof window !== 'undefined' && typeof window.isViewer === 'function' ? window.isViewer() : false;
-  const isAdminOrManager = typeof window !== 'undefined' && (
+  const [isClient, setIsClient] = useState(typeof window !== 'undefined' && typeof window.isViewer === 'function' ? window.isViewer() : false);
+  const [isAdminOrManager, setIsAdminOrManager] = useState(typeof window !== 'undefined' && (
     (typeof window.isAdmin === 'function' && window.isAdmin()) ||
     (typeof window.isManager === 'function' && window.isManager())
-  );
+  ));
+
+  useEffect(() => {
+    const updateRoles = () => {
+      setIsClient(typeof window !== 'undefined' && typeof window.isViewer === 'function' ? window.isViewer() : false);
+      setIsAdminOrManager(typeof window !== 'undefined' && (
+        (typeof window.isAdmin === 'function' && window.isAdmin()) ||
+        (typeof window.isManager === 'function' && window.isManager())
+      ));
+    };
+
+    updateRoles();
+    window.addEventListener('role_changed', updateRoles);
+    return () => window.removeEventListener('role_changed', updateRoles);
+  }, []);
 
   return (
     <div className="sidebar">
@@ -17,13 +33,18 @@ function Sidebar() {
           <span id="syncPingMetric" className="sync-metric">Ping: --</span>
           <span id="syncLiveMetric" className="sync-metric">Live: --</span>
         </div>
-        <button id="openDesktopStateFileBtn" className="sidebar-file-btn" type="button" style={{ display: isClient ? 'none' : '' }}>
-          <i className="fa-solid fa-file-lines"></i> Fichier Cabinet ARAQI HOUSSAINI
-        </button>
-        <input type="file" id="importAppsavocatInput" accept=".json,.appsavocat,.applicationversion1" style={{ display: 'none' }} />
-        <button id="importAppsavocatBtn" className="sidebar-file-btn" type="button" style={{ display: isClient ? 'none' : '' }}>
-          <i className="fa-solid fa-file-import"></i> Importer Cabinet ARAQI HOUSSAINI
-        </button>
+        
+        {!isClient && (
+          <>
+            <button id="openDesktopStateFileBtn" className="sidebar-file-btn" type="button">
+              <i className="fa-solid fa-file-lines"></i> Fichier Cabinet ARAQI HOUSSAINI
+            </button>
+            <input type="file" id="importAppsavocatInput" accept=".json,.appsavocat,.applicationversion1" style={{ display: 'none' }} />
+            <button id="importAppsavocatBtn" className="sidebar-file-btn" type="button">
+              <i className="fa-solid fa-file-import"></i> Importer Cabinet ARAQI HOUSSAINI
+            </button>
+          </>
+        )}
         
         <div id="dashboardLink" className="nav-link active"><i className="fa-solid fa-chart-pie"></i> Dashboard</div>
         
