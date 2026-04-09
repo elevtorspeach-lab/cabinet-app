@@ -45,9 +45,11 @@ function Sidebar() {
           <i className="fa-solid fa-list-check"></i> Diligence
         </div>
         
-        <div id="salleLink" className="nav-link">
-          <i className="fa-solid fa-door-open"></i> Salle
-        </div>
+        {!isClient && (
+          <div id="salleLink" className="nav-link">
+            <i className="fa-solid fa-door-open"></i> Salle
+          </div>
+        )}
         
         {!isClient && (
           <div id="equipeLink" className="nav-link">

@@ -15625,12 +15625,8 @@ function applyRoleUI(options = {}){
   const canImport = canImportData();
   const canExport = canExportData();
 
-  // Sidebar visibility handled by Sidebar.jsx
-  if($('openDesktopStateFileBtn')) $('openDesktopStateFileBtn').style.display = canImport ? '' : 'none';
-  if($('importAppsavocatBtn')) $('importAppsavocatBtn').style.display = canImport ? '' : 'none';
-  if($('addClientBtn')) $('addClientBtn').style.display = canCreateClient ? '' : 'none';
-  if($('deleteAllClientsBtn')) $('deleteAllClientsBtn').style.display = canDeleteData() ? '' : 'none';
-  if($('totalClientsCard')) $('totalClientsCard').style.display = viewer ? 'none' : '';
+  // Sidebar and Dashboard visibility is now handled by React components (Sidebar.jsx, Dashboard.jsx, etc.)
+  // No more manual style.display manipulations here to avoid conflicts.
   setRoleControlledVisibility(['importExcelBtn', 'importAudienceExcelBtn', 'exportBackupExcelBtn'], canImport);
   setRoleControlledVisibility([
     'selectAllSuiviBtn',
