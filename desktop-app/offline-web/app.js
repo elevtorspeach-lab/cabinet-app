@@ -112,6 +112,7 @@ let filterDiligenceSort = 'all';
 let filterDiligenceDelegation = 'all';
 let filterDiligenceOrdonnance = 'all';
 let filterDiligenceTribunal = 'all';
+let filterDiligenceMiseAPrix = 'all';
 let diligenceTribunalAliasMap = new Map();
 let diligenceTribunalLabelMap = new Map();
 let filterDiligenceCheckedFirst = false;
@@ -14709,7 +14710,10 @@ function setupEvents(){
     showView('suivi');
   };
   $('audienceLink').onclick = ()=>showView('audience');
-  $('diligenceLink').onclick = ()=>showView('diligence');
+  $('diligenceLink').onclick = ()=>{
+    syncDiligenceMiseAPrixFilterVisibility();
+    showView('diligence');
+  };
   $('salleLink').onclick = ()=>showView('salle');
   $('equipeLink')?.addEventListener('click', ()=>showView('equipe'));
   $('recycleLink')?.addEventListener('click', ()=>showView('recycle'));
@@ -14929,7 +14933,13 @@ function setupEvents(){
       clearDiligencePrintSelection({ immediate: true });
       resetDiligenceAuxFilters();
       paginationState.diligence = 1;
+      syncDiligenceMiseAPrixFilterVisibility();
     }
+    renderDiligence();
+  });
+  $('diligenceMiseAPrixFilter')?.addEventListener('change', (e)=>{
+    filterDiligenceMiseAPrix = String(e.target?.value || 'all');
+    paginationState.diligence = 1;
     renderDiligence();
   });
   $('diligenceSortFilter')?.addEventListener('change', (e)=>{
@@ -17485,6 +17495,7 @@ function toggleDiligencePrintSelection(clientId, dossierIndex, procedure, checke
   }
   if(changed && filterDiligenceCheckedFirst){
     paginationState.diligence = 1;
+    syncDiligenceMiseAPrixFilterVisibility();
     renderDiligence();
   }
 }
@@ -17606,6 +17617,30 @@ function hasDiligenceCasablancaTpiAssRow(rows){
 
 function isDiligenceCommandementProcedure(procedure){
   return getDiligenceProcedureFilterValue(procedure) === 'Commandement';
+}
+
+function getDiligenceCommandementHeaderMode(rows){
+  const list = Array.isArray(rows) ? rows : [];
+  let hasNb = false;
+  let hasNotifier = false;
+  for(const row of list){
+    if(isDiligenceCommandementNbLayout(row)) hasNb = true;
+    if(hasNb) break;
+  }
+  if(hasNb) return 'nb';
+  return 'default';
+}
+
+function isDiligenceCommandementNbLayout(row){
+  if(!isDiligenceCommandementProcedure(row?.procedure)) return false;
+  const val = String(row?.details?.notifDebiteur || '').trim().toLowerCase();
+  return /\bnb\b/.test(val) || val.startsWith('nb');
+}
+
+function isDiligenceCommandementNotifierLayout(row){
+  if(!isDiligenceCommandementProcedure(row?.procedure)) return false;
+  const val = String(row?.details?.notifDebiteur || '').trim().toLowerCase();
+  return /\bnotifier\b/.test(val) || val.startsWith('notifier');
 }
 
 function matchesDiligenceProcedureFilter(procedure, filterValue){
@@ -18266,6 +18301,19 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
         onkeydown="if(event.key === 'Enter'){ updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value); }">
     `;
   }
+  if(field === 'notifDebiteur'){
+    const val = String(value || '').trim();
+    if(!row?.canEdit){
+      return escapeHtml(val || '-');
+    }
+    return `
+      <input
+        type="text"
+        class="diligence-inline-input"
+        value="${escapeAttr(val)}"
+        onkeydown="if(event.key === 'Enter'){ updateDiligenceFieldEncoded(${row.clientId},${row.dossierIndex},'${procEncoded}','${field}',this.value); }">
+    `;
+  }
   if(field === 'lettreRec'){
     const status = getDiligenceLettreRecValue(normalized);
     if(!row?.canEdit){
@@ -18354,6 +18402,7 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
     if(!row?.canEdit){
       return escapeHtml(normalized || '-');
     }
+    const isCmdNotifierRow = isDiligenceCommandementNotifierLayout(row);
     return `
       <select
         class="diligence-inline-select${autoSizeClass}"${autoSizeAttrs}${autoSizeStyle}
@@ -18361,6 +18410,7 @@ function renderDiligenceEditableCell(row, procEncoded, field, value){
         <option value="att ord" ${normalized === 'att ord' ? 'selected' : ''}>att ord</option>
         <option value="ord ok" ${normalized === 'ord ok' ? 'selected' : ''}>ord ok</option>
         <option value="att paiement" ${normalized === 'att paiement' ? 'selected' : ''}>att paiement</option>
+        ${isCmdNotifierRow ? `<option value="paiement ok" ${normalized === 'paiement ok' ? 'selected' : ''}>paiement ok</option>` : ''}
       </select>
     `;
   }
@@ -18554,12 +18604,23 @@ function updateDiligenceField(clientId, dossierIndex, procKey, field, value){
     return;
   }
   const result = applyDiligenceFieldValue(clientId, dossierIndex, proc, field, value);
-  if(!result.changed) return;
-  handleDossierDataChange({ audience: true, rerenderLinked: true });
-  if(field === 'notificationSort' && typeof renderDiligence === 'function'){
+  const isLayoutField = field === 'notificationSort' || field === 'notifDebiteur';
+  if(!result.changed && !isLayoutField) return;
+  if(result.changed){
+    handleDossierDataChange({ audience: true, rerenderLinked: true });
+    persistDossierReferenceNow(result.clientId, result.dossier, { source: 'diligence' }).catch(()=>{});
+  }
+  if(isLayoutField && typeof renderDiligence === 'function'){
+    // Invalidate all diligence caches so re-render picks up the new layout
+    diligenceFilteredRowsCacheInput = null;
+    diligenceFilteredRowsCacheKey = '';
+    diligenceFilteredRowsCacheOutput = [];
+    diligenceCheckedOrderedRowsCacheInput = null;
+    diligenceCheckedOrderedRowsCacheVersion = -1;
+    diligenceCheckedOrderedRowsCacheOutput = [];
+    diligenceVirtualLastRange = { start: -1, end: -1 };
     renderDiligence({ force: true });
   }
-  persistDossierReferenceNow(result.clientId, result.dossier, { source: 'diligence' }).catch(()=>{});
 }
 
 function updateDiligenceFieldEncoded(clientId, dossierIndex, procKeyEncoded, field, value){
@@ -18599,6 +18660,7 @@ function getFilteredDiligenceRows(allRows){
     filterDiligenceDelegation,
     filterDiligenceOrdonnance,
     filterDiligenceTribunal,
+    filterDiligenceMiseAPrix,
     restrictAssAttOrdToAudience ? `audience-green-only:${audienceAssAttOrdKeySet?.size || 0}` : 'all-ass-att-ord'
   ].join('||');
   if(allRows === diligenceFilteredRowsCacheInput && filterKey === diligenceFilteredRowsCacheKey){
@@ -18614,6 +18676,10 @@ function getFilteredDiligenceRows(allRows){
     ) return false;
     if(restrictAssAttOrdToAudience && isDiligenceAssProcedure(row?.procedure) && !audienceAssAttOrdKeySet?.has(makeDiligencePrintKey(row?.clientId, row?.dossierIndex, row?.procedure))) return false;
     if(filterDiligenceTribunal !== 'all' && resolveDiligenceTribunalFilterKey(row.tribunalFilterKey || row.tribunal) !== filterDiligenceTribunal) return false;
+    if(filterDiligenceMiseAPrix === 'vide'){
+      const miseAPrixVal = String(row?.details?.miseAPrix || '').trim();
+      if(miseAPrixVal && miseAPrixVal !== '-') return false;
+    }
     if(!q) return true;
     if(executionOnlyQuery) return hasDiligenceExecutionNumber(row);
     const searchValues = row.__diligenceSearchValues || (row.__diligenceSearchValues = getDiligenceSearchValues(row));
@@ -22244,7 +22310,20 @@ function buildProcedureCardFieldsHtml(baseProc, tribunalFieldHtml, addOnlyButton
       <input type="text" data-field="dateDepot" placeholder="Date dépôt">
       <input type="text" data-field="executionNo" placeholder="Execution N°">
       <input type="text" data-field="notifConservateur" placeholder="Not conservateur">
-      <input type="text" data-field="notifDebiteur" placeholder="Not débiteur">
+      <select data-field="notifDebiteur">
+        <option value="">Sort notification</option>
+        <option value="att plie">att plie</option>
+        <option value="att notif">att notif</option>
+        <option value="notifier">notifier</option>
+        <option value="NB">NB</option>
+      </select>
+      <div class="notif-date-wrap" style="display:none;">
+        <input type="text" data-field="dateNotification" placeholder="Date notification">
+      </div>
+      <div class="nb-fields-wrap" style="display:none;">
+         <input type="text" data-field="pvDifficulte" placeholder="PV difficulté">
+         <input type="text" data-field="jugementDifficulte" placeholder="Jugement difficulté">
+      </div>
       <input type="text" data-field="refExpertise" placeholder="Ref expertise">
       <select data-field="ord">
         <option value="att ord">att ord</option>
@@ -22252,6 +22331,7 @@ function buildProcedureCardFieldsHtml(baseProc, tribunalFieldHtml, addOnlyButton
         <option value="att paiement">att paiement</option>
       </select>
       <input type="text" data-field="expert" placeholder="Expert">
+      <input type="text" data-field="miseAPrix" placeholder="Mise à prix">
       <input type="text" data-field="sort" list="commandementSortOptions" placeholder="Sort">
       <input type="text" data-field="dateVente" placeholder="Date vente">
       ${addOnlyButtonHtml}
@@ -22626,6 +22706,13 @@ function renderProcedureDetails(forceList, forceDraft){
       }
       updateInjonctionNotificationDateVisibility(div);
     }
+    if(baseProc === 'Commandement'){
+      const notifSelect = div.querySelector('select[data-field="notifDebiteur"]');
+      if(notifSelect){
+        notifSelect.addEventListener('change', ()=>updateCommandementNotificationFieldsVisibility(div));
+      }
+      updateCommandementNotificationFieldsVisibility(div);
+    }
     const addVariantBtn = div.querySelector('.proc-add-variant-btn');
     if(addVariantBtn){
       addVariantBtn.addEventListener('click', ()=>addProcedureVariant(proc));
@@ -22702,4 +22789,23 @@ function getApiAuthLoginTimeoutMs(){
     }
   }catch(_){}
   return timeoutMs;
+}
+function updateCommandementNotificationFieldsVisibility(card){
+  if(!card) return;
+  const select = card.querySelector('select[data-field="notifDebiteur"]');
+  const dateWrap = card.querySelector('.notif-date-wrap');
+  const nbWrap = card.querySelector('.nb-fields-wrap');
+  if(!select) return;
+  const val = select.value.toLowerCase();
+  const isNb = val === 'nb';
+  const isNotifier = val === 'notifier';
+  if(dateWrap) dateWrap.style.display = (isNb || isNotifier) ? '' : 'none';
+  if(nbWrap) nbWrap.style.display = isNb ? '' : 'none';
+}
+
+function syncDiligenceMiseAPrixFilterVisibility(){
+  const container = $('diligenceMiseAPrixFilterContainer');
+  if(!container) return;
+  const isCommandement = isDiligenceCommandementProcedure(filterDiligenceProcedure);
+  container.style.display = isCommandement ? 'inline-block' : 'none';
 }
