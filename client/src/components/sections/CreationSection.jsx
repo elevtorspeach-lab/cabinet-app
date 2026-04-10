@@ -36,7 +36,7 @@ function CreationSection() {
                   <div id="creationClientHint" className="creation-client-hint" style={{ display: 'none' }}></div>
                 </div>
 
-                <div className="form-group creation-layout-card creation-top-inline-card">
+                <div id="nRefFieldContainer" className="form-group creation-layout-card creation-top-inline-card">
                   <label>N / ref</label>
                   <input type="text" id="nRefInput" placeholder="N / ref" autoComplete="off" />
                 </div>
@@ -143,6 +143,24 @@ function CreationSection() {
                 <input type="text" id="metrageInput" placeholder="Métrage" />
               </div>
             </div>
+            <div id="sanlamFieldsContainer" className="creation-form-row creation-form-row-three" style={{ display: 'none' }}>
+              <div className="form-group creation-layout-card">
+                <label>Police n°</label>
+                <input type="text" id="sanlamPoliceInput" placeholder="Police n°" />
+              </div>
+              <div className="form-group creation-layout-card">
+                <label>Sinistre N°</label>
+                <input type="text" id="sanlamSinistreInput" placeholder="Sinistre N°" />
+              </div>
+              <div className="form-group creation-layout-card">
+                <label>Date accident</label>
+                <input type="text" id="sanlamDateAccidentInput" placeholder="jj/mm/aaaa" />
+              </div>
+              <div className="form-group creation-layout-card">
+                <label>CIN conducteur ou souscripteur</label>
+                <input type="text" id="sanlamCinInput" placeholder="CIN..." />
+              </div>
+            </div>
           </div>
 
           <div className="form-group full">
@@ -154,6 +172,7 @@ function CreationSection() {
           <div className="form-group full">
             <label>Procédure (choix multiple)</label>
             <div className="checkbox-group">
+              <label id="procExceptionelLabel" data-proc="Procedure exceptionel" style={{ display: 'none' }}><input type="checkbox" defaultValue="Procedure exceptionel" className="proc-check" /> Procedure exceptionel</label>
               <label data-proc="ASS"><input type="checkbox" defaultValue="ASS" className="proc-check" /> ASS</label>
               <label data-proc="Restitution"><input type="checkbox" defaultValue="Restitution" className="proc-check" /> Restitution</label>
               <label data-proc="Nantissement"><input type="checkbox" defaultValue="Nantissement" className="proc-check" /> Nantissement</label>

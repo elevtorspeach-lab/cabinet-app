@@ -38,6 +38,13 @@ function DiligenceSection() {
                 <option value="all">Toutes</option>
               </select>
             </div>
+            <div className="audience-color-filter" id="diligenceMiseAPrixFilterContainer" style={{ display: 'none' }}>
+              <label htmlFor="diligenceMiseAPrixFilter">Mise à prix</label>
+              <select id="diligenceMiseAPrixFilter">
+                <option value="all">Toutes</option>
+                <option value="vide">Vide</option>
+              </select>
+            </div>
             <div className="audience-color-filter">
               <label htmlFor="diligenceTribunalFilter">Tribunal</label>
               <input

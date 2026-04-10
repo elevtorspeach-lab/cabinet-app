@@ -67,7 +67,11 @@ function shouldShowDiligenceCommandementColumns(rows){
 }
 
 function getDiligenceColCount(){
-  if(diligenceVirtualShowCommandementColumns) return 16;
+  if(diligenceVirtualShowCommandementColumns){
+    const cmdMode = getDiligenceCommandementHeaderMode(diligenceVirtualRows);
+    if(cmdMode !== 'default') return 24;
+    return 17;
+  }
   if(diligenceVirtualCompactProcedureMode === 'sfdc' || diligenceVirtualCompactProcedureMode === 'sbien') return 13;
   if(diligenceVirtualShowAssColumns){
     const assMode = getDiligenceAssHeaderMode(diligenceVirtualRows);
@@ -99,20 +103,25 @@ function getDiligenceCompactProcedureMode(rows = []){
 
 function buildDiligenceHeadHtml(){
   if(diligenceVirtualShowCommandementColumns){
+    const cmdMode = getDiligenceCommandementHeaderMode(diligenceVirtualRows);
+    const cmdExpanded = cmdMode !== 'default';
     return `
       <th>Client</th>
       <th>Type</th>
       <th>Référence client</th>
       <th>Nom</th>
+      <th>Référence dossier</th>
       <th>Date dépôt</th>
       <th>Execution N°</th>
+      <th>Plie</th>
       <th>Pub au journal</th>
       <th>Notif Conservateur</th>
       <th>Notif débiteur</th>
+      ${cmdExpanded ? '<th>Lettre Rec</th><th>Curateur N°</th><th>ORD</th><th>Notif curateur</th><th>Sort notif</th><th>Avis curateur</th><th>PV Police</th>' : ''}
       <th>Ref expertise</th>
       <th>Ord</th>
       <th>Expert</th>
-      <th>Sort</th>
+      <th>Mise a prix</th>
       <th>Date vente</th>
       <th>Tribunal</th>
       <th>Boîte N°</th>
@@ -204,6 +213,35 @@ function renderDiligenceRowHtml(row, showPlieColumn){
   const shouldHideTail = isAssProcedure && !(isAssNbLayoutValue || isAssNotifierLayoutValue);
   const hideWrap = (html)=> shouldHideTail ? `<div style="display:none">${html}</div>` : html;
   if(diligenceVirtualShowCommandementColumns && isCommandementProcedure){
+    const cmdMode = getDiligenceCommandementHeaderMode(diligenceVirtualRows);
+    const cmdExpanded = cmdMode !== 'default';
+    const isCmdNb = isDiligenceCommandementNbLayout(row);
+    const isCmdNotifier = isDiligenceCommandementNotifierLayout(row);
+    let cmdExtraCells = '';
+    if(cmdExpanded){
+      const certifCell = `<td>${renderDiligenceEditableCell(row, procEncoded, 'certificatNonAppelStatus', row.details?.certificatNonAppelStatus || '')}</td>`;
+      const execCell = `<td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', row.details?.executionNo || '')}</td>`;
+      const villeCell = `<td>${renderDiligenceEditableCell(row, procEncoded, 'ville', row.dossier?.ville || row.details?.ville || '')}</td>`;
+      const delCell = `<td>${renderDiligenceEditableCell(row, procEncoded, 'delegation', row.details?.delegation || '')}</td>`;
+      const huissierCell = `<td>${renderDiligenceEditableCell(row, procEncoded, 'huissier', row.details?.huissier || '')}</td>`;
+      const avisCell = `<td>${renderDiligenceEditableCell(row, procEncoded, 'avisRejetDossier', row.details?.avisRejetDossier || '')}</td>`;
+      
+      if(isCmdNb){
+        const nbPrefix = `
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'lettreRec', row.details?.lettreRec || '')}</td>
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'curateurNo', row.details?.curateurNo || '')}</td>
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'attOrdOrOrdOk', row.details?.attOrdOrOrdOk || '')}</td>
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'notifCurateur', row.details?.notifCurateur || '')}</td>
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'sortNotif', row.details?.sortNotif || '')}</td>
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'avisCurateur', row.details?.avisCurateur || '')}</td>
+          <td>${renderDiligenceEditableCell(row, procEncoded, 'pvPlice', row.details?.pvPlice || '')}</td>
+        `;
+        cmdExtraCells = nbPrefix;
+      } else {
+        // Placeholder cells to keep alignment when header is expanded
+        cmdExtraCells = '<td></td>'.repeat(7);
+      }
+    }
     return `
       <tr>
         <td>
@@ -219,15 +257,18 @@ function renderDiligenceRowHtml(row, showPlieColumn){
         <td>${escapeHtml(row.dossier?.type || '-')}</td>
         <td>${escapeHtml(refClientValue || '-')}</td>
         <td>${escapeHtml(row.dossier?.debiteur || '-')}</td>
+        <td>${escapeHtml(getDiligenceReferenceDossierValue(row) || '-')}</td>
         <td>${escapeHtml(row.details?.depotLe || row.details?.dateDepot || '-')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'executionNo', row.details?.executionNo || '')}</td>
+        <td>${renderDiligenceEditableCell(row, procEncoded, 'plieCmd', row.details?.plieCmd || '')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'pubAuJournal', row.details?.pubAuJournal || '')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'notifConservateur', row.details?.notifConservateur || '')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'notifDebiteur', row.details?.notifDebiteur || '')}</td>
+        ${cmdExtraCells}
         <td>${renderDiligenceEditableCell(row, procEncoded, refField, refValue)}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'ord', row.details?.ord || '')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'expert', row.details?.expert || '')}</td>
-        <td>${renderDiligenceEditableCell(row, procEncoded, 'sort', row.details?.sort || '')}</td>
+        <td>${renderDiligenceEditableCell(row, procEncoded, 'miseAPrix', row.details?.miseAPrix || '')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'dateVente', row.details?.dateVente || '')}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'tribunal', tribunalValue)}</td>
         <td>${renderDiligenceEditableCell(row, procEncoded, 'boiteNo', row.dossier?.boiteNo || '')}</td>
@@ -399,7 +440,7 @@ function renderDiligence(options = {}){
           ? 'commandement-columns'
           : (diligenceVirtualShowAssColumns ? 'ass-columns' : 'compact-columns');
         const headVariant = diligenceVirtualShowCommandementColumns
-          ? 'commandement'
+          ? `commandement-${getDiligenceCommandementHeaderMode(pageData.rows)}`
           : (diligenceVirtualShowAssColumns ? getDiligenceAssHeaderMode(pageData.rows) : diligenceVirtualCompactProcedureMode);
         
         const hasNotifier = diligenceVirtualShowAssColumns && pageData.rows.some(row => isDiligenceAssNotifierLayout(row));

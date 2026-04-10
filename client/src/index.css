@@ -1457,6 +1457,7 @@ tr:hover{background:#f1f5f9}
 .proc-remove-variant-btn:hover{background:#ffe4e6}
 
 /* ================== PROCEDURE COLORS ================== */
+.checkbox-group label[data-proc="Procedure exceptionel"].active{background:#f472b6;border-color:#f472b6}
 .checkbox-group label[data-proc="ASS"].active{background:#2563eb;border-color:#2563eb}
 .checkbox-group label[data-proc="Restitution"].active{background:#16a34a;border-color:#16a34a}
 .checkbox-group label[data-proc="Commandement"].active{background:#4338ca;border-color:#4338ca}
@@ -1547,6 +1548,7 @@ tr:hover{background:#f1f5f9}
   border:1px solid transparent;
 }
 
+.procedure-montant-pill.proc-exceptionel{background:#fdf2f8;color:#be185d;border-color:#f9a8d4}
 .procedure-montant-pill.proc-ass{background:#dbeafe;color:#1d4ed8;border-color:#93c5fd}
 .procedure-montant-pill.proc-restitution{background:#dcfce7;color:#166534;border-color:#86efac}
 .procedure-montant-pill.proc-commandement{background:#e0e7ff;color:#3730a3;border-color:#818cf8}
@@ -3098,6 +3100,12 @@ tr[class*="color-"]:hover{filter:brightness(0.96)}
   border:1px solid transparent;
 }
 
+.proc-pill.proc-exceptionel{
+  background:#fdf2f8;
+  color:#be185d;
+  border-color:#f9a8d4;
+  box-shadow:0 0 0 1px rgba(190,24,93,.1) inset;
+}
 .proc-pill.proc-ass{
   background:#dbeafe;
   color:#1d4ed8;
