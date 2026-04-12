@@ -594,8 +594,13 @@ const LOCAL_ONLY_MODE = (() => {
   if(rawFlag){
     return !['0', 'false', 'no', 'off'].includes(rawFlag);
   }
+  const protocol = String(window.location?.protocol || '').toLowerCase();
+  const hostname = String(window.location?.hostname || '').trim().toLowerCase();
+  const isLocalHttpHost = (protocol === 'http:' || protocol === 'https:')
+    && (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1');
   if(typeof window.CABINET_LOCAL_ONLY === 'boolean') return window.CABINET_LOCAL_ONLY;
   if(IS_FILE_PROTOCOL) return true;
+  if(isLocalHttpHost) return true;
   return !!window.cabinetDesktopState;
 })();
 const IS_REMOTE_WEB_HOST = (() => {
@@ -4427,7 +4432,7 @@ async function refreshServerConnectionStatus(options = {}){
     setPingMetric(null);
     lastLiveDelayMs = null;
     renderSyncMetrics();
-    setSyncStatus('error', 'Mode local (offline)');
+    setSyncStatus('ok', 'Mode local (actif)');
     return false;
   }
   const force = options?.force === true;
@@ -4469,7 +4474,7 @@ async function refreshServerConnectionStatus(options = {}){
 
 async function refreshPreLoginServerStatus(){
   if(LOCAL_ONLY_MODE){
-    setSyncStatus('error', 'Mode local (offline)');
+    setSyncStatus('ok', 'Mode local (actif)');
     return false;
   }
   const connected = await refreshServerConnectionStatus({ force: true });
@@ -10870,11 +10875,11 @@ function queueDeferredLocalStateSnapshot(payload = null, options = {}){
 
 async function persistRemoteRequestNow(pathname, body){
   if(LOCAL_ONLY_MODE){
-    setSyncStatus('error', 'Mode local (offline)');
+    setSyncStatus('ok', 'Mode local (données sauvegardées)');
     return true;
   }
   if(!hasRemoteAuthSession()){
-    setSyncStatus('error', 'Mode local (offline)');
+    setSyncStatus('ok', 'Mode local (données sauvegardées)');
     return true;
   }
   // Fast-path: if the server was previously found unreachable, skip the
@@ -11658,7 +11663,7 @@ function queueRemoteStateRefresh(delayMs = REMOTE_SYNC_EVENT_DEBOUNCE_MS){
 function startRemoteSync(){
   if(LOCAL_ONLY_MODE){
     updateRemoteStateMetadata({ version: 0, updatedAt: '' });
-    setSyncStatus('error', 'Mode local (offline)');
+    setSyncStatus('ok', 'Mode local (actif)');
     return;
   }
   if(!remoteServerReachable){
@@ -14591,7 +14596,7 @@ async function exportBackupExcelImportable(){
 
 // ================== INIT ==================
 async function initApplication(){
-  setSyncStatus(LOCAL_ONLY_MODE ? 'error' : 'pending', LOCAL_ONLY_MODE ? 'Mode local (offline)' : 'Vérification serveur...');
+  setSyncStatus(LOCAL_ONLY_MODE ? 'ok' : 'pending', LOCAL_ONLY_MODE ? 'Mode local (actif)' : 'Vérification serveur...');
   renderSyncMetrics();
   if(!LOCAL_ONLY_MODE){
     try{
@@ -14668,7 +14673,7 @@ async function bootstrapApplication(){
   }catch(err){
     applicationBootFailed = false;
     console.error('Initialisation application impossible', err);
-    setSyncStatus('error', LOCAL_ONLY_MODE ? 'Mode local (offline)' : 'Mode local (serveur indisponible)');
+    setSyncStatus(LOCAL_ONLY_MODE ? 'ok' : 'error', LOCAL_ONLY_MODE ? 'Mode local (actif)' : 'Mode local (serveur indisponible)');
   }
   updateSyncStatusLabel();
   setInterval(flushSyncQueueNow, 30000);

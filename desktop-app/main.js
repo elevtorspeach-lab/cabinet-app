@@ -5,7 +5,7 @@ const fs = require('fs/promises');
 const STATE_FILE_NAME = 'Cabinet Walid Araqi.json';
 const EXPORTS_DIR_NAME = 'Cabinet Walid Araqi Exports';
 const DESKTOP_REMOTE_API_BASE = String(process.env.CABINET_DESKTOP_API_BASE || 'http://localhost:3000/api').trim();
-const DESKTOP_REMOTE_LOCAL_ONLY = '0';
+const DESKTOP_REMOTE_LOCAL_ONLY = String(process.env.CABINET_DESKTOP_LOCAL_ONLY || '1').trim();
 
 function getDesktopStateFilePath() {
   return path.join(app.getPath('downloads'), STATE_FILE_NAME);
