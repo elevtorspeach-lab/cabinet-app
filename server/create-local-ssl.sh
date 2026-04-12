@@ -33,7 +33,7 @@ distinguished_name = dn
 C = MA
 ST = Casablanca
 L = Casablanca
-O = Cabinet ARAQI HOUSSAINI
+O = Cabinet Walid Araqi
 OU = Local SSL
 CN = $LOCAL_IP
 

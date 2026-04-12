@@ -13,7 +13,7 @@ const DATA_DIR = path.join(SERVER_DIR, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const JOURNAL_FILE = path.join(DATA_DIR, 'state.journal');
 const FIXTURE_SOURCE = process.env.BENCH_FIXTURE
-  || '/var/folders/fk/vk8502c94wz_ynk81ysyv3g40000gn/T/applicationversion1-endurance-1775392902606/fixture_300c_40000d_60000a.appsavocat';
+  || '/var/folders/fk/vk8502c94wz_ynk81ysyv3g40000gn/T/Cabinet Walid Araqi-endurance-1775392902606/fixture_300c_40000d_60000a.appsavocat';
 const PLAYWRIGHT_NODE_MODULES = process.env.PLAYWRIGHT_NODE_MODULES
   || '/tmp/cabinet-playwright-runner/node_modules';
 const CHROME_EXECUTABLE = process.env.BENCH_BROWSER_PATH

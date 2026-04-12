@@ -24,7 +24,7 @@ function Sidebar() {
   return (
     <div className="sidebar">
       <div className="sidebar-scroll">
-        <h2><i className="fa-solid fa-gavel"></i> Cabinet ARAQI HOUSSAINI</h2>
+        <h2><i className="fa-solid fa-gavel"></i> Cabinet Walid Araqi</h2>
         <div id="syncStatusBadge" className="sync-status is-syncing">
           <span className="dot"></span>
           <span id="syncStatusText">Synchronisation serveur...</span>
@@ -37,11 +37,11 @@ function Sidebar() {
         {!isClient && (
           <>
             <button id="openDesktopStateFileBtn" className="sidebar-file-btn" type="button" onClick={() => document.getElementById('openDesktopStateFileInput') ? document.getElementById('openDesktopStateFileInput').click() : window.openDesktopStateFile && window.openDesktopStateFile()}>
-              <i className="fa-solid fa-file-lines"></i> Fichier Cabinet ARAQI HOUSSAINI
+              <i className="fa-solid fa-file-lines"></i> Fichier Cabinet Walid Araqi
             </button>
-            <input type="file" id="importAppsavocatInput" accept=".json,.appsavocat,.applicationversion1" style={{ display: 'none' }} />
+            <input type="file" id="importAppsavocatInput" accept=".json,.appsavocat,.Cabinet Walid Araqi" style={{ display: 'none' }} />
             <button id="importAppsavocatBtn" className="sidebar-file-btn" type="button" onClick={() => document.getElementById('importAppsavocatInput') && document.getElementById('importAppsavocatInput').click()}>
-              <i className="fa-solid fa-file-import"></i> Importer Cabinet ARAQI HOUSSAINI
+              <i className="fa-solid fa-file-import"></i> Importer Cabinet Walid Araqi
             </button>
           </>
         )}

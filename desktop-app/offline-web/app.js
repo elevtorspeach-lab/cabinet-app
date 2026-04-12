@@ -144,7 +144,7 @@ const INDEXED_DB_EXPORT_STORE = 'export_store';
 const INDEXED_DB_SYNC_STORE = 'sync_queue';
 const INDEXED_DB_STATE_KEY = 'app_state';
 const INDEXED_DB_EXPORT_DIRECTORY_KEY = 'preferred_export_directory';
-const API_BASE_STORAGE_KEY = 'applicationversion1-api-base-v1';
+const API_BASE_STORAGE_KEY = 'Cabinet Walid Araqi-api-base-v1';
 const APP_INSTANCE_ID = `cabinet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const AUTO_BACKUP_STORAGE_KEY = 'cabinet-avocat-auto-backups-v1';
 let API_BASE = (() => {
@@ -10137,7 +10137,7 @@ async function importAppsavocatPayload(rawPayload){
     let addedDossiers = 0;
     let skippedDossiers = 0;
 
-    const reportClientsProgress = makeProgressReporter('Import Cabinet ARAQI HOUSSAINI - clients');
+    const reportClientsProgress = makeProgressReporter('Import Cabinet Walid Araqi - clients');
     await runChunked(importedClients, async (importedClient)=>{
     const key = makeClientMatchKey(importedClient.name || '');
     if(!key) return;
@@ -10185,7 +10185,7 @@ async function importAppsavocatPayload(rawPayload){
       USERS.map(user=>[String(user?.username || '').trim().toLowerCase(), user])
     );
     let addedUsers = 0;
-    const reportUsersProgress = makeProgressReporter('Import Cabinet ARAQI HOUSSAINI - utilisateurs');
+    const reportUsersProgress = makeProgressReporter('Import Cabinet Walid Araqi - utilisateurs');
     await runChunked(importedUsers, async (user)=>{
     const usernameKey = String(user?.username || '').trim().toLowerCase();
     if(!usernameKey) return;
@@ -10227,7 +10227,7 @@ async function importAppsavocatPayload(rawPayload){
     });
     alert(
       [
-        'Import Cabinet ARAQI HOUSSAINI terminé.',
+        'Import Cabinet Walid Araqi terminé.',
         `Clients ajoutés: ${addedClients}`,
         `Dossiers ajoutés: ${addedDossiers}`,
         `Dossiers ignorés (doublons): ${skippedDossiers}`,
@@ -10251,9 +10251,9 @@ async function handleAppsavocatImportFile(file){
   importInProgress = true;
   beginHeavyUiOperation();
   try{
-    openImportProgressModal('Import Cabinet ARAQI HOUSSAINI');
+    openImportProgressModal('Import Cabinet Walid Araqi');
     updateImportProgress('Lecture du fichier...', 0, 1);
-    setSyncStatus('syncing', 'Import Cabinet ARAQI HOUSSAINI en cours...');
+    setSyncStatus('syncing', 'Import Cabinet Walid Araqi en cours...');
     const text = await file.text();
     updateImportProgress('Analyse du fichier...', 1, 3);
     const parsed = JSON.parse(text);
@@ -10263,7 +10263,7 @@ async function handleAppsavocatImportFile(file){
   }catch(err){
     console.error(err);
     const details = String(err?.message || '').trim();
-    alert(`Import Cabinet ARAQI HOUSSAINI impossible.${details ? `\nDétail: ${details}` : ''}`);
+    alert(`Import Cabinet Walid Araqi impossible.${details ? `\nDétail: ${details}` : ''}`);
   }finally{
     closeImportProgressModal(false);
     importInProgress = false;
@@ -10722,14 +10722,14 @@ async function openDesktopStateFile(){
       if(result?.ok) return;
       const fallbackPath = String(result?.filePath || '').trim();
       if(fallbackPath){
-        alert(`Fichier Cabinet ARAQI HOUSSAINI créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
+        alert(`Fichier Cabinet Walid Araqi créé ici:\n${fallbackPath}\n\nImpossible de l'ouvrir automatiquement, ouvrez-le manuellement.`);
         return;
       }
-      alert('Impossible d’ouvrir le fichier Cabinet ARAQI HOUSSAINI.');
+      alert('Impossible d’ouvrir le fichier Cabinet Walid Araqi.');
       return;
     }catch(err){
-      console.warn('Ouverture Cabinet ARAQI HOUSSAINI impossible', err);
-      alert('Impossible d’ouvrir le fichier Cabinet ARAQI HOUSSAINI.');
+      console.warn('Ouverture Cabinet Walid Araqi impossible', err);
+      alert('Impossible d’ouvrir le fichier Cabinet Walid Araqi.');
       return;
     }
   }
@@ -10759,7 +10759,7 @@ async function persistDesktopStateFileNow(payload = buildAppStatePayload(), opti
       lastDesktopStatePersistSignature = nextSignature;
     }
   }catch(err){
-    console.warn('Impossible de sauvegarder applicationversion1.json', err);
+    console.warn('Impossible de sauvegarder Cabinet Walid Araqi.json', err);
   }finally{
     desktopStatePersistInFlight = false;
     if(desktopStatePersistQueuedPayload){
@@ -11559,12 +11559,12 @@ async function loadPersistedState(){
           writeLocalStorage: true,
           deferWriteIndexedDb: true,
           deferWriteLocalStorage: true,
-          syncStatusMessage: 'Etat charge depuis Cabinet ARAQI HOUSSAINI'
+          syncStatusMessage: 'Etat charge depuis Cabinet Walid Araqi'
         });
         return true;
       }
     }catch(err){
-      console.warn('Impossible de charger applicationversion1.json', err);
+      console.warn('Impossible de charger Cabinet Walid Araqi.json', err);
     }
   }
 

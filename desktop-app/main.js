@@ -2,9 +2,9 @@ const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 
-const STATE_FILE_NAME = 'applicationversion1.json';
-const EXPORTS_DIR_NAME = 'Cabinet ARAQI Exports';
-const DESKTOP_REMOTE_API_BASE = String(process.env.CABINET_DESKTOP_API_BASE || 'http://192.168.1.38:3000/api').trim();
+const STATE_FILE_NAME = 'Cabinet Walid Araqi.json';
+const EXPORTS_DIR_NAME = 'Cabinet Walid Araqi Exports';
+const DESKTOP_REMOTE_API_BASE = String(process.env.CABINET_DESKTOP_API_BASE || 'http://localhost:3000/api').trim();
 const DESKTOP_REMOTE_LOCAL_ONLY = '0';
 
 function getDesktopStateFilePath() {
@@ -121,6 +121,8 @@ async function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    title: 'Cabinet Walid Araqi',
+    icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: '#f0f2f5',
     show: false,
     webPreferences: {
@@ -150,7 +152,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   ensureDesktopStateFileExists().catch((err) => {
-    console.warn('Unable to initialize applicationversion1.json', err);
+    console.warn('Unable to initialize Cabinet Walid Araqi.json', err);
   });
 
   ipcMain.handle('desktop-state:get-path', async () => {

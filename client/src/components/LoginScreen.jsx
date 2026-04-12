@@ -5,7 +5,7 @@ function LoginScreen() {
       <div className="login-orb login-orb-b"></div>
       <div className="login-box">
         <div className="login-badge"><i className="fa-solid fa-shield-halved"></i></div>
-        <h2><i className="fa-solid fa-gavel"></i> Cabinet ARAQI HOUSSAINI</h2>
+        <h2><i className="fa-solid fa-gavel"></i> Cabinet Walid Araqi HOUSSAINI</h2>
         <p className="login-subtitle">Plateforme sécurisée de gestion des dossiers</p>
 
         <label className="login-label" htmlFor="username">Nom d&apos;utilisateur</label>
